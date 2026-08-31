@@ -170,7 +170,7 @@ Deal Object 建议同时支持“Deal 主表”和“指标展开表”。XLSX �
 
 ## 8. 与当前 `opscli` 实现的对应关系
 
-- `opscli/keepa/api/scenarios.py` 已有 `deals` 场景，对应 Keepa `deal` endpoint。
+- `opscli/keepa/api/scenarios.py` 已有 `deals` 场景，对应 Keepa `deal` endpoint；`selection.priceTypes` 必填且只能包含一个 price type 索引。
 - `opscli/keepa/services/api_manager.py` 当前会优先识别响应中的 `deals.dr` 或 `deals.deals`，导出时一行一个 Deal Object。
 - `raw_response_to_export_rows` 会保留除 `deals` 以外的顶层响应字段，并设置 `rowSource = deals`。
 - `opscli/keepa/time.py` 当前只会自动处理常见标量时间字段；`currentSince[]`、二维指标数组需要后续 Deal formatter 按字段白名单解析。

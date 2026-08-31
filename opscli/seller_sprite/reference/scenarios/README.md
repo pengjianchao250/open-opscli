@@ -8,3 +8,8 @@
 - `../category-trees/*.json`：类目树节点快照和名称到 `nodeIdPaths` 的映射。
 
 当前资料来自代码注册表、payload 构造逻辑、导出列定义和既有接入文档。官方 XLSX 原件未随代码提交时，仅记录原始文件名，不声明本地文件存在。
+
+官网实际导出的只读 XLSX 统一归档在
+`tests/fixtures/seller_sprite/official_exports/<scenario>/`，并通过该目录的
+`index.json` 固定大小和 SHA-256。运行时参考目录只保存可发布的 JSON
+契约和脱敏样例，不存放二进制工作簿。

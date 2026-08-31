@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from contextlib import AsyncExitStack, asynccontextmanager
 
-from opscli.collector_mcp import health
+from opscli.collector_mcp.health import CollectorHealthTools
 from opscli.collector_mcp.profile import load_profile
 from opscli.collector_mcp.registry import resolve_bundles, validate_bundle_tools
 from opscli.mcp.app_factory import create_mcp_app, run_mcp_app
 from opscli.mcp.tool_catalog import ToolCatalog
 from opscli.mcp.tools.auth import auth_is_authenticated, auth_mcp_login
+from opscli.shared.collection_storage import (
+    build_collection_storage_runtime,
+    collection_storage_lifespan,
+)
 
 PUBLIC_TOOLS = frozenset(
     {
@@ -27,35 +31,43 @@ def _register_minimal_auth(mcp) -> None:
     mcp.tool()(auth_is_authenticated)
 
 
-profile = load_profile()
-bundles = resolve_bundles(profile)
-health.configure_health(profile, bundles)
+def _build_server():
+    """构造 Collector MCP，并让 App 闭包独占存储 Runtime。"""
+    profile = load_profile()
+    bundles = resolve_bundles(profile)
+    storage_runtime = build_collection_storage_runtime("collector")
+    health_tools = CollectorHealthTools(profile, bundles, storage_runtime)
+
+    @asynccontextmanager
+    async def lifespan(_server):
+        """按稳定顺序启动存储和 Bundle，并在关闭时逆序释放。"""
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(
+                collection_storage_lifespan(storage_runtime)
+            )
+            for bundle in bundles:
+                await stack.enter_async_context(bundle.lifespan(storage_runtime))
+            yield {}
+
+    catalog = ToolCatalog()
+    registrars = [_register_minimal_auth, health_tools.register]
+    registrars.extend(bundle.register for bundle in bundles)
+    server = create_mcp_app(
+        name="opscli-collector",
+        instructions=(
+            "Aukeys 统一数据采集 MCP 服务。\n"
+            "仅公开 Profile 显式启用的数据采集 Tool Bundle。\n"
+            "使用 auth_mcp_login 完成 MCP 一步登录后调用业务工具。"
+        ),
+        registrars=registrars,
+        catalog=catalog,
+        lifespan=lifespan,
+    )
+    validate_bundle_tools(catalog.get_catalog(), bundles, public_tools=PUBLIC_TOOLS)
+    return server, catalog
 
 
-@asynccontextmanager
-async def _collector_lifespan(_server):
-    """按稳定顺序启动 Bundle，并在关闭时逆序释放资源。"""
-    async with AsyncExitStack() as stack:
-        for bundle in bundles:
-            await stack.enter_async_context(bundle.lifespan())
-        yield {}
-
-
-catalog = ToolCatalog()
-registrars = [_register_minimal_auth, health.register]
-registrars.extend(bundle.register for bundle in bundles)
-mcp = create_mcp_app(
-    name="opscli-collector",
-    instructions=(
-        "Aukeys 统一数据采集 MCP 服务。\n"
-        "仅公开 Profile 显式启用的数据采集 Tool Bundle。\n"
-        "使用 auth_mcp_login 完成 MCP 一步登录后调用业务工具。"
-    ),
-    registrars=registrars,
-    catalog=catalog,
-    lifespan=_collector_lifespan,
-)
-validate_bundle_tools(catalog.get_catalog(), bundles, public_tools=PUBLIC_TOOLS)
+mcp, catalog = _build_server()
 
 
 def run() -> None:

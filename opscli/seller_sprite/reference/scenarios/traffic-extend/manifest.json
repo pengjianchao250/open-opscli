@@ -1,0 +1,59 @@
+{
+  "scenario_id": "traffic-extend",
+  "title": "拓展流量词",
+  "web_route": "/v3/traffic/extend/asin",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/traffic/extend/asin",
+    "response_type": "json",
+    "row_path": "data.items"
+  },
+  "prepare_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/traffic/extend/prepare"
+  },
+  "required_params": [
+    "asins"
+  ],
+  "query_conditions": {
+    "asins": {
+      "minimum": 1,
+      "maximum": 20
+    },
+    "variant_selection": {
+      "param": "variantSelection",
+      "default_value": "all",
+      "allowed_values": [
+        "all",
+        "sell_well",
+        "current"
+      ]
+    }
+  },
+  "response": {
+    "result_scope": "first_page",
+    "fixed_page": 1,
+    "fixed_size": 100,
+    "auto_pagination": false
+  },
+  "result": {
+    "source": "query_json",
+    "local_xlsx": true,
+    "official_export_api": false,
+    "headers_file": "official-headers.json",
+    "sheets": [
+      "main",
+      "Unique Words",
+      "Asin"
+    ],
+    "excluded_sheets": [
+      "Notes"
+    ]
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-31",
+    "captured_workbook_name": "ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/traffic-extend/ExpandKeywords-US-B089K9L3VY-batch(5)-202607-922297.xlsx",
+    "sanitized": true
+  }
+}

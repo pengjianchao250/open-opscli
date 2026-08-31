@@ -1,0 +1,55 @@
+{
+  "scenario_id": "keyword-comparison",
+  "prepare_response": {
+    "code": "OK",
+    "success": true,
+    "data": {
+      "diamondList": [
+        "B0949DWJCV",
+        "B0744DM3Y3",
+        "B0BRN58CXR"
+      ]
+    }
+  },
+  "query_response": {
+    "code": "OK",
+    "success": true,
+    "data": {
+      "total": 2054,
+      "items": [
+        {
+          "keyword": "sample keyword",
+          "keywordCn": "示例关键词",
+          "competitors": 3,
+          "searchesRank": 2488,
+          "searches": 201870,
+          "purchases": 8680,
+          "purchaseRate": 0.043,
+          "impressions": 99123,
+          "clicks": 4321,
+          "products": 93795,
+          "supplyDemandRatio": 2.15,
+          "competitorList": [
+            {
+              "asin": "B0949DWJCV",
+              "trafficPercentage": 0.0686,
+              "trafficKeywordTypes": ["PRIMARY"]
+            },
+            {
+              "asin": "B0744DM3Y3",
+              "trafficPercentage": 0.00001,
+              "trafficKeywordTypes": ["PRECISE", "PRECISE_LONG_TAIL"]
+            },
+            {
+              "asin": "B0BRN58CXR",
+              "trafficPercentage": 0.0123,
+              "trafficKeywordTypes": ["PRECISE"]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "note": "接口结构样例已脱敏；关键词及指标值仅用于字段映射说明。",
+  "sanitized": true
+}

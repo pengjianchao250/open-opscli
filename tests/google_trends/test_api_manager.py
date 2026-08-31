@@ -91,6 +91,73 @@ def test_manager_writes_params_raw_result_and_json_export(monkeypatch, tmp_path:
     assert DummyGoogleTrendsClient.requests[0]["params"]["tz"] == "360"
 
 
+def test_manager_submits_complete_success_result_to_collection_storage(
+    monkeypatch, tmp_path: Path
+):
+    """完整成功结果落盘后应提交到共享数据沉淀。"""
+    submissions = []
+    monkeypatch.setattr(api_manager_module, "SerpApiGoogleTrendsClient", DummyGoogleTrendsClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+
+    def submitter(*, request, result):
+        assert Path(result.result_path).is_file()
+        assert result.export is not None
+        assert Path(result.export.path).is_file()
+        submissions.append((request, result))
+        return True
+
+    manager = GoogleTrendsApiManager(
+        settings=GoogleTrendsSettings(output_dir=tmp_path),
+        collection_submitter=submitter,
+    )
+    request = GoogleTrendsScenarioRequest(
+        scenario="trends",
+        geo="US",
+        params={"q": "flashlight"},
+        job_id="google-trends-collection-submit",
+        export_format="json",
+    )
+
+    result = _run(manager.run(request))
+
+    assert submissions == [(request, result)]
+
+
+def test_manager_keeps_result_when_collection_storage_submission_fails(
+    monkeypatch, tmp_path: Path
+):
+    """沉淀排队失败时应保留成功结果并返回脱敏 warning。"""
+    monkeypatch.setattr(api_manager_module, "SerpApiGoogleTrendsClient", DummyGoogleTrendsClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+
+    def submitter(**_kwargs):
+        raise RuntimeError("mysql password leaked")
+
+    manager = GoogleTrendsApiManager(
+        settings=GoogleTrendsSettings(output_dir=tmp_path),
+        collection_submitter=submitter,
+    )
+    request = GoogleTrendsScenarioRequest(
+        scenario="trends",
+        geo="US",
+        params={"q": "flashlight"},
+        job_id="google-trends-collection-warning",
+        export_format="json",
+    )
+
+    result = _run(manager.run(request))
+    persisted = json.loads(Path(result.result_path).read_text(encoding="utf-8"))
+
+    assert result.row_count == 1
+    assert result.warnings[-1] == {
+        "stage": "collection_storage",
+        "message": "Google Trends 数据沉淀排队失败，采集结果已保留",
+        "error": {"code": "RuntimeError"},
+    }
+    assert persisted["warnings"] == result.warnings
+    assert "mysql password leaked" not in json.dumps(persisted, ensure_ascii=False)
+
+
 def test_manager_uses_xlsx_export_by_default(monkeypatch, tmp_path: Path):
     DummyGoogleTrendsClient.requests = []
     monkeypatch.setattr(api_manager_module, "SerpApiGoogleTrendsClient", DummyGoogleTrendsClient)

@@ -10,6 +10,20 @@ recursive-include opscli __init__.py
 recursive-exclude opscli *.py
 recursive-include opscli __init__.py
 
+# setup.py 排除编译、依赖运行时反射的模块，sdist 二次构建必须保留源码
+recursive-include opscli cli.py *_cli.py
+recursive-include opscli/collector_mcp *.py
+recursive-include opscli/mcp/tools *.py
+include opscli/mcp/app_factory.py
+include opscli/mcp/instrumentation.py
+include opscli/mcp/server.py
+include opscli/collector_monitor/server.py
+include opscli/collector_monitor/wecom-webhook
+include opscli/seller_sprite/mcp_bundle.py
+
+# setup.py 构建阶段动态加载 Skill 发版准入工具
+include opscli/skills/packaging.py
+
 # Hook 脚本作为资源文件保留 —— 由 settings_injector.py 部署到用户 ~/.opscli/hooks/，
 # 非编译对象，必须在 sdist 中保留 .py 源文件
 include opscli/skills/hooks/report_skill_usage.py

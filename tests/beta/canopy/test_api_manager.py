@@ -1,7 +1,10 @@
+"""Canopy 场景执行、脱敏、上传和凭据状态回写测试。"""
+
 import asyncio
 import json
 from pathlib import Path
 
+import httpx
 import pytest
 from openpyxl import load_workbook
 
@@ -22,6 +25,35 @@ class DisabledUploadClient:
 
     def __init__(self, *args, **kwargs):
         pass
+
+
+class FakeCredentialPool:
+    def __init__(self):
+        self.successes = []
+        self.failures = []
+
+    def report_success(self, lease, *, runtime=None):
+        self.successes.append((lease, runtime))
+
+    def report_failure(self, lease, **kwargs):
+        self.failures.append((lease, kwargs))
+
+
+def test_canopy_http_error_redacts_api_key_from_payload() -> None:
+    """Canopy 错误响应即使回显 Key，也不能进入异常或运行状态。"""
+    response = httpx.Response(
+        401,
+        json={"error": "invalid secret-canopy-key", "api_key": "secret-canopy-key"},
+    )
+
+    error = api_manager_module._api_error_from_response(
+        response,
+        api_key="secret-canopy-key",
+    )
+
+    assert "secret-canopy-key" not in str(error.response_payload)
+    assert "secret-canopy-key" not in str(error.response_excerpt)
+    assert "<REDACTED>" in str(error.response_payload)
 
 
 def test_manager_writes_params_raw_result_and_xlsx_without_api_key(monkeypatch, tmp_path: Path):
@@ -96,6 +128,40 @@ def test_manager_writes_params_raw_result_and_xlsx_without_api_key(monkeypatch, 
     assert "ASIN" in headers
     assert "评论标题" in headers
     assert sheet.cell(row=2, column=headers.index("ASIN") + 1).value == "B0B3JBVDYP"
+
+
+def test_manager_reports_pool_account_success(monkeypatch, tmp_path: Path):
+    async def fake_request_canopy_api(**kwargs):
+        return {"success": True, "data": {"product": {"asin": "B0B3JBVDYP"}}}
+
+    monkeypatch.setattr(api_manager_module, "request_canopy_api", fake_request_canopy_api)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    pool = FakeCredentialPool()
+    manager = CanopyApiManager(
+        settings=CanopySettings(output_dir=tmp_path),
+        credential_pool=pool,
+    )
+
+    _run(
+        manager.run(
+            CanopyScenarioRequest(
+                scenario="product",
+                domain="US",
+                params={"asin": "B0B3JBVDYP"},
+                path="/api/amazon/product",
+                api_key="secret-canopy-key",
+                credential_account_id=15,
+                credential_account_name="primary",
+                credential_secret_version=3,
+                job_id="canopy-pool-success",
+            )
+        )
+    )
+
+    assert len(pool.successes) == 1
+    assert pool.successes[0][0].account_id == 15
+    assert pool.successes[0][0].secret_version == 3
+    assert pool.failures == []
 
 
 class DummyUploadClient:

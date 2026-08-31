@@ -1,9 +1,12 @@
+"""Scrape.do 场景执行、脱敏、上传和账号切换测试。"""
+
 import asyncio
 import json
 from pathlib import Path
 
 from opscli.scrape_do.config import ScrapeDoSettings
 from opscli.scrape_do.domain.models import ScrapeDoCredential, ScrapeDoScenarioRequest
+from opscli.scrape_do.domain.exceptions import ScrapeDoApiError
 from opscli.scrape_do.services.api_manager import ScrapeDoApiManager
 
 
@@ -12,7 +15,7 @@ def _run(coro):
 
 
 class FakeCredentialProvider:
-    def get_default(self):
+    def get_default(self, *, exclude_account_ids=None):
         return ScrapeDoCredential(name="default", token="secret-token", source="test")
 
 
@@ -169,3 +172,60 @@ def test_run_uses_enabled_upload_client(monkeypatch, tmp_path: Path):
         "scenario": "amazon-pdp",
         "site": "US",
     }
+
+
+def test_run_fails_over_after_unauthorized_account(monkeypatch, tmp_path: Path):
+    from opscli.scrape_do.services import api_manager as module
+    from opscli.scrape_do.api.client import ScrapeDoApiResponse
+
+    attempted_tokens = []
+
+    class FailoverProvider:
+        def get_default(self, *, exclude_account_ids=None):
+            excluded = exclude_account_ids or set()
+            account_id = 1 if 1 not in excluded else 2
+            return ScrapeDoCredential(
+                name=f"account-{account_id}",
+                token=f"scrape-token-{account_id}",
+                source="test",
+                account_id=account_id,
+                secret_version=1,
+            )
+
+        def report_failure(self, credential, exc):
+            pass
+
+        def report_success(self, credential, billing):
+            pass
+
+    class FailoverClient(FakeClient):
+        async def get_json(self, endpoint, params):
+            attempted_tokens.append(params["token"])
+            if params["token"] == "scrape-token-1":
+                raise ScrapeDoApiError("unauthorized", status_code=401)
+            return ScrapeDoApiResponse(
+                payload={"asin": "B0C7BKZ883", "status": "success"},
+                billing={"remaining_credits": 9},
+                safe_url="https://api.scrape.do/plugin/amazon/pdp?token=***",
+            )
+
+    monkeypatch.setattr(module, "ScrapeDoApiClient", FailoverClient)
+    monkeypatch.setattr(module, "FileUploadClient", DisabledUploadClient)
+    manager = ScrapeDoApiManager(
+        settings=ScrapeDoSettings(output_dir=tmp_path),
+        api_key_provider=FailoverProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            ScrapeDoScenarioRequest(
+                scenario="amazon-pdp",
+                site="US",
+                params={"asin": "B0C7BKZ883"},
+                job_id="scrape-do-failover",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert attempted_tokens == ["scrape-token-1", "scrape-token-2"]

@@ -11,6 +11,25 @@ from urllib.parse import urlencode, urlparse
 from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 
 
+# 官网筛选状态使用英文枚举，中文别名供 CLI/MCP 调用方直接传入。
+BRANDDB_STATUS_ALIASES = {
+    "已注册": "Registered",
+    "已过期": "Expired",
+    "已结束": "Ended",
+    "待审核": "Pending",
+    "未知": "Unknown",
+}
+BRANDDB_STATUSES = frozenset(BRANDDB_STATUS_ALIASES.values())
+
+# 流量词对比变体选择只控制页面按钮，不属于官网主列表请求字段。
+KEYWORD_COMPARISON_VARIANT_ALIASES = {
+    "sell_well": "sell_well",
+    "用畅销变体拓词": "sell_well",
+    "current": "current",
+    "用当前变体拓词": "current",
+}
+
+
 PRODUCT_RESEARCH_RECOMMENDATION_PRESETS: dict[str, dict[str, Any]] = {
     "低价长尾选品": {
         "minRanking": "10000",
@@ -300,6 +319,44 @@ ASSOCIATION_TRAFFIC_MARKET_IDS = {
     "MX": 771770,
 }
 
+# 别名来自拓展流量词页面 2026-07-31 的三种变体按钮；内部统一为稳定英文值。
+TRAFFIC_EXTEND_VARIANT_ALIASES = {
+    "all": "all",
+    "全部": "all",
+    "用全部变体拓词": "all",
+    "sell_well": "sell_well",
+    "sell-well": "sell_well",
+    "畅销": "sell_well",
+    "用畅销变体拓词": "sell_well",
+    "current": "current",
+    "当前": "current",
+    "用当前变体拓词": "current",
+}
+
+# 关键词转化率页面只提供“按周”和“近90天”两种周期。
+KEYWORD_CONVERSION_RATE_PERIOD_ALIASES = {
+    "W": "W",
+    "w": "W",
+    "week": "W",
+    "weekly": "W",
+    "按周": "W",
+    # 公共场景默认 period=30d；该页面没有 30 天选项，按页面默认周期处理。
+    "30d": "W",
+    "nearly": "W",
+    "latest30": "W",
+    "last30": "W",
+    "90D": "90D",
+    "90d": "90D",
+    "recent90": "90D",
+    "last90": "90D",
+    "近90天": "90D",
+}
+
+# 站点集合来自关键词转化率页面 2026-07-31 实际可选项，用于在打开页面前拒绝无效站点。
+KEYWORD_CONVERSION_RATE_MARKETS = frozenset(
+    {"US", "JP", "UK", "DE", "FR", "IT", "ES", "CA", "IN"}
+)
+
 # ABA 数据选品接口使用站点公开 code，其中美国站使用 COM。
 ABA_RESEARCH_MARKETS = {
     "US": "COM",
@@ -569,6 +626,404 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
     }
 
 
+def traffic_extend_variant_selection(input_data: dict[str, Any]) -> str:
+    """规范化拓展流量词页面的变体选择。
+
+    参数：
+        input_data: 场景参数，可通过 ``variantSelection`` 指定变体模式。
+
+    返回：
+        ``all``、``sell_well`` 或 ``current``；省略时返回 ``all``。
+
+    异常：
+        SellerSpriteConfigError: 变体模式不在页面支持范围内时抛出。
+    """
+    raw_value = input_data.get("variantSelection")
+    if raw_value is None:
+        return "all"
+    value = str(raw_value).strip()
+    normalized = TRAFFIC_EXTEND_VARIANT_ALIASES.get(value)
+    if normalized is None:
+        normalized = TRAFFIC_EXTEND_VARIANT_ALIASES.get(value.lower())
+    if normalized is None:
+        raise SellerSpriteConfigError(
+            "traffic-extend variantSelection 仅支持 all、sell_well、current、"
+            "用全部变体拓词、用畅销变体拓词或用当前变体拓词"
+        )
+    return normalized
+
+
+def make_traffic_extend_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造拓展流量词第一页 100 条主列表 payload。
+
+    参数：
+        input_data: 站点、周期、1 至 20 个 ASIN 和可选变体模式。
+
+    返回：
+        固定 ``page=1``、``size=100`` 的官网主列表请求体。
+
+    异常：
+        SellerSpriteConfigError: ASIN、站点或变体模式不符合页面约束时抛出。
+    """
+    asins = _traffic_extend_asins(input_data.get("asins") or input_data.get("asin"))
+    site = _market(input_data, default="US")
+    market = input_data.get("marketId") or ASSOCIATION_TRAFFIC_MARKET_IDS.get(site)
+    if market is None:
+        raise SellerSpriteConfigError(f"traffic-extend 暂不支持站点：{site}")
+    traffic_extend_variant_selection(input_data)
+    return {
+        "queryVariations": True,
+        "asinList": asins,
+        "originAsinList": asins,
+        "market": _int(market, 1),
+        "page": 1,
+        "month": history_date(
+            input_data.get("historyDate")
+            or input_data.get("month")
+            or input_data.get("period")
+            or "30d"
+        ),
+        "size": 100,
+        "orderColumn": 12,
+        "desc": True,
+        "exactly": False,
+        "ac": False,
+    }
+
+
+def make_real_time_bidding_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造实时查竞价历史任务查询参数。
+
+    Args:
+        input_data: 包含站点和单个 ASIN 的场景参数。
+
+    Returns:
+        按更新时间倒序查询该 ASIN 历史任务的第一页参数。
+
+    Raises:
+        SellerSpriteConfigError: ASIN 不是单个合法值，或站点不受支持。
+    """
+    raw_asin = str(input_data.get("asin") or "").strip().upper()
+    if not raw_asin or re.search(r"[\s,，;；]", raw_asin):
+        raise SellerSpriteConfigError("real-time-bidding 仅支持输入单个 ASIN")
+    if not re.fullmatch(r"[A-Z0-9]{10}", raw_asin):
+        raise SellerSpriteConfigError(
+            f"real-time-bidding ASIN 格式无效：{raw_asin}"
+        )
+    site = _market(input_data, default="US")
+    market_id = input_data.get("marketId") or ASSOCIATION_TRAFFIC_MARKET_IDS.get(
+        site
+    )
+    if market_id is None:
+        raise SellerSpriteConfigError(
+            f"real-time-bidding 暂不支持站点：{site}"
+        )
+    return {
+        "asin": raw_asin,
+        "isExampleAsin": False,
+        "marketId": _int(market_id, 1),
+        "page": 1,
+        "size": 20,
+        "order": {"desc": True, "field": "updatedTime"},
+    }
+
+
+def make_keyword_conversion_rate_payload(
+    input_data: dict[str, Any],
+) -> dict[str, Any]:
+    """构造关键词转化率第一页 100 条批量查询 payload。
+
+    Args:
+        input_data: 包含站点、周期和 1—1000 个关键词词组的场景参数。
+
+    Returns:
+        固定第一页 100 条、精确竞价和全部关键词匹配口径的官网请求体。
+
+    Raises:
+        SellerSpriteConfigError: 关键词为空、超过 1000 个，或站点、周期不受支持。
+    """
+    keywords = _keyword_conversion_rate_keywords(
+        input_data.get("keywords")
+        or input_data.get("keywordList")
+        or input_data.get("keyword")
+        or input_data.get("q")
+    )
+    site = _market(input_data, default="US")
+    if site not in KEYWORD_CONVERSION_RATE_MARKETS:
+        raise SellerSpriteConfigError(
+            f"keyword-conversion-rate 暂不支持站点：{site}"
+        )
+    raw_period = str(
+        input_data.get("timeType")
+        or input_data.get("period")
+        or input_data.get("reverseType")
+        or "W"
+    ).strip()
+    time_type = KEYWORD_CONVERSION_RATE_PERIOD_ALIASES.get(raw_period)
+    if time_type is None:
+        time_type = KEYWORD_CONVERSION_RATE_PERIOD_ALIASES.get(raw_period.lower())
+    if time_type is None:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 周期仅支持 W/按周 或 90D/近90天"
+        )
+    return {
+        "pageNum": 1,
+        "pageSize": 100,
+        "market": site,
+        "timeType": time_type,
+        "bidMatchType": "exact",
+        "keywordMatchType": "all",
+        "matchType": 1,
+        "keyword": ",".join(keywords),
+    }
+
+
+def keyword_comparison_variant_selection(input_data: dict[str, Any]) -> str:
+    """规范化流量词对比页面的变体选择。
+
+    参数：
+        input_data: 流量词对比场景参数。
+
+    返回：
+        页面交互使用的 ``sell_well`` 或 ``current``。
+
+    异常：
+        SellerSpriteConfigError: 变体选择不是受支持值时抛出。
+    """
+    raw_value = input_data.get("variantSelection")
+    if raw_value is None:
+        return "sell_well"
+    value = str(raw_value).strip()
+    normalized = KEYWORD_COMPARISON_VARIANT_ALIASES.get(value)
+    if normalized is None:
+        normalized = KEYWORD_COMPARISON_VARIANT_ALIASES.get(value.lower())
+    if normalized is None:
+        raise SellerSpriteConfigError(
+            "keyword-comparison variantSelection 仅支持 sell_well、current、"
+            "用畅销变体拓词或用当前变体拓词"
+        )
+    return normalized
+
+
+def make_keyword_comparison_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造流量词对比默认流量占比查询 payload。
+
+    参数：
+        input_data: 站点、自己的 ASIN 和竞品 ASIN 等场景参数。
+
+    返回：
+        固定第一页 100 条的流量占比主列表请求体。
+
+    异常：
+        SellerSpriteConfigError: ASIN 数量、格式、角色或保留字段不合法时抛出。
+    """
+    own_asins = split_association_traffic_asins(
+        input_data.get("ownAsin")
+        or input_data.get("myAsin")
+        or input_data.get("asin")
+    )
+    if not own_asins:
+        raise SellerSpriteConfigError("keyword-comparison 必须输入自己的 ASIN")
+    if len(own_asins) != 1:
+        raise SellerSpriteConfigError("keyword-comparison 自己的 ASIN 只能输入 1 个")
+    own_asin = own_asins[0]
+    if not re.fullmatch(r"[A-Z0-9]{10}", own_asin):
+        raise SellerSpriteConfigError(
+            f"keyword-comparison 自己的 ASIN 格式无效：{own_asin}"
+        )
+
+    competitor_asins = split_association_traffic_asins(
+        input_data.get("competitorAsins")
+        or input_data.get("competitorAsin")
+        or input_data.get("asins")
+    )
+    if not competitor_asins:
+        raise SellerSpriteConfigError("keyword-comparison 至少需要 1 个竞品 ASIN")
+    if len(competitor_asins) > 10:
+        raise SellerSpriteConfigError("keyword-comparison 最多支持 10 个竞品 ASIN")
+    invalid_asins = [
+        asin
+        for asin in competitor_asins
+        if not re.fullmatch(r"[A-Z0-9]{10}", asin)
+    ]
+    if invalid_asins:
+        raise SellerSpriteConfigError(
+            f"keyword-comparison 竞品 ASIN 格式无效：{', '.join(invalid_asins)}"
+        )
+    if own_asin in competitor_asins:
+        raise SellerSpriteConfigError(
+            "keyword-comparison 竞品 ASIN 不得包含自己的 ASIN"
+        )
+    if input_data.get("diamondList") is not None:
+        raise SellerSpriteConfigError(
+            "keyword-comparison diamondList 由官网页面生成，不允许手动传入"
+        )
+    # 变体选择在 browser-route 页面交互中使用，此处只校验但不写入官网 payload。
+    keyword_comparison_variant_selection(input_data)
+
+    # 官网主列表不接收 type；页面最终变体列表由 prepare 流程动态替换 asinList。
+    return {
+        "page": 1,
+        "size": 100,
+        "exactly": False,
+        "orderColumn": 22,
+        "desc": True,
+        "asin": own_asin,
+        "asinList": competitor_asins,
+        "station": _market(input_data, default="US"),
+        "sortAsin": "",
+    }
+
+
+def make_branddb_payload(input_data: dict[str, Any]) -> dict[str, Any]:
+    """构造全球商标库官方 Excel 导出 payload。
+
+    参数：
+        input_data: 商标检索词、筛选条件、排序及分页参数。
+
+    返回：
+        符合官网导出接口固定字段契约的请求体。
+
+    异常：
+        SellerSpriteConfigError: 必填项为空或筛选参数类型、取值不合法时抛出。
+    """
+    text = _branddb_scalar_text(input_data.get("text"), field="text")
+    if not text:
+        raise SellerSpriteConfigError("branddb text 不能为空")
+    statuses = [
+        BRANDDB_STATUS_ALIASES.get(value, value)
+        for value in _branddb_text_list(input_data.get("status"), field="status")
+    ]
+    invalid_statuses = [value for value in statuses if value not in BRANDDB_STATUSES]
+    if invalid_statuses:
+        raise SellerSpriteConfigError(f"branddb status 不支持：{', '.join(invalid_statuses)}")
+    return {
+        "text": text,
+        "feature": _branddb_scalar_text(
+            input_data.get("feature"), field="feature"
+        ),
+        "office": _branddb_text_list(input_data.get("office"), field="office"),
+        "brandName": _branddb_text_list(
+            input_data.get("brandName"), field="brandName"
+        ),
+        "status": statuses,
+        "applicant": _branddb_text_list(
+            input_data.get("applicant"), field="applicant"
+        ),
+        "niceClass": _branddb_int_list(
+            input_data.get("niceClass"), field="niceClass", minimum=1, maximum=45
+        ),
+        "applicationYear": _branddb_year_list(
+            input_data.get("applicationYear"), field="applicationYear"
+        ),
+        "expiryYear": _branddb_year_list(
+            input_data.get("expiryYear"), field="expiryYear"
+        ),
+        "desc": _branddb_bool(
+            input_data.get("desc"), field="desc", default=True
+        ),
+        "orderField": _branddb_scalar_text(
+            input_data.get("orderField"), field="orderField"
+        ),
+        "pageNum": _branddb_positive_int(
+            input_data.get("pageNum"), field="pageNum", default=1
+        ),
+        "pageSize": _branddb_positive_int(
+            input_data.get("pageSize"), field="pageSize", default=20
+        ),
+        "ids": _branddb_int_list(input_data.get("ids"), field="ids", minimum=1),
+    }
+
+
+def _branddb_scalar_text(value: Any, *, field: str) -> str:
+    """校验并归一化商标库单值文本参数。"""
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list, tuple, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是单值")
+    return str(value).strip()
+
+
+def _branddb_bool(value: Any, *, field: str, default: bool) -> bool:
+    """校验并归一化商标库布尔参数。"""
+    if isinstance(value, (dict, list, tuple, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是布尔值")
+    return truthy(value, default=default)
+
+
+def _branddb_raw_list(value: Any, *, field: str) -> list[Any]:
+    """拆分商标库列表参数并保留调用顺序。"""
+    if value is None:
+        return []
+    if isinstance(value, (dict, set, bytes, bytearray)):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是单值或数组")
+    values = value if isinstance(value, (list, tuple)) else [value]
+    result: list[Any] = []
+    for item in values:
+        if isinstance(item, (dict, list, tuple, set, bytes, bytearray)):
+            raise SellerSpriteConfigError(f"branddb {field} 数组元素必须是单值")
+        if isinstance(item, str):
+            result.extend(part.strip() for part in re.split(r"[,，\n\r;；]+", item))
+        else:
+            result.append(item)
+    return [item for item in result if str(item).strip()]
+
+
+def _branddb_text_list(value: Any, *, field: str) -> list[str]:
+    """归一化商标库文本列表，去空并保持首次出现顺序。"""
+    result: list[str] = []
+    for item in _branddb_raw_list(value, field=field):
+        text = str(item).strip()
+        if text not in result:
+            result.append(text)
+    return result
+
+
+def _branddb_int_list(
+    value: Any,
+    *,
+    field: str,
+    minimum: int,
+    maximum: int | None = None,
+) -> list[int]:
+    """校验商标库整数列表。"""
+    result: list[int] = []
+    for item in _branddb_raw_list(value, field=field):
+        if isinstance(item, bool) or not re.fullmatch(r"[+-]?\d+", str(item).strip()):
+            raise SellerSpriteConfigError(f"branddb {field} 必须是整数列表")
+        parsed = int(item)
+        if parsed < minimum or (maximum is not None and parsed > maximum):
+            range_text = f"{minimum}—{maximum}" if maximum is not None else f"不小于 {minimum}"
+            raise SellerSpriteConfigError(f"branddb {field} 必须在 {range_text} 范围内")
+        if parsed not in result:
+            result.append(parsed)
+    return result
+
+
+def _branddb_year_list(value: Any, *, field: str) -> list[str]:
+    """校验商标库年份列表。"""
+    result: list[str] = []
+    for item in _branddb_raw_list(value, field=field):
+        text = str(item).strip()
+        if not re.fullmatch(r"\d{4}", text):
+            raise SellerSpriteConfigError(f"branddb {field} 必须是四位年份列表")
+        if text not in result:
+            result.append(text)
+    return result
+
+
+def _branddb_positive_int(value: Any, *, field: str, default: int) -> int:
+    """校验商标库正整数参数。"""
+    if value is None or str(value).strip() == "":
+        return default
+    if isinstance(value, bool) or not re.fullmatch(r"\d+", str(value).strip()):
+        raise SellerSpriteConfigError(f"branddb {field} 必须是正整数")
+    parsed = int(value)
+    if parsed <= 0:
+        raise SellerSpriteConfigError(f"branddb {field} 必须是正整数")
+    return parsed
+
+
 def make_aba_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     """构造 ABA 数据选品单页查询 payload。
 
@@ -797,8 +1252,24 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
         return "https://www.sellersprite.com/v3/keyword-miner/"
     if scenario == "keyword-research":
         return f"https://www.sellersprite.com/v2/keyword-research?{urlencode(_flatten_query(payload))}"
+    if scenario == "keyword-comparison":
+        return "https://www.sellersprite.com/v3/keyword-comparison"
+    if scenario == "keyword-conversion-rate":
+        # 不把关键词写入 URL，避免页面在 worker 建立响应监听前自动执行查询。
+        return "https://www.sellersprite.com/v3/keyword-conversion-rate"
+    if scenario == "real-time-bidding":
+        return "https://www.sellersprite.com/v3/real-time-bidding"
+    if scenario == "traffic-extend":
+        query = {
+            "marketId": payload.get("market") or 1,
+            "date": payload.get("month") or "",
+        }
+        # 不把 ASIN 放进结果页 URL：结果页会在导航阶段自动触发 prepare，早于 worker 监听。
+        return f"https://www.sellersprite.com/v3/traffic/extend?{urlencode(query)}"
     if scenario == "aba-research":
         return "https://www.sellersprite.com/v3/aba-research"
+    if scenario == "branddb":
+        return "https://www.sellersprite.com/v3/branddb"
     if scenario == "aba-reverse":
         query = dict(payload)
         query["asin"] = ""
@@ -957,6 +1428,41 @@ def _association_traffic_asins(value: Any) -> list[str]:
             f"association-traffic ASIN 格式无效：{', '.join(invalid_asins)}"
         )
     return asins
+
+
+def _traffic_extend_asins(value: Any) -> list[str]:
+    """校验拓展流量词页面支持的 1 至 20 个 ASIN。"""
+    asins = split_association_traffic_asins(value)
+    if not asins:
+        raise SellerSpriteConfigError("traffic-extend 至少需要 1 个 ASIN")
+    if len(asins) > 20:
+        raise SellerSpriteConfigError("traffic-extend 最多支持 20 个 ASIN")
+    invalid_asins = [asin for asin in asins if not re.fullmatch(r"[A-Z0-9]{10}", asin)]
+    if invalid_asins:
+        raise SellerSpriteConfigError(
+            f"traffic-extend ASIN 格式无效：{', '.join(invalid_asins)}"
+        )
+    return asins
+
+
+def _keyword_conversion_rate_keywords(value: Any) -> list[str]:
+    """按官网批量输入规则拆分、去重并校验关键词词组。"""
+    raw_values = value if isinstance(value, (list, tuple, set)) else [value]
+    keywords: list[str] = []
+    for raw_value in raw_values:
+        for part in re.split(r"[,，\r\n\t]+", str(raw_value or "")):
+            keyword = re.sub(r"\s+", " ", part).strip()
+            if keyword and keyword not in keywords:
+                keywords.append(keyword)
+    if not keywords:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 至少需要 1 个关键词"
+        )
+    if len(keywords) > 1000:
+        raise SellerSpriteConfigError(
+            "keyword-conversion-rate 最多支持 1000 个关键词"
+        )
+    return keywords
 
 
 def split_association_traffic_asins(value: Any) -> list[str]:

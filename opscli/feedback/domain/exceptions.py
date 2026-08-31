@@ -51,3 +51,15 @@ class BadRemoteJsonError(FeedbackError):
     """远端返回非法 JSON。"""
 
     code = "BAD_REMOTE_JSON"
+
+
+class InsightConfigError(FeedbackError):
+    """反馈洞察模型配置不合法。"""
+
+    code = "INSIGHT_CONFIG_ERROR"
+
+
+class InsightModelError(FeedbackError):
+    """反馈洞察模型调用或响应不合法。"""
+
+    code = "INSIGHT_MODEL_ERROR"

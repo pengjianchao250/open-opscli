@@ -12,10 +12,11 @@ import typer
 
 from opscli.mcp.user_store import MCPUserStore
 
-
 app = typer.Typer(help="MCP Server 管理")
 user_app = typer.Typer(help="MCP 用户管理")
+upstream_app = typer.Typer(help="第三方 MCP 上游管理")
 app.add_typer(user_app, name="user")
+app.add_typer(upstream_app, name="upstream")
 
 
 def _emit(payload: dict, pretty: bool) -> None:
@@ -26,6 +27,47 @@ def _emit(payload: dict, pretty: bool) -> None:
 def _store(config_dir: str | None = None) -> MCPUserStore:
     """创建用户注册表实例，测试可通过 --config-dir 指向临时目录。"""
     return MCPUserStore(base_dir=Path(config_dir).expanduser() if config_dir else None)
+
+
+@upstream_app.command("validate")
+def validate_upstream_config(
+    config: Path = typer.Option(..., "--config", help="第三方 MCP JSON 配置文件"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+) -> None:
+    """校验上游配置并输出不含 URL 和凭证的审批摘要。"""
+    from opscli.mcp.upstream import UpstreamMcpError, load_upstream_config
+
+    try:
+        snapshot = load_upstream_config(config)
+        servers = [
+            {
+                "id": server.id,
+                "url_env": server.url_env,
+                "allowed_hosts": list(server.allowed_hosts),
+                "tools": [tool.exposed_name for tool in server.tools],
+            }
+            for server in snapshot.servers
+        ]
+        payload = {
+            "success": True,
+            "command": "mcp upstream validate",
+            "data": {
+                "server_count": len(servers),
+                "tool_count": sum(len(server.tools) for server in snapshot.servers),
+                "servers": servers,
+            },
+            "error": None,
+        }
+    except UpstreamMcpError as exc:
+        payload = {
+            "success": False,
+            "command": "mcp upstream validate",
+            "data": None,
+            "error": exc.to_dict(),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
 
 
 @user_app.command("list")

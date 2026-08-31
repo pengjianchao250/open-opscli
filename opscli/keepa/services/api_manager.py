@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,17 +17,79 @@ from uuid import uuid4
 from opscli.keepa.accounts import KeepaApiKeyProvider
 from opscli.keepa.api.client import KeepaApiClient
 from opscli.keepa.api.scenarios import get_scenario, list_scenarios
-from opscli.keepa.best_sellers_formatter import FormattedBestSellersExport, format_best_sellers_export
+from opscli.keepa.best_sellers_formatter import (
+    FormattedBestSellersExport,
+    format_best_sellers_export,
+)
+from opscli.keepa.category_formatter import (
+    FormattedCategoryExport,
+    format_category_export,
+)
 from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
 from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
-from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioRequest, KeepaScenarioResult
-from opscli.keepa.export.xlsx import export_rows_to_xlsx
+from opscli.keepa.domain.models import (
+    KeepaExportResult,
+    KeepaScenarioRequest,
+    KeepaScenarioResult,
+)
+from opscli.keepa.export import export_response_to_json, export_rows_to_xlsx
+from opscli.keepa.lightning_deal_formatter import (
+    FormattedLightningDealExport,
+    format_lightning_deal_export,
+)
 from opscli.keepa.product_formatter import FormattedProductExport, format_product_export
-from opscli.keepa.search_insights_formatter import FormattedSearchInsightsExport, format_search_insights_export
+from opscli.keepa.search_insights_formatter import (
+    FormattedSearchInsightsExport,
+    format_search_insights_export,
+)
+from opscli.keepa.seller_formatter import FormattedSellerExport, format_seller_export
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
 from opscli.shared.integration_accounts import IntegrationAccountClient
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _FormattedResponseExports:
+    """汇总一次 Keepa 响应的专用 formatter 结果并统一选择主表/附加表。"""
+
+    product: FormattedProductExport | None = None
+    category: FormattedCategoryExport | None = None
+    seller: FormattedSellerExport | None = None
+    lightning: FormattedLightningDealExport | None = None
+    search_insights: FormattedSearchInsightsExport | None = None
+    best_sellers: FormattedBestSellersExport | None = None
+    deal: FormattedDealExport | None = None
+
+    def primary_rows(self) -> list[Any] | None:
+        """按场景互斥关系返回专用 formatter 的主表行，未格式化时返回空。"""
+        candidates = (
+            self.product.products if self.product else None,
+            self.category.categories if self.category else None,
+            self.seller.sellers if self.seller else None,
+            self.lightning.deals if self.lightning else None,
+            self.best_sellers.asin_rows if self.best_sellers else None,
+            self.deal.deals if self.deal else None,
+        )
+        return next((rows for rows in candidates if rows is not None), None)
+
+    def extra_sheets(self) -> dict[str, list[dict[str, Any]]] | None:
+        """合并所有专用 formatter 的非空附加表。"""
+        sheets: dict[str, list[dict[str, Any]]] = {}
+        for export in (
+            self.product,
+            self.category,
+            self.seller,
+            self.lightning,
+            self.search_insights,
+            self.best_sellers,
+            self.deal,
+        ):
+            if export:
+                sheets.update(export.extra_sheets())
+        return sheets or None
 
 
 class KeepaApiManager:
@@ -36,10 +102,12 @@ class KeepaApiManager:
         api_key_provider: KeepaApiKeyProvider | None = None,
         jwt: str | None = None,
         session_id: str | None = None,
+        collection_submitter: Callable[..., bool] | None = None,
     ) -> None:
         self.settings = settings or load_settings()
         self.jwt = jwt
         self.session_id = session_id
+        self.collection_submitter = collection_submitter
         self.api_key_provider = api_key_provider or KeepaApiKeyProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -62,10 +130,18 @@ class KeepaApiManager:
 
     async def run(self, request: KeepaScenarioRequest) -> KeepaScenarioResult:
         """执行一个 Keepa API 场景。"""
-        _normalize_export_format(request.export_format)
+        started_at = time.monotonic()
+        export_format = _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = (request.site or "US").upper()
         job_id = request.job_id or _build_job_id(request, site)
+        logger.info(
+            "[KEEPA-TRACE] manager_start scenario=%s site=%s job_id=%s export_format=%s",
+            request.scenario,
+            site,
+            job_id,
+            export_format,
+        )
         root_dir = self._build_root_dir(request, job_id)
         root_dir.mkdir(parents=True, exist_ok=True)
         params_path = root_dir / "params.json"
@@ -73,13 +149,21 @@ class KeepaApiManager:
         result_path = root_dir / "result.json"
 
         credential = self.api_key_provider.get_default()
+        logger.info(
+            "[KEEPA-TRACE] credential_ready scenario=%s site=%s source=%s",
+            request.scenario,
+            site,
+            credential.source,
+        )
         normalized_params = scenario.build_params(params=request.params, site=site)
         estimated_tokens = scenario.estimate_tokens(request.params)
         reserve_tokens = self.settings.reserve_tokens if request.reserve_tokens is None else request.reserve_tokens
         warnings: list[dict[str, Any]] = []
 
         async with KeepaApiClient(api_key=credential.api_key) as client:
+            logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=before", job_id)
             before_status = await _safe_token_status(client, warnings)
+            logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=before", job_id)
             before_quota = extract_quota(before_status)
             quota_warning = _build_quota_warning(
                 before_quota=before_quota,
@@ -121,8 +205,20 @@ class KeepaApiManager:
                 ),
             )
 
+            logger.info(
+                "[KEEPA-TRACE] scenario_request_start job_id=%s endpoint=%s",
+                job_id,
+                scenario.endpoint,
+            )
             raw_response = await client.get_json(scenario.endpoint, normalized_params)
+            logger.info(
+                "[KEEPA-TRACE] scenario_request_done job_id=%s endpoint=%s",
+                job_id,
+                scenario.endpoint,
+            )
+            logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=after", job_id)
             after_status = await _safe_token_status(client, warnings)
+            logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=after", job_id)
 
         raw_payload = {
             "job_id": job_id,
@@ -138,60 +234,118 @@ class KeepaApiManager:
         _write_json(raw_path, raw_payload)
 
         raw_rows = extract_rows(raw_response)
-        product_export = _format_product_rows_if_needed(
-            scenario=request.scenario,
-            rows=raw_rows,
-            site=site,
-            normalized_params=normalized_params,
+        domain_id = normalized_params.get("domain")
+        category_parents = raw_response.get("categoryParents")
+        parent_rows = (
+            list(category_parents.values())
+            if isinstance(category_parents, dict)
+            else []
         )
-        search_insights_export = _format_search_insights_if_needed(
-            scenario=request.scenario,
-            raw_response=raw_response,
-            site=site,
-            normalized_params=normalized_params,
-            request_params=request.params,
+        product_rows_are_objects = any(isinstance(row, dict) for row in raw_rows)
+        formatted = _FormattedResponseExports(
+            product=(
+                format_product_export(
+                    raw_rows,
+                    site=site,
+                    domain_id=domain_id,
+                    offers_requested="offers" in normalized_params,
+                )
+                if request.scenario == "product"
+                or (
+                    request.scenario == "product-search"
+                    and product_rows_are_objects
+                )
+                else None
+            ),
+            category=(
+                format_category_export(
+                    raw_rows,
+                    site=site,
+                    domain_id=domain_id,
+                    parent_rows=parent_rows,
+                )
+                if request.scenario in {"category-lookup", "category-search"}
+                else None
+            ),
+            seller=(
+                format_seller_export(raw_rows, site=site, domain_id=domain_id)
+                if request.scenario == "seller"
+                else None
+            ),
+            lightning=(
+                format_lightning_deal_export(
+                    raw_rows, site=site, domain_id=domain_id
+                )
+                if request.scenario == "lightning-deals"
+                else None
+            ),
+            search_insights=(
+                format_search_insights_export(
+                    raw_response.get("searchInsights"),
+                    site=site,
+                    domain_id=domain_id,
+                    query_name=_search_insights_query_name(request.params),
+                )
+                if request.scenario == "product-finder"
+                else None
+            ),
+            best_sellers=(
+                format_best_sellers_export(
+                    raw_response.get("bestSellersList"),
+                    site=site,
+                    domain_id=domain_id,
+                    category_id=normalized_params.get("category"),
+                )
+                if request.scenario == "bestsellers"
+                else None
+            ),
+            deal=(
+                format_deal_export(raw_rows, site=site, domain_id=domain_id)
+                if request.scenario == "deals"
+                else None
+            ),
         )
-        best_sellers_export = _format_best_sellers_if_needed(
-            scenario=request.scenario,
-            raw_response=raw_response,
-            site=site,
-            normalized_params=normalized_params,
+        primary_rows = formatted.primary_rows()
+        data = (
+            primary_rows
+            if primary_rows is not None
+            else add_keepa_time_conversions(raw_rows)
         )
-        deal_export = _format_deals_if_needed(
-            scenario=request.scenario,
-            rows=raw_rows,
-            site=site,
-            normalized_params=normalized_params,
-        )
-        data = _formatted_data_or_default(
-            raw_rows=raw_rows,
-            product_export=product_export,
-            best_sellers_export=best_sellers_export,
-            deal_export=deal_export,
-        )
-        export_rows = _export_rows_for_xlsx(
-            raw_response=raw_response,
-            product_export=product_export,
-            best_sellers_export=best_sellers_export,
-            deal_export=deal_export,
-        )
-        export = export_rows_to_xlsx(
-            rows=export_rows,
-            output_path=root_dir / f"{job_id}.xlsx",
-            scenario=request.scenario,
-            site=site,
-            params=request.params,
-            extra_sheets=_merge_extra_sheets(product_export, search_insights_export, best_sellers_export, deal_export),
-        )
-        _upload_export_if_enabled(
-            export=export,
-            job_id=job_id,
-            scenario=request.scenario,
-            site=site,
-            warnings=warnings,
-            jwt=self.jwt,
-            session_id=self.session_id,
-        )
+        if export_format == "json":
+            export = export_response_to_json(
+                response=raw_response,
+                output_path=root_dir / f"{job_id}.json",
+                scenario=request.scenario,
+                site=site,
+            )
+        else:
+            export_rows = (
+                primary_rows
+                if primary_rows is not None
+                else raw_response_to_export_rows(raw_response)
+            )
+            export = export_rows_to_xlsx(
+                rows=export_rows,
+                output_path=root_dir / f"{job_id}.xlsx",
+                scenario=request.scenario,
+                site=site,
+                params=request.params,
+                extra_sheets=formatted.extra_sheets(),
+            )
+        if request.upload_export:
+            logger.info("[KEEPA-TRACE] export_upload_start job_id=%s", job_id)
+            _upload_export_if_enabled(
+                export=export,
+                job_id=job_id,
+                scenario=request.scenario,
+                site=site,
+                warnings=warnings,
+                jwt=self.jwt,
+                session_id=self.session_id,
+            )
+            logger.info("[KEEPA-TRACE] export_upload_done job_id=%s", job_id)
+        else:
+            logger.info("[KEEPA-TRACE] export_upload_skipped job_id=%s reason=api_mode", job_id)
         quota = {
             "estimated_tokens": estimated_tokens,
             "before": extract_quota(before_status),
@@ -202,7 +356,7 @@ class KeepaApiManager:
             job_id=job_id,
             scenario=request.scenario,
             site=site,
-            row_count=len(data),
+            row_count=len(raw_rows),
             root_dir=str(root_dir),
             params_path=str(params_path),
             raw_path=str(raw_path),
@@ -213,6 +367,15 @@ class KeepaApiManager:
             warnings=warnings,
         )
         _write_json(result_path, result.to_dict())
+        self._submit_collection_result(request=request, result=result)
+        logger.info(
+            "[KEEPA-TRACE] manager_done scenario=%s site=%s job_id=%s row_count=%s elapsed_ms=%s",
+            request.scenario,
+            site,
+            job_id,
+            result.row_count,
+            int((time.monotonic() - started_at) * 1000),
+        )
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
@@ -228,6 +391,31 @@ class KeepaApiManager:
         if not base_dir.is_absolute():
             base_dir = Path.cwd() / base_dir
         return base_dir.resolve() / job_id
+
+    def _submit_collection_result(
+        self,
+        *,
+        request: KeepaScenarioRequest,
+        result: KeepaScenarioResult,
+    ) -> None:
+        """提交成功任务；沉淀异常不能回滚已经完成的 Keepa 采集。"""
+        if self.collection_submitter is None:
+            return
+        try:
+            self.collection_submitter(request=request, result=result)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "Keepa 成功任务提交采集数据沉淀失败：job_id=%s",
+                result.job_id,
+            )
+            result.warnings.append(
+                {
+                    "stage": "collection_storage",
+                    "message": "Keepa 数据沉淀排队失败，采集结果已保留",
+                    "error": {"code": type(exc).__name__},
+                }
+            )
+            _write_json(Path(result.result_path), result.to_dict())
 
 
 def extract_quota(payload: dict[str, Any] | None) -> dict[str, Any]:
@@ -348,115 +536,6 @@ def _scalar_item_field(row_source_key: str | None) -> str:
     if row_source_key in {"asinList", "bestSellersList"}:
         return "asin"
     return "value"
-
-
-def _format_product_rows_if_needed(
-    *,
-    scenario: str,
-    rows: list[Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedProductExport | None:
-    if scenario != "product":
-        return None
-    return format_product_export(rows, site=site, domain_id=normalized_params.get("domain"))
-
-
-def _format_search_insights_if_needed(
-    *,
-    scenario: str,
-    raw_response: dict[str, Any],
-    site: str,
-    normalized_params: dict[str, Any],
-    request_params: dict[str, Any],
-) -> FormattedSearchInsightsExport | None:
-    if scenario != "product-finder":
-        return None
-    return format_search_insights_export(
-        raw_response.get("searchInsights"),
-        site=site,
-        domain_id=normalized_params.get("domain"),
-        query_name=_search_insights_query_name(request_params),
-    )
-
-
-def _format_best_sellers_if_needed(
-    *,
-    scenario: str,
-    raw_response: dict[str, Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedBestSellersExport | None:
-    if scenario != "bestsellers":
-        return None
-    return format_best_sellers_export(
-        raw_response.get("bestSellersList"),
-        site=site,
-        domain_id=normalized_params.get("domain"),
-        category_id=normalized_params.get("category"),
-    )
-
-
-def _format_deals_if_needed(
-    *,
-    scenario: str,
-    rows: list[Any],
-    site: str,
-    normalized_params: dict[str, Any],
-) -> FormattedDealExport | None:
-    if scenario != "deals":
-        return None
-    return format_deal_export(rows, site=site, domain_id=normalized_params.get("domain"))
-
-
-def _formatted_data_or_default(
-    *,
-    raw_rows: list[Any],
-    product_export: FormattedProductExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> list[Any]:
-    if product_export:
-        return product_export.products
-    if best_sellers_export:
-        return best_sellers_export.asin_rows
-    if deal_export:
-        return deal_export.deals
-    return add_keepa_time_conversions(raw_rows)
-
-
-def _export_rows_for_xlsx(
-    *,
-    raw_response: dict[str, Any],
-    product_export: FormattedProductExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> list[dict[str, Any]]:
-    if product_export:
-        return product_export.products
-    if best_sellers_export:
-        return best_sellers_export.asin_rows
-    if deal_export:
-        return deal_export.deals
-    return raw_response_to_export_rows(raw_response)
-
-
-def _merge_extra_sheets(
-    product_export: FormattedProductExport | None,
-    search_insights_export: FormattedSearchInsightsExport | None,
-    best_sellers_export: FormattedBestSellersExport | None,
-    deal_export: FormattedDealExport | None,
-) -> dict[str, list[dict[str, Any]]] | None:
-    sheets: dict[str, list[dict[str, Any]]] = {}
-    if product_export:
-        sheets.update(product_export.extra_sheets())
-    if search_insights_export:
-        sheets.update(search_insights_export.extra_sheets())
-    if best_sellers_export:
-        sheets.update(best_sellers_export.extra_sheets())
-    if deal_export:
-        sheets.update(deal_export.extra_sheets())
-    return sheets or None
 
 
 def _search_insights_query_name(params: dict[str, Any]) -> str:
@@ -623,7 +702,9 @@ def _normalize_export_format(value: str) -> str:
     text = (value or "").strip().lower()
     if text in {"", "xls", "xlsx"}:
         return "xlsx"
-    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前仅支持 xls/xlsx 表格导出。")
+    if text == "json":
+        return "json"
+    raise KeepaConfigError(f"不支持的导出格式：{value}。Keepa 当前支持 xls/xlsx/json 导出。")
 
 
 def _upload_export_if_enabled(

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import os
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -21,6 +23,8 @@ from opscli.shared.http import parse_remote_response
 
 ENV_INTEGRATION_ACCOUNT_ENCRYPT_KEY = "INTEGRATION_ACCOUNT_ENCRYPT_KEY"
 DEFAULT_INTEGRATION_ACCOUNT_ENCRYPT_KEY = "G9wmJAd50hIsQm5z4HNRQkAqaEbBAdYh1GQEC0Jxkfo="
+
+_logger = logging.getLogger("opscli.integration_accounts")
 
 
 class IntegrationAccountError(RemoteError):
@@ -119,12 +123,29 @@ class IntegrationAccountClient:
     def get_accounts(self, platform: str) -> IntegrationAccountBundle:
         """拉取指定平台账号并解密。"""
         headers, cookies = self._get_auth("ops")
-        response = httpx.get(
-            f"{self.ops_system_url}/api/v1/integration-accounts",
-            params={"platform": platform},
-            headers=headers,
-            cookies=cookies,
-            timeout=20,
+        started_at = time.monotonic()
+        _logger.info("[KEEPA-TRACE] integration_accounts_start platform=%s", platform)
+        try:
+            response = httpx.get(
+                f"{self.ops_system_url}/api/v1/integration-accounts",
+                params={"platform": platform},
+                headers=headers,
+                cookies=cookies,
+                timeout=20,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[KEEPA-TRACE] integration_accounts_error platform=%s error_type=%s elapsed_ms=%s",
+                platform,
+                type(exc).__name__,
+                int((time.monotonic() - started_at) * 1000),
+            )
+            raise
+        _logger.info(
+            "[KEEPA-TRACE] integration_accounts_done platform=%s status=%s elapsed_ms=%s",
+            platform,
+            response.status_code,
+            int((time.monotonic() - started_at) * 1000),
         )
         payload = parse_remote_response(
             response,

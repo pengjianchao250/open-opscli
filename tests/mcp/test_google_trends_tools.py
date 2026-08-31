@@ -57,7 +57,12 @@ class DummyManager:
         }
 
 
-def test_google_trends_tools_are_registered():
+def test_google_trends_tools_are_registered(monkeypatch):
+    async def allow_all():
+        return None
+
+    monkeypatch.setattr("opscli.mcp.permissions._resolve_allowed_tools", allow_all)
+
     async def scenario():
         async with Client(mcp) as client:
             return await client.list_tools()

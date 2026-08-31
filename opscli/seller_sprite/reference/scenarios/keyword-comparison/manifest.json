@@ -1,0 +1,70 @@
+{
+  "scenario_id": "keyword-comparison",
+  "title": "流量词对比",
+  "web_route": "/v3/keyword-comparison",
+  "api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-comparison/asin",
+    "response_type": "json",
+    "row_path": "data.items"
+  },
+  "prepare_api": {
+    "method": "POST",
+    "endpoint": "/v3/api/keyword-comparison/prepare",
+    "required_success_field": "data.diamondList",
+    "failure_behavior": "fail_before_variant_dialog"
+  },
+  "required_params": [
+    "ownAsin",
+    "competitorAsins"
+  ],
+  "query_conditions": {
+    "own_asin": {
+      "aliases": ["ownAsin", "myAsin", "asin"],
+      "minimum": 1,
+      "maximum": 1
+    },
+    "competitor_asins": {
+      "aliases": ["competitorAsins", "competitorAsin", "asins"],
+      "minimum": 1,
+      "maximum": 10,
+      "must_not_include_own_asin": true
+    },
+    "comparison_mode": {
+      "fixed_value": "traffic_percentage"
+    },
+    "variant_selection": {
+      "param": "variantSelection",
+      "default_value": "sell_well",
+      "allowed_values": ["sell_well", "current"],
+      "aliases": {
+        "用畅销变体拓词": "sell_well",
+        "用当前变体拓词": "current"
+      },
+      "request_body_field": false
+    }
+  },
+  "response": {
+    "result_scope": "first_page",
+    "fixed_page": 1,
+    "fixed_size": 100,
+    "auto_pagination": false,
+    "dynamic_value_path": "data.items[].competitorList[]"
+  },
+  "result": {
+    "source": "query_json",
+    "local_xlsx": true,
+    "official_export_api": false,
+    "sheets": ["dynamic_main_sheet", "ASIN"],
+    "notes_sheet": false
+  },
+  "capture_evidence": {
+    "captured_at": "2026-07-30",
+    "sample_request": "sample-request.json",
+    "sample_response": "sample-response.json",
+    "headers_file": "official-headers.json",
+    "workbook_profile": "workbook-profile.json",
+    "captured_workbook_fixture": "tests/fixtures/seller_sprite/official_exports/keyword-comparison/CompareKeywords-US-B0949DWJCV-260730-902873.xlsx",
+    "sanitized": true
+  }
+}

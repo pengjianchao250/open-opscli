@@ -10,7 +10,7 @@ UNIT_DIR="/etc/systemd/system"
 
 usage() {
     printf '%s\n' \
-        "用法: sudo bash install_systemd.sh --project-root <项目目录> --venv <虚拟环境目录> --user <服务账号> [--group <服务组>]"
+        "用法: sudo bash install_systemd.sh --project-root <项目目录> --venv <虚拟环境目录> --user <服务账号> [--group <服务组>] [--insight-config <模型配置文件>]"
 }
 
 fail() {
@@ -35,6 +35,7 @@ project_root=""
 venv_dir=""
 service_user=""
 service_group=""
+insight_config=""
 while (($#)); do
     case "$1" in
         --project-root)
@@ -55,6 +56,11 @@ while (($#)); do
         --group)
             require_value "$1" "${2:-}"
             service_group="$2"
+            shift 2
+            ;;
+        --insight-config)
+            require_value "$1" "${2:-}"
+            insight_config="$2"
             shift 2
             ;;
         --help|-h)
@@ -85,6 +91,11 @@ project_root="$(realpath -- "${project_root}")"
 venv_dir="$(realpath -- "${venv_dir}")"
 validate_path "项目目录" "${project_root}"
 validate_path "虚拟环境目录" "${venv_dir}"
+if [[ -n "${insight_config}" ]]; then
+    [[ -f "${insight_config}" ]] || fail "模型配置文件不存在: ${insight_config}"
+    insight_config="$(realpath -- "${insight_config}")"
+    validate_path "模型配置文件" "${insight_config}"
+fi
 
 report_script="${project_root}/opscli/skills/templates/ops-feedback-query/scripts/daily_feedback_report.py"
 credentials_file="${project_root}/opscli/skills/templates/ops-feedback-query/data/credentials.json"
@@ -113,6 +124,26 @@ for field in ("feedback_api_key", "wecom_webhook_url"):
     if not isinstance(value, str) or not value.strip() or value.startswith("REPLACE_WITH_"):
         raise SystemExit(1)
 PY
+insight_args=""
+if [[ -n "${insight_config}" ]]; then
+    "${python_bin}" - "${insight_config}" <<'PY' || fail "模型配置缺少 endpoint、api_key 或 model"
+import json
+import sys
+from pathlib import Path
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+for field in ("endpoint", "api_key", "model"):
+    value = payload.get(field) if isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value.strip() or "REPLACE_WITH_" in value:
+        raise SystemExit(1)
+PY
+    chown "${service_user}:${service_group}" "${insight_config}"
+    chmod 0600 "${insight_config}"
+    insight_args="--insight --insight-config ${insight_config}"
+fi
 [[ -f "${service_template}" ]] || fail "未找到 systemd 服务模板"
 [[ -f "${timer_template}" ]] || fail "未找到 systemd 定时器模板"
 command -v systemctl >/dev/null 2>&1 || fail "当前系统未安装 systemctl"
@@ -133,6 +164,7 @@ sed \
     -e "s|@PYTHON_BIN@|${python_bin}|g" \
     -e "s|@REPORT_SCRIPT@|${report_script}|g" \
     -e "s|@OUTPUT_DIR@|${output_dir}|g" \
+    -e "s|@INSIGHT_ARGS@|${insight_args}|g" \
     "${service_template}" >"${rendered_service}"
 
 install -m 0644 "${rendered_service}" "${UNIT_DIR}/${SERVICE_NAME}.service"

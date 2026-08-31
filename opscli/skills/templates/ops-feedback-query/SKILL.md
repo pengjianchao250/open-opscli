@@ -106,6 +106,195 @@ python scripts/daily_feedback_report.py
 python scripts/daily_feedback_report.py --send
 ```
 
+### 使用大模型生成反馈洞察
+
+洞察模式会读取当前周期及上一等长周期的反馈列表和批量详情，调用正式的
+`opscli feedback insight` 命令进行语义分类，再由确定性规则计算模块问题次数、
+环比、影响用户数、P0-P4 优先级和建议工作。旧日报默认不调用模型；必须显式
+传入 `--insight`。
+
+先参考 `data/feedback_insight.example.json` 创建独立模型配置：
+
+```json
+{
+  "endpoint": "https://your-model-gateway.example/v1/chat/completions",
+  "api_key": "替换为模型密钥",
+  "model": "替换为模型名称",
+  "batch_size": 100
+}
+```
+
+默认配置路径为 `~/.config/opscli/feedback_insight.json`。也可以通过
+`--insight-config` 指向受保护文件：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --insight \
+  --insight-config /etc/opscli/feedback-insight.json \
+  --send
+```
+
+模型接口必须兼容 OpenAI Chat Completions JSON 协议，非本机 endpoint 必须使用 HTTPS，
+HTTP 仅允许 localhost/127.0.0.1/::1 调试地址。发送模型前只保留批内短引用、
+类型、严重度、来源、系统、Skill/命令/工具、版本、标题、正文和首条失败摘要；邮箱、
+用户 ID、payload、context、附件、调用参数和凭据不会发送。用户仅以本地哈希参与影响
+人数统计，该哈希也不会发送给模型。
+
+模型只负责 `module/problem_key/problem_category/problem_summary/recommended_work/confidence`
+分类；次数、环比、影响人数和优先级由本地规则计算。Critical 固定为 P0；其他问题按
+严重度、当前次数、影响人数和增长趋势计分，依次划分为 P1-P4。模型输出缺项、重复批内引用、
+非法稳定键或置信度越界时整次洞察失败，不生成不完整报告。`batch_size` 控制每次模型
+请求的反馈数，必须在 1 到 100 之间，默认 100。单批网络失败自动重试一次。
+
+后续模型批次会携带最多 200 个已建立的问题分类；本地还会按“原始系统/调用入口 + 标准化
+错误模板”对齐跨周期重复问题，避免模型批次间 problem_key 或 module 漂移造成次数失真。
+没有结构化错误信息时不按通用标题强制合并，避免不同根因被错误累计。平均置信度低于 0.7 的问题在
+报告中标为“待复核”，不会触发 P0/P1 洞察提醒。模型或对比周期查询失败时自动降级为
+基础日报，继续发送原有 Critical/High 提醒，不把可选 AI 能力变成日报单点故障。
+
+已确认的确定性错误分类会持久化到 `~/.config/opscli/feedback_taxonomy.json`。文件只保存
+标准问题分类和“系统/调用入口 + 标准化错误模板”的 SHA-256，不保存原始错误文本。后续运行
+命中指纹时直接复用分类，不再把该反馈交给模型或 Codex；未命中项才进入分类批次。可通过
+`--taxonomy-file` 指定其他受保护路径。普通洞察和本地 Codex 两阶段日报共用该机制；两阶段
+自定义路径时，`--prepare-only` 与 `--finalize-prepared` 必须传同一路径。
+
+### 本地 Codex 两阶段日报
+
+本地生产默认使用“08:30 提前取数，Codex App 稍后分析”的两阶段模式，避免长时间网关请求
+占用 Windows 计划任务。第一阶段只查询昨天及前一天数据、读取详情、脱敏并分块，不调用模型、
+不生成最终日报、不发送企业微信：
+
+```bash
+python scripts/daily_feedback_report.py --prepare-only
+```
+
+准备结果固定写入 `output/feedback-query/prepared/YYYY-MM-DD/`。只有 `analysis-input.json`、
+`report-input.json`、全部 chunk 和契约哈希成功落盘后，manifest 才会从 `preparing` 原子切换为
+`ready`，并写入内容为“YYYY-MM-DD 数据已完成”的 `READY` 标记。重复执行同一天准备任务会复用
+完整的 `ready/analyzing/completed` 产物，不重复取数。
+
+Codex App 自动化必须先完整读取本 Skill 和 `reference/Codex反馈洞察分类契约.md`，然后领取
+上海时区昨日对应的 ready 数据；更早的 backlog 不会被误发为当日日报：
+
+```bash
+python scripts/daily_feedback_report.py --claim-ready
+```
+
+返回 `state=idle` 时直接结束，不生成或发送任何内容。领取命令也会恢复上一次未完成的
+`analyzing/narrating` 数据。返回 `state=narrating` 时直接复用返回的叙事输入与状态：`pending`
+继续写叙事，`validated` 直接最终化，不重复生成事实包。返回 `state=analyzing` 时，按 manifest 的
+chunk 顺序处理；每个 `chunk-XXX.output.json` 只写契约允许的分类字段，且必须覆盖输入中的全部
+UUID。写完一块立即运行：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --validate-chunk output/feedback-query/prepared/YYYY-MM-DD/chunks/chunk-001.output.json
+```
+
+校验失败只修复该 chunk；不得直接修改 manifest、最终统计、Markdown 或完成标记。全部 chunk
+返回 `status=validated` 后，先由 Python 生成确定性管理事实包：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --prepare-narrative output/feedback-query/prepared/YYYY-MM-DD
+```
+
+Codex 读取返回的 `narrative-input.json`，按分类契约把执行摘要、模块洞悉、P0/P1 风险、治理项目和
+局限写入 `narrative-output.json`。AI 只能引用事实包中的 `problem_ref`，不得自行计算或改写数字。
+写完后执行：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --validate-narrative output/feedback-query/prepared/YYYY-MM-DD/narrative-output.json
+```
+
+叙事校验失败只修复该文件。通过后执行离线收尾：
+
+```bash
+python scripts/daily_feedback_report.py \
+  --finalize-prepared output/feedback-query/prepared/YYYY-MM-DD \
+  --analysis-model scheduled-codex \
+  --send
+```
+
+收尾阶段会再次校验所有输入哈希、chunk 元数据、稳定键、置信度、UUID 全覆盖和管理叙事引用，
+再复用
+`opscli.feedback.services.insight` 的确定性规则计算次数、环比、影响人数和 P0-P4，最后生成运行
+产物，并以“范围与口径、执行摘要、根因分布、重点模块、重复问题证据、风险、治理工作、日环比、
+局限”为主报告结构；完整问题簇和反馈明细折叠在附录。之后发布 Markdown、推送企业微信并写入
+“YYYY-MM-DD AI 洞察已完成”的 `COMPLETED` 标记。
+分类不完整、文件被修改或通知失败都会留下结构化失败状态；Codex 不得绕过 Python 自行计算统计。
+准备阶段已命中 taxonomy 的反馈保存在单独的哈希校验产物中，不会出现在待分析 chunk；最终化
+阶段合并缓存分类和 Codex 新分类，并在校验通过后原子更新 taxonomy。
+
+Windows 取数任务可重复执行下面的安装脚本进行创建或修复，默认任务名为
+`OpsCLI Feedback Daily Insight`，每天 08:30 触发，错过时间后在下次可用时补跑：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy/install_windows.ps1 `
+  -ProjectRoot D:\Gitlab\open-opscli
+```
+
+该任务使用当前 Windows 用户的交互登录令牌和受限权限；电脑需开机且用户已登录。Codex App
+09:00 自动化是本机应用配置，不由此脚本创建，需在 Codex App 中启用“反馈日报 Codex 洞察”。
+
+### 日报运行产物
+
+每次日报运行都会在 `output/feedback-query/runs/<run-id>/` 写入两份结构化产物：
+
+- `manifest.json`：时间窗口、运行状态、日报路径、AI 是否成功或降级、明确的安全错误码，
+  以及企业微信通知状态。
+- `clusters.json`：基础反馈指标、对比窗口、AI 问题簇、模块汇总和模型契约元数据。
+
+`run_key` 由报告类型、完整时间窗哈希、`base/insight` 分析 profile 和 schema 版本确定，
+`run_id` 再追加 UTC 尝试时间，因此同一天不同窗口或不同分析模式不会混组，重跑也不会覆盖
+上一份运行记录。每次尝试还会保存不可变的 `report.md` 及其 SHA-256；根目录日报
+只是供浏览器访问的最新发布副本，并通过同目录临时文件原子替换。后续周报、月报按不含 profile
+的 `period_key` 分组，每个时间窗只选一份：依次选择最新的 `insight success`、
+`insight degraded`、`base success`；企业微信投递状态不影响分析快照选择。不得解析或累加
+Markdown。产物只保存聚合指标、问题簇和样本反馈 UUID，不保存
+邮箱、用户 ID、原始 payload、context、附件或模型密钥。AI 模式还会保存当前期、对比期和
+脱敏模型输入哈希，以及查询、详情读取、模型和通知阶段耗时；即使 AI 降级，仍保留不含密钥的
+model、batch size、Prompt 版本和 Prompt 哈希，供连续运行后统计稳定性。
+
+### 生成周报和月报
+
+周期报告只读取已完成日报的 `runs/*/manifest.json` 与 `clusters.json`，不解析 Markdown，
+也不重复访问远端反馈接口。周报使用截至指定日期的完整七天，并对比上一完整七天：
+
+```bash
+python scripts/periodic_feedback_report.py \
+  --report-type weekly \
+  --period-end 2026-08-02
+```
+
+月报使用自然月，并对比上一个自然月：
+
+```bash
+python scripts/periodic_feedback_report.py \
+  --report-type monthly \
+  --month 2026-07
+```
+
+每次运行会发布根目录 Markdown，并在 `output/feedback-query/periodic/<period-key>/` 保存
+`report.md`、`metrics.json` 和 `manifest.json`。指标包含数据覆盖天数、反馈与失败调用数、
+分诊率、解决率、新增/持续/本期未再出现/多日复发问题、活跃天数、影响用户日及优先级理由。
+处置率是每日状态快照汇总口径；“本期未再出现”不等于已解决。当前没有状态事件时间线，因此
+不得把这些数值表述为 SLA、MTTA 或 MTTR。
+
+周期报告必须由 `periodic_feedback_report.py` 生成并发布，不得由 Agent 手工累计日报、改写指标
+或直接编辑最终 Markdown。脚本是时间窗口、快照选择、指标计算、风险排序、报告结构和发布路径的
+唯一实现；Skill 只约束调用流程与语义边界。
+
+周报和月报正文必须保持管理结论优先的结构：范围与口径、管理摘要、重点模块、根因分布、重复问题
+证据、重点风险、治理工作建议、周期对比、局限与后续。完整问题簇、处置快照和全部模块分布放入
+折叠附录，不能重新铺成正文长表。重点风险按 Python 的确定性优先级和发生次数排序；对比期覆盖
+不完整时必须明确提示并停止计算环比，不能用不完整基线生成趋势结论。
+
+现阶段周期报告不增加独立 AI 叙事阶段。若后续引入 Codex 管理叙事，必须沿用日报的两阶段边界：
+Python 生成确定性事实包，Codex 只引用事实包撰写叙事，Python 校验引用和数字后发布；AI 不得自行
+计算次数、比例、优先级、活跃天数或影响用户日。
+
 指定统计时间范围：
 
 ```bash
@@ -126,8 +315,42 @@ python scripts/daily_feedback_report.py \
 | `--timeout` | 否 | 单次反馈查询超时秒数，默认 20 |
 | `--output` | 否 | Markdown 文件路径；只允许写入项目根 `output/feedback-query/` |
 | `--send` | 否 | 显式发送企业微信 Markdown 摘要；未传时绝不调用机器人 |
+| `--insight` | 否 | 调用大模型生成模块问题洞察，并查询上一等长周期进行对比 |
+| `--insight-config` | 否 | 模型配置文件；仅与 `--insight` 一起使用，默认读取 opscli 用户配置目录 |
+| `--taxonomy-file` | 否 | 持久 taxonomy 文件，默认读取 opscli 用户配置目录；两阶段准备和最终化必须一致 |
+| `--prepare-only` | 否 | 只准备昨日脱敏数据、分块和 READY 标记，不调用模型或推送 |
+| `--claim-ready` | 否 | 领取最新 ready 数据并切换为 analyzing，供 Codex App 自动化使用 |
+| `--validate-chunk` | 否 | 校验一个 Codex chunk 输出并记录 validated/failed 检查点 |
+| `--prepare-narrative` | 否 | 基于已校验分类生成确定性管理事实包，供 Codex 撰写叙事 |
+| `--validate-narrative` | 否 | 校验管理叙事的问题引用、优先级边界和字段契约 |
+| `--finalize-prepared` | 否 | 从准备目录离线聚合并发布最终 AI 日报 |
+| `--analysis-model` | 否 | 最终化时记录的 Codex 模型名称，默认 `codex_app`，不参与统计 |
 
-日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表。群消息使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节，不使用仅旧版 Markdown 支持的字体颜色和成员 `@` 语法。报告与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据；群消息按“严重度 + 标题”聚合重复问题，最多展示 5 类 Critical/High 问题并标注每类反馈数，底部提供固定的“详细文档查看”入口，完整逐条记录保留在本地 Markdown 文件。
+基础日报包含反馈类型、问题严重度、来源、状态、失败调用数和问题列表，并使用 Mermaid `pie` 扩展语法展示反馈类型与严重度分布。Codex 两阶段洞察日报改用管理结论优先结构，图表型基础分布由根因、重点模块、重复证据、风险和治理项目替代，完整问题簇与反馈明细折叠到附录。模型网关 `--insight` 回退仍保留原模块问题洞察表。群消息优先提醒最多 3 条 P0/P1 洞察，使用企业微信官方 `markdown_v2` 协议，内容不超过 4096 个 UTF-8 字节。报告、运行产物与群消息不会写入邮箱、用户 ID、原始 payload、context、附件或凭据。
+
+### 本地浏览日报
+
+启动只读的本地 HTTP 服务，按更新时间浏览 `output/feedback-query/` 中的 Markdown 日报：
+
+```bash
+python scripts/serve_feedback_reports.py
+```
+
+服务默认监听 `http://127.0.0.1:8780`，不会暴露到局域网。可使用 `--port` 修改端口：
+
+```bash
+python scripts/serve_feedback_reports.py --port 8877
+```
+
+需要让同一局域网的设备访问时，显式传入本机私有 IPv4 地址，并在系统防火墙中只对本地子网放行对应端口：
+
+```bash
+python scripts/serve_feedback_reports.py --host 10.6.53.56 --port 8780
+```
+
+`--host` 只接受明确的回环或私有 IPv4 地址；拒绝 `0.0.0.0`、公网地址和主机名。LAN 模式仍使用 Host 白名单，不会接受其他地址的 Host 请求。
+
+浏览服务只读取报告目录根部、符合 `反馈日报-YYYY-MM-DD[_YYYY-MM-DD][-*].md`、`反馈周报-YYYY-MM-DD_YYYY-MM-DD.md` 或月度反馈复盘命名的文件，提供报告页面、Markdown 原文、`/api/reports` 列表和 `/health` 健康检查；日报使用的 Mermaid `pie showData` 会转换为无外部脚本的本地图表，桌面端使用双列分布概览，窄屏自动切换单列，原始表格可按需展开；其他 Mermaid 类型安全回退为转义源码。其他 Markdown、JSON 查询结果、模型配置、凭据、子目录和目录外文件均不可访问。
 
 ## Linux 每日自动推送
 
@@ -137,10 +360,11 @@ Skill 内置 `deploy/` systemd 部署包，可在 Linux 服务器以专用服务
 sudo bash deploy/install_systemd.sh \
   --project-root /opt/open-opscli \
   --venv /opt/open-opscli/.venv \
-  --user ops-feedback
+  --user ops-feedback \
+  --insight-config /etc/opscli/feedback-insight.json
 ```
 
-安装脚本会校验项目、虚拟环境、日报脚本和凭据文件，收紧凭据与输出目录权限，安装 `ops-feedback-report.service/timer` 并立即启用 timer。首次部署后应手动执行 `sudo systemctl start ops-feedback-report.service` 验证真实推送；完整安装、巡检、排障与回滚步骤见 `docs/release/反馈日报定时推送运维指南.md`。
+`--insight-config` 可选；不传时继续生成旧版日报。传入时安装脚本会校验模型配置并将权限收紧为 `0600`，定时任务随后每日生成大模型洞察。安装脚本还会校验项目、虚拟环境、日报脚本和反馈凭据文件，收紧输出目录权限，安装 `ops-feedback-report.service/timer` 并立即启用 timer。首次部署后应手动执行 `sudo systemctl start ops-feedback-report.service` 验证真实推送；完整安装、巡检、排障与回滚步骤见 `docs/release/反馈日报定时推送运维指南.md`。
 
 ## 输出约定
 
@@ -157,7 +381,7 @@ sudo bash deploy/install_systemd.sh \
 3. 用 `batch-detail` 一次读取最多 100 条完整详情。
 4. 根据 `content`、`execution_summary.failed_calls` 和版本信息进行分诊。
 5. 只保留解决问题所需字段，不把邮箱、payload、context、附件或执行参数复制到公开渠道。
-6. 需要日常复盘时运行 `daily_feedback_report.py`；先不传 `--send` 检查 Markdown，确认后再显式推送企业微信。
+6. 需要模块分类、周期趋势和建议工作时增加 `--insight`；先不传 `--send` 检查 Markdown，确认模型分类和优先级后再显式推送企业微信。
 
 ## 安全边界
 
@@ -165,5 +389,6 @@ sudo bash deploy/install_systemd.sh \
 - `data/credentials.json` 是内部明文凭据文件；更换反馈密钥或企业微信 Webhook 时只修改该文件。
 - 不得输出、上传或反馈该密钥与 Webhook，也不要把它们复制到命令行参数。
 - 企业微信发送前必须确认群成员范围；群消息仅包含脱敏摘要，完整报告只落在本地专用输出目录。
+- 模型密钥只能放在 opscli 用户配置目录、受保护 CI File Variable 或 `/etc/opscli/` 受限文件，不得写入 Skill 的已跟踪凭据文件、命令行或日志。
 - 完整详情可能包含个人邮箱、文件路径、工具参数和执行上下文，按最小必要原则查询和使用。
 - 请求失败时只报告业务码、错误消息和安全的参数校验详情，不输出请求 Header。

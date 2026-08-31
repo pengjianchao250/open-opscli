@@ -25,6 +25,30 @@ class SellerSpriteAccountUnavailableError(SellerSpriteError):
     code = "SELLER_SPRITE_ACCOUNT_UNAVAILABLE"
 
 
+class SellerSpriteAccountSourceUnavailableError(SellerSpriteError):
+    """生产调度所需的远程账号源不可用。"""
+
+    code = "SELLER_SPRITE_ACCOUNT_SOURCE_UNAVAILABLE"
+
+
+class SellerSpriteNoEligibleAccountError(SellerSpriteError):
+    """远程账号源可访问，但没有可参与调度的账号。"""
+
+    code = "SELLER_SPRITE_NO_ELIGIBLE_ACCOUNT"
+
+
+class SellerSpriteAllStandbyBusyError(SellerSpriteError):
+    """可用备用账号均被其他运行任务占用。"""
+
+    code = "SELLER_SPRITE_ALL_STANDBY_BUSY"
+
+
+class SellerSpriteAllAccountsAuthFailedError(SellerSpriteError):
+    """当前任务已经耗尽全部可尝试账号凭据。"""
+
+    code = "SELLER_SPRITE_ALL_ACCOUNTS_AUTH_FAILED"
+
+
 class SellerSpriteDedicatedAccountUnavailableError(SellerSpriteError):
     """用户专属账号绑定已失效或无法安全恢复。"""
 

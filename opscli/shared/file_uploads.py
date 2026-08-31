@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import os
 import time
@@ -31,6 +32,8 @@ DEFAULT_PUBLIC = "0"
 DEFAULT_TIMEOUT = 60
 DEFAULT_RETRIES = 2
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+
+_logger = logging.getLogger("opscli.file_uploads")
 
 
 class FileUploadError(RemoteError):
@@ -122,21 +125,48 @@ class FileUploadClient:
         mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
         upload_filename = filename or file_path.name
 
-        response = self._post_with_retry(
-            file_path,
-            headers=headers,
-            cookies=cookies,
-            purpose=purpose,
-            folder=upload_folder,
-            public=upload_public,
-            metadata=metadata,
-            upload_filename=upload_filename,
-            mime_type=mime_type,
+        started_at = time.monotonic()
+        _logger.info(
+            "[KEEPA-TRACE] file_upload_request_start purpose=%s filename=%s size=%s attempts=%s timeout_seconds=%s",
+            purpose,
+            upload_filename,
+            file_path.stat().st_size,
+            _upload_attempt_count(),
+            DEFAULT_TIMEOUT,
         )
+
+        try:
+            response = self._post_with_retry(
+                file_path,
+                headers=headers,
+                cookies=cookies,
+                purpose=purpose,
+                folder=upload_folder,
+                public=upload_public,
+                metadata=metadata,
+                upload_filename=upload_filename,
+                mime_type=mime_type,
+            )
+        except Exception as exc:
+            _logger.warning(
+                "[KEEPA-TRACE] file_upload_request_error purpose=%s filename=%s error_type=%s elapsed_ms=%s",
+                purpose,
+                upload_filename,
+                type(exc).__name__,
+                int((time.monotonic() - started_at) * 1000),
+            )
+            raise
         payload = _parse_upload_response(response)
         url = _extract_upload_url(payload)
         if not url:
             raise FileUploadBadJsonError("文件上传响应缺少下载链接")
+        _logger.info(
+            "[KEEPA-TRACE] file_upload_request_done purpose=%s filename=%s status=%s elapsed_ms=%s",
+            purpose,
+            upload_filename,
+            response.status_code,
+            int((time.monotonic() - started_at) * 1000),
+        )
         return FileUploadResult(url=url, raw=payload)
 
     def _post_with_retry(

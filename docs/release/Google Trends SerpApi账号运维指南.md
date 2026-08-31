@@ -1,6 +1,6 @@
 # Google Trends SerpApi 账号运维指南
 
-> 本文档用于维护 Google Trends 使用的 SerpApi API Key，包括新增、查看、额度测试、启用和禁用账号。
+> 本文档用于维护 Google Trends 使用的 SerpApi API 账号。账号和 API Key 已统一存储在 MySQL API 凭据池中。
 
 ## 启动方式
 
@@ -47,7 +47,7 @@ opscli google-trends api-key add --name primary --remark "主账号"
 
 | 参数 | 必填 | 说明 |
 |------|------|------|
-| `--name` | 是 | 本地账号名称，不区分大小写，建议使用稳定且唯一的名称 |
+| `--name` | 是 | Provider 内账号名称，不区分大小写，建议使用稳定且唯一的名称 |
 | `--remark` | 否 | 账号用途、负责人或套餐等备注 |
 
 执行后终端会提示：
@@ -173,21 +173,9 @@ opscli google-trends api-key list
 
 业务请求会先复查续期日已到且冷却结束的 `exhausted` 账号，再从 `active` 账号中选择最久未使用的账号。某个账号确认耗尽后，会被标记为 `exhausted`，当前请求自动尝试下一个可用账号。
 
-## 本地存储
+## 统一存储
 
-默认 SQLite 文件：
-
-```text
-~/.config/opscli/google_trends/serpapi.sqlite3
-```
-
-Windows 通常对应：
-
-```text
-%USERPROFILE%\.config\opscli\google_trends\serpapi.sqlite3
-```
-
-API Key 按当前运维约定以明文保存在该 SQLite 文件中。请限制配置目录的访问权限，不要把数据库复制到共享目录、日志、工单附件或代码仓库。
+SerpAPI 账号统一存储在 API 凭据池 MySQL 表中，API Key 使用信封加密。完整配置、初始化、多账号管理和 SQLite 迁移流程参见 `docs/guide/API凭据池管理指南.md`。
 
 ## 常见问题
 

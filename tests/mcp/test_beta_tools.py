@@ -1,3 +1,5 @@
+"""Canopy beta MCP 工具合同与多账号故障转移测试。"""
+
 import asyncio
 from pathlib import Path
 
@@ -6,6 +8,7 @@ import pytest
 from fastmcp import Client
 
 from opscli.beta.canopy.services import api_manager as canopy_api_manager
+from opscli.api_credentials.models import ApiCredentialLease
 from opscli.mcp.server import mcp
 from opscli.mcp.tools import beta as beta_tools
 
@@ -34,6 +37,31 @@ def allow_all_tools_without_local_credentials(monkeypatch):
         return None
 
     monkeypatch.setattr("opscli.mcp.permissions._resolve_allowed_tools", allow_all)
+
+
+@pytest.fixture(autouse=True)
+def use_fake_canopy_credential_pool(monkeypatch):
+    class FakePool:
+        successes = []
+        failures = []
+
+        def acquire(self, provider, *, exclude_account_ids=None):
+            assert provider == "canopy"
+            return ApiCredentialLease(
+                account_id=9,
+                provider="canopy",
+                account_name="test-pool",
+                secret="pool-canopy-key",
+                secret_version=2,
+            )
+
+        def report_success(self, lease, *, runtime=None):
+            self.__class__.successes.append((lease, runtime))
+
+        def report_failure(self, lease, **kwargs):
+            self.__class__.failures.append((lease, kwargs))
+
+    monkeypatch.setattr("opscli.api_credentials.pool.ApiCredentialPool", FakePool)
 
 
 def test_mcp_exposes_beta_tools():
@@ -221,7 +249,6 @@ def test_beta_canopy_run_calls_canopy_with_domain_placeholder_key_and_xls_export
         return httpx.Response(200, json={"success": True, "data": {"product": {"asin": "B0B3JBVDYP", "title": "Test Product"}}})
 
     _patch_async_client(monkeypatch, handler)
-    monkeypatch.setattr(beta_tools.canopy_config, "DEFAULT_API_KEY_PATH", tmp_path / "missing_api_key")
 
     result = _run(
         beta_tools.beta_canopy_run(
@@ -260,12 +287,12 @@ def test_beta_canopy_run_calls_canopy_with_domain_placeholder_key_and_xls_export
     assert "asin=B0B3JBVDYP" in captured["url"]
     assert "domain=US" in captured["url"]
     assert "country=" not in captured["url"]
-    assert captured["api_key"] == beta_tools.CANOPY_API_KEY_PLACEHOLDER
+    assert captured["api_key"] == "pool-canopy-key"
     assert captured["content_type"] == "application/json"
 
 
-def test_beta_canopy_run_product_reviews_local_debug_instruction(monkeypatch, tmp_path: Path):
-    """本地调试：自然语言“查 ASIN 一星已验证购买评论并导出 xls”应落到评论接口。"""
+def test_beta_canopy_run_product_reviews_uses_pool_account(monkeypatch, tmp_path: Path):
+    """评论场景应使用统一凭据池账号并落到正确接口。"""
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -306,9 +333,6 @@ def test_beta_canopy_run_product_reviews_local_debug_instruction(monkeypatch, tm
         )
 
     _patch_async_client(monkeypatch, handler)
-    api_key_path = tmp_path / "api_key"
-    monkeypatch.setattr(beta_tools.canopy_config, "DEFAULT_API_KEY_PATH", api_key_path)
-    api_key_path.write_text("local-debug-key", encoding="utf-8")
 
     result = _run(
         beta_tools.beta_canopy_run(
@@ -339,7 +363,7 @@ def test_beta_canopy_run_product_reviews_local_debug_instruction(monkeypatch, tm
     assert "domain=US" in captured["url"]
     assert "rating=ONE_STAR" in captured["url"]
     assert "onlyVerifiedReviews=true" in captured["url"]
-    assert captured["api_key"] == "local-debug-key"
+    assert captured["api_key"] == "pool-canopy-key"
     assert "local-debug-key" not in str(data)
 
 
@@ -484,7 +508,7 @@ def test_beta_canopy_run_alias_params_only_apply_to_reviews(monkeypatch, tmp_pat
     assert "onlyVerifiedReviews=" not in captured["url"]
 
 
-def test_beta_canopy_run_accepts_json_params_api_key_argument_and_blank_export_format(monkeypatch, tmp_path: Path):
+def test_beta_canopy_run_accepts_json_params_and_blank_export_format(monkeypatch, tmp_path: Path):
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -499,7 +523,6 @@ def test_beta_canopy_run_accepts_json_params_api_key_argument_and_blank_export_f
             scenario="search",
             domain="US",
             params='{"searchTerm":"coffee grinder","page":1,"limit":20}',
-            api_key="test-key",
             export_format="",
             output_dir=str(tmp_path),
             job_id="beta-search-regression",
@@ -509,7 +532,7 @@ def test_beta_canopy_run_accepts_json_params_api_key_argument_and_blank_export_f
     assert result["success"] is True
     assert "searchTerm=coffee+grinder" in captured["url"]
     assert "domain=US" in captured["url"]
-    assert captured["api_key"] == "test-key"
+    assert captured["api_key"] == "pool-canopy-key"
     assert "api_key_placeholder_used" not in str(result["data"])
     assert "api_key_placeholder_used" not in result["data"]["request"]
     assert result["data"]["request"]["export_format"] == "xls"
@@ -517,7 +540,7 @@ def test_beta_canopy_run_accepts_json_params_api_key_argument_and_blank_export_f
     assert "file://" not in str(result["data"])
 
 
-def test_beta_canopy_run_ignores_env_without_local_api_key(monkeypatch, tmp_path: Path):
+def test_beta_canopy_run_ignores_env_and_uses_credential_pool(monkeypatch, tmp_path: Path):
     captured = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -525,7 +548,6 @@ def test_beta_canopy_run_ignores_env_without_local_api_key(monkeypatch, tmp_path
         return httpx.Response(200, json={"success": True, "data": {"categories": [{"categoryId": "1", "name": "Root"}]}})
 
     _patch_async_client(monkeypatch, handler)
-    monkeypatch.setattr(beta_tools.canopy_config, "DEFAULT_API_KEY_PATH", tmp_path / "missing_api_key")
     monkeypatch.setenv("OPSCLI_BETA_CANOPY_API_KEY", "env-key")
     monkeypatch.setenv("CANOPY_API_KEY", "legacy-env-key")
 
@@ -539,34 +561,51 @@ def test_beta_canopy_run_ignores_env_without_local_api_key(monkeypatch, tmp_path
     )
 
     assert result["success"] is True
-    assert captured["api_key"] == beta_tools.CANOPY_API_KEY_PLACEHOLDER
+    assert captured["api_key"] == "pool-canopy-key"
 
 
-def test_beta_canopy_run_uses_local_api_key(monkeypatch, tmp_path: Path):
-    captured = {}
+def test_beta_canopy_run_fails_over_after_unauthorized_account(monkeypatch, tmp_path: Path):
+    attempted_keys = []
+
+    class FailoverPool:
+        def acquire(self, provider, *, exclude_account_ids=None):
+            excluded = exclude_account_ids or set()
+            account_id = 1 if 1 not in excluded else 2
+            return ApiCredentialLease(
+                account_id=account_id,
+                provider=provider,
+                account_name=f"account-{account_id}",
+                secret=f"canopy-key-{account_id}",
+                secret_version=1,
+            )
+
+        def report_success(self, lease, *, runtime=None):
+            pass
+
+        def report_failure(self, lease, **kwargs):
+            pass
 
     def handler(request: httpx.Request) -> httpx.Response:
-        captured["api_key"] = request.headers.get("API-KEY")
-        return httpx.Response(200, json={"success": True, "data": {"categories": [{"categoryId": "1", "name": "Root"}]}})
+        api_key = request.headers.get("API-KEY")
+        attempted_keys.append(api_key)
+        if api_key == "canopy-key-1":
+            return httpx.Response(401, json={"message": "invalid key"})
+        return httpx.Response(200, json={"success": True, "data": {"categories": []}})
 
+    monkeypatch.setattr("opscli.api_credentials.pool.ApiCredentialPool", FailoverPool)
     _patch_async_client(monkeypatch, handler)
-    api_key_path = tmp_path / "api_key"
-    monkeypatch.setattr(beta_tools.canopy_config, "DEFAULT_API_KEY_PATH", api_key_path)
-    monkeypatch.setenv("OPSCLI_BETA_CANOPY_API_KEY", "env-key")
-    api_key_path.write_text("local-file-key", encoding="utf-8")
 
     result = _run(
         beta_tools.beta_canopy_run(
             "categories",
             domain="US",
             output_dir=str(tmp_path),
-            job_id="beta-categories-local-key",
+            job_id="beta-canopy-failover",
         )
     )
 
     assert result["success"] is True
-    assert captured["api_key"] == "local-file-key"
-    assert "local-file-key" not in str(result["data"])
+    assert attempted_keys == ["canopy-key-1", "canopy-key-2"]
 
 
 def test_beta_canopy_run_rejects_unknown_scenario():

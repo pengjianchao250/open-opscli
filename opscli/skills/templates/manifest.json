@@ -47,6 +47,14 @@
       "tier": "experimental",
       "reason": "Amazon 商品结构化数据通用 Skill，隐藏底层第三方服务商信息，作为多数据源商品采集入口"
     },
+    "ops-amazon-stylesnap": {
+      "source": false,
+      "wheel": false,
+      "binary": false,
+      "binary_full": false,
+      "tier": "internal",
+      "reason": "试行中的 Amazon StyleSnap 浏览器自动化 Skill，仅限本地内部使用，不进入任何发行产物"
+    },
     "ops-asin-health-diagnoser": {
       "source": false,
       "wheel": false,
@@ -198,6 +206,14 @@
       "binary_full": true,
       "tier": "experimental",
       "reason": "Google Trends 已切换到服务端 SerpApi Key 池并通过正式 CLI 代理远端 MCP，可作为实验 Skill 安装使用"
+    },
+    "ops-yingyan": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "鹰眼只读 MCP 查询 Skill，随打包版代理发行，仅在用户明确提到鹰眼或 PND 时使用"
     },
     "ops-query-wizard": {
       "source": true,

@@ -15,13 +15,40 @@ description: Use when the user asks to query or export Keepa data through the pu
 
 1. 正式命令面默认只讲 `opscli keepa ...`，不要向用户暴露内部调试命令、本地落盘目录或调试入口。
 2. 先识别场景，再构造 `scenario + site + params`；不确定时先看 `opscli keepa scenarios`。
-3. 默认 `site=US`，默认导出 `xls`；公开 CLI 下 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
+3. 默认 `site=US`，默认导出 `xls`；公开 CLI 支持 `xls/xlsx/json`，其中 `xls/xlsx` 最终都会生成用户可读的 `.xlsx`。
 4. `params` 必须是 JSON 对象字符串；不要把数组、裸字符串或半结构化文本直接塞给 `--params`。
 5. `product` 至少提供 `asin/asins` 或 `code/codes` 之一，不能同时传两类标识。
 6. `product-search`、`category-search` 缺少关键词时先补关键词；`seller` 缺少 seller id、`category-lookup` 缺少 category id、`bestsellers` 缺少 `category` 或 `productGroup` 时先澄清。
 7. 不向用户暴露 Keepa token 余额、账号来源、`params.json`、`raw.json`、本地导出路径等内部信息；MCP 每日调用额度按本 Skill 的回复规则展示。
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
 9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
+
+## 导出格式选择
+
+| 任务目的 | 推荐格式 | 执行规则 |
+| --- | --- | --- |
+| 单个任务，用户要打开、下载或留档 | `xls` | 显式传 `--export-format xls`；最终文件为 `.xlsx` |
+| 多个任务，Skill/Agent 要汇总、计算或生成报告 | `json` | 每个任务显式传 `--export-format json`，完成后再合并分析 |
+| 用户明确指定格式 | 用户指定格式 | 不用默认推荐覆盖用户选择 |
+
+JSON 与 XLSX 使用不同的详情合同。读取 JSON 时：
+
+1. 校验 `schema_version="2.0"`，并读取顶层 `scenario`、`site` 和 `response`。
+2. `response` 保留 Keepa 原始业务字段、数组和嵌套对象；直接按对象字段遍历，不按 `columns + rows` 重建。
+3. 公开 JSON 会移除 `tokensLeft`、`tokensConsumed`、`refillIn`、`refillRate`、`tokenFlowReduction` 等账号额度字段。
+4. 多任务分析时保留 `job_id + scenario + site` 来源，再按各场景的响应主字段合并。
+5. MCP `data_preview` 只用于快速确认结果，最多含少量白名单字段；完整详情必须读取 `export.url` 对应的 JSON/XLSX 文件。
+6. 不要把内部 `raw.json`、`result.json` 或服务端路径作为用户导出文件返回；需要核对请求、状态和完整内部响应包装时仍以 `raw.json` 为准。
+
+示例：
+
+```powershell
+# 单任务给用户查看
+opscli keepa run product --site US --params '{"asin":"B0088PUEPK"}' --export-format xls
+
+# 多任务或后续分析报告
+opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --export-format json
+```
 
 ## 链路区分
 
@@ -67,7 +94,7 @@ opscli keepa run <scenario> --site US --params '{"asin":"B0088PUEPK"}'
 - `--site`：站点，默认 `US`
 - `--params`：JSON 对象字符串
 - `--job-id`：自定义任务 ID
-- `--export-format`：`xls` / `xlsx`
+- `--export-format`：`xls` / `xlsx` / `json`
 - `--reserve-tokens`：预留 token 阈值
 - `--force`：忽略 token 预检查提醒继续执行
 - `--wait`：token 不足时等待一次 refill 后再执行
@@ -96,16 +123,17 @@ opscli keepa export <job_id>
 
 | 用户意图 | scenario | 必填参数 | 常用可选参数 |
 | --- | --- | --- | --- |
-| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update` |
-| 关键词搜商品 | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` |
+| 查商品详情、查 ASIN、查价格历史 | `product` | `asin/asins` 或 `code/codes` | `stats`, `history`, `offers`（20-100）, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` |
+| 关键词搜商品 | `product-search` | `keyword` 或 `term` | `stats`, `history`, `update`, `rating`, `asins_only` |
 | 按条件筛商品 | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats` |
-| 查类目关键词 | `category-search` | `keyword` 或 `term` | `parents` |
+| 查类目关键词 | `category-search` | `keyword` 或 `term` | 无 |
 | 查类目详情 | `category-lookup` | `category/categories` | `parents` |
-| 查卖家/店铺 | `seller` | `seller/sellers` | `storefront`, `update` |
+| 查卖家/店铺 | `seller` | `seller/sellers` | `storefront` |
+| 按条件筛卖家 | `seller-finder` | `selection` 或至少 1 个筛选字段 | `selection.perPage`, `selection.sort` |
 | 查头部卖家 | `top-seller` | 无 | 无 |
-| 查热销榜 | `bestsellers` | `category` 或 `productGroup` | 无 |
-| 查折扣商品 | `deals` | 无固定必填，建议给 `selection` | `selection` |
-| 查秒杀 | `lightning-deals` | 无 | `asin` |
+| 查热销榜 | `bestsellers` | `category` 或 `productGroup` | `range`, `month`+`year`, `variations`, `sublist` |
+| 查近期价格/排名变化商品 | `deals` | `selection.priceTypes`，且只能有 1 个索引 | `selection` 的筛选、排序和分页字段 |
+| 查秒杀 | `lightning-deals` | 无 | `asin`, `state` |
 
 ## 常用示例
 
@@ -118,7 +146,7 @@ opscli keepa run product --site US --params '{"asin":"B0088PUEPK","stats":30,"hi
 关键词搜索：
 
 ```powershell
-opscli keepa run product-search --site US --params '{"keyword":"flashlight","page":0}'
+opscli keepa run product-search --site US --params '{"keyword":"flashlight","rating":true}'
 ```
 
 只导出 ASIN 列表：
@@ -139,6 +167,12 @@ opscli keepa run seller --site US --params '{"seller":"A2L77EE7U53NWQ","storefro
 opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 ```
 
+查询 Buy Box 价格变化商品：
+
+```powershell
+opscli keepa run deals --site US --params '{"selection":{"priceTypes":[18],"page":0}}'
+```
+
 ## 回复规则
 
 - 成功时只保留：场景、站点、查询对象、`job_id`、`row_count`、导出文件
@@ -147,5 +181,5 @@ opscli keepa run bestsellers --site US --params '{"category":"172282"}'
 - `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
-- 用户问“字段准不准”时，只说明 XLSX 是在 Keepa 原始响应基础上做中文表头和可读化处理；口径以 Keepa 原始响应和官方文档为准
+- 用户问“字段准不准”时，说明 JSON 保留 Keepa 原始业务结构，XLSX 在相同响应基础上生成中文字段、可读派生值和多 Tab 明细；口径以 Keepa 原始响应和官方文档为准
 - 不要主动打印 Keepa token 消耗、token 余额、服务器本地路径或内部原始 JSON

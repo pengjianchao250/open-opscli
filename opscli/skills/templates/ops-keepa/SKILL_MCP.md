@@ -1,6 +1,6 @@
 ---
 name: ops-keepa-internal
-mcp-version: v1.0.0
+mcp-version: v1.1.0
 description: Keepa MCP 中文自然语言使用规范，用于通过 keepa_* 工具查询商品、关键词、类目、卖家、折扣、热销等数据并导出表格。
 visibility: internal
 ---
@@ -20,17 +20,35 @@ visibility: internal
 3. 必填参数齐全时直接执行 `keepa_run`；不要把内部参数确认流程暴露给用户。
 4. 如果返回 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类提示，先执行 `auth_mcp_login`，再重试 `keepa_run`；不要先误判为场景参数错误。
 5. 只缺必填项时最多追问 1 个短问题；一次追问尽量覆盖同一场景的所有必填项。
-6. 默认导出用户可读 XLSX；MCP 当前不支持 JSON 用户导出，后端比对使用任务内部 `raw.json`。
+6. 默认导出用户可读 XLSX；多任务编排、汇总计算或生成分析报告时推荐显式使用 JSON。
 7. 最终回复给出业务结果和 `keepa_run` 顶层返回的 MCP 每日调用额度：查询对象、站点、返回行数、导出文件或链接、今日已用和剩余次数。
 8. 不主动展示 API Key、账号来源、Keepa token 消耗或 token 余额、内部参数、`params.json`、`raw.json`。
 9. 用户不需要额外说“格式化”；默认 XLSX 导出会自动写入本地可读派生字段和明细 sheet。
+
+## 导出格式选择
+
+| 任务目的 | `export_format` | 处理方式 |
+| --- | --- | --- |
+| 单任务人工查看/留档 | `xls` | 实际交付 `.xlsx` |
+| 多任务编排/汇总/分析报告 | `json` | 每个任务都显式传 JSON，终态后统一读取 |
+| 用户明确指定格式 | 用户指定值 | 不覆盖用户选择 |
+
+### JSON v2 原始业务响应契约
+
+- 校验 `schema_version="2.0"`，读取顶层 `scenario`、`site` 和 `response`。
+- `response` 保留 Keepa 原始业务字段、数组和嵌套对象；直接遍历对象，不按 XLSX 的 `columns + rows` 模型重建。
+- 公开 JSON 会移除 `tokensLeft`、`tokensConsumed`、`refillIn`、`refillRate`、`tokenFlowReduction` 等账号额度字段。
+- 多任务合并时保留 `job_id/scenario/site` 来源，再按场景响应主字段对齐。
+- `keepa_run` 和 `keepa_job_status` 的 `data_preview` 最多只含少量白名单字段；完整数据必须读取 `export.url` 对应的 JSON/XLSX 文件。
+- JSON 是可交付的原始业务响应，不包含请求参数、前后 token 状态等内部包装；后端完整核对仍使用内部 `raw.json`。
+- 不得把内部 `raw.json`、`result.json` 或服务端路径当作用户导出文件返回。
 
 ## 工具列表
 
 - `keepa_spec_must_read`: read this guide before first use. 官方接口细节见 `opscli/skills/templates/ops-keepa/references/OFFICIAL.md`。
 - `keepa_scenarios`: list supported Keepa scenarios.
 - `keepa_quota_status`: read the current user's MCP daily call quota without consuming a call.
-- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`; `xls` and `xlsx` both generate `.xlsx`。
+- `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`。
 - `keepa_job_status`: read a saved task result by `job_id`。
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type。
 
@@ -65,7 +83,7 @@ Every run writes files under the task directory:
 - `raw.json`: endpoint, normalized request params, before/after token status, raw Keepa response.
 - `result.json`: normalized task result and export metadata.
 - `<job_id>.xlsx`: default user-facing export with Chinese headers.
-- 用户导出文件仅支持 `<job_id>.xlsx`。
+- `<job_id>.json`: Keepa original business response for agent workflows and reports; nested arrays and objects remain JSON values.
 
 - `export.url` 存在时只回复云端链接；否则回复 `export.path`。
 - 上传失败但本地导出存在时，不判定任务失败，回复本地文件路径。
@@ -84,7 +102,7 @@ XLSX 中文表头不是 Keepa 官方提供的，是本地导出层按场景映�
 - Best Sellers 默认主表输出带 `bestSellerRank` 的 ASIN 明细，并追加 `best_sellers_list` 汇总 sheet。
 - Deals 默认派生图片、Keepa 时间、Warehouse 成色、Lightning 标记、常用 current 指标，并追加 `deal_metrics` 指标展开 sheet。
 
-`raw.json` 保留 Keepa 原始字段，后端对比以 `raw.json` 为准；XLSX 用于用户查看。
+`raw.json` 保留请求、状态和 Keepa 原始响应的完整内部包装；XLSX 用于多 Tab 人工查看，JSON v2 保留原始业务响应结构并用于编排和分析。
 
 ## 字段口径与时间处理
 
@@ -94,7 +112,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 - Unix milliseconds: `(keepa_time + 21564000) * 60000`
 
 - 不在 MCP 使用规范中推断 Keepa 原始价格、评分、排名、评论、Offer 等字段的单位、倍率或空值语义；除非 Keepa 官方文档、接口说明或当前响应字段已明确说明。
-- `raw_response` 不修改；normalized `rows` 和 XLSX 默认自动补充可读派生字段，如 `lastUpdateUtc`、金额字段、评分星级等。
+- JSON v2 的 `response` 除账号额度字段外不修改业务结构；normalized `rows` 和 XLSX 默认自动补充可读派生字段，如 `lastUpdateUtc`、金额字段、评分星级等。
 - `csv` 原始数组保留；Product Object XLSX 会默认把常用 `csv` 历史拆到 `csv_history` 明细 sheet。面向普通用户不要解释原始数组，优先让用户查看 XLSX 可读字段。
 - `raw.json` 是后端对比和排障基准；XLSX 是本地导出层生成的用户查看文件。
 - 用户追问字段单位、倍率、计算方式或准确性时，不要自行类比卖家精灵或其他数据源；应说明以 Keepa 原始响应、官方文档和后端确认口径为准。
@@ -113,16 +131,17 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 | 用户说法 | scenario | 必填参数 | 常用可选参数 | 说明 |
 | --- | --- | --- | --- | --- |
-| 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update` | ASIN 或 UPC/EAN/ISBN-13 查询。最多 100 个；带 `offers` 时最多 20 个。 |
-| 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `page`, `stats`, `history`, `update`, `asins_only` | 调用 Keepa `/search` 且 `type=product`；默认返回 `products`，传 `asins_only=true` 时返回 `asinList`。 |
+| 查商品详情、查 ASIN、查价格历史 | `product` | `asin`/`asins` 或 `code`/`codes` | `stats`, `history`, `offers`, `buybox`, `rating`, `days`, `update`, `code_limit`, `historical_variations` | ASIN 或 UPC/EAN/ISBN-13 查询，最多 100 个；`offers` 表示每个商品的 Offer 数，官方有效范围为 20-100。活动徽标、Coupon 和新鲜 Offer 数据依赖 `offers` 更新。 |
+| 关键词搜商品、搜索 flashlight | `product-search` | `keyword` 或 `term` | `stats`, `history`, `update`, `rating`, `asins_only` | 调用 Keepa `/search` 且 `type=product`；默认返回 `products`，传 `asins_only=true` 时返回 `asinList`；当前接口不支持 `page`。 |
 | 按条件筛商品、Product Finder | `product-finder` | `selection` 或至少 1 个筛选字段 | `stats`, `selection.page`, `selection.perPage`, `selection.sort`, 各类筛选字段 | 调用 Keepa `/query`；按 Product Finder selection 筛选商品库，返回 `asinList`；带 `stats=1` 时会自动导出 `searchInsights` 明细 sheet。 |
-| 搜类目、查类目关键词 | `category-search` | `keyword` 或 `term` | `parents` | 按类目名称关键词搜索。 |
+| 搜类目、查类目关键词 | `category-search` | `keyword` 或 `term` | 无 | 按类目名称关键词搜索。 |
 | 查类目详情、类目 ID | `category-lookup` | `category`/`categories` | `parents` | 按 category id 查询，最多 10 个。 |
-| 查卖家、查店铺 | `seller` | `seller`/`sellers` | `storefront`, `update` | 按 seller id 查询；单 seller 默认拉 storefront ASIN，批量 seller 必须传 `storefront=false`。 |
+| 查卖家、查店铺 | `seller` | `seller`/`sellers` | `storefront` | 按 seller id 查询；默认不拉 storefront；`storefront=true` 只允许单 seller。 |
+| 按条件筛卖家、Seller Finder | `seller-finder` | `selection` 或至少 1 个筛选字段 | `selection.perPage`, `selection.sort`、各筛选字段 | 调用 `/sellerquery`，返回 `sellerIdList`。 |
 | 查 Top Sellers、头部卖家 | `top-seller` | 无 | 无 | 查询指定站点评分最多的 marketplace sellers。 |
-| 查热销、Best Sellers | `bestsellers` | `category` 或 `productGroup` | 无 | 调用 Keepa `/bestsellers`；按 category node/productGroup 获取 `bestSellersList.asinList` 热销 ASIN。 |
-| 查折扣、Deals | `deals` | 无固定必填；建议传 `selection` | `selection` | 查询最近变动和折扣商品，单次最多约 150 条。 |
-| 查秒杀、Lightning Deals | `lightning-deals` | 无 | `asin` | 当前和即将开始的秒杀，可按 ASIN 过滤。 |
+| 查热销、Best Sellers | `bestsellers` | `category` 或 `productGroup` | `range`, `month`+`year`, `variations`, `sublist` | `month/year` 必须成对且限过去 36 个完整自然月；不能与 `range`/`sublist` 混用。 |
+| 查近期价格/排名变化、Browsing Deals | `deals` | `selection.priceTypes`，且只能有 1 个索引 | `selection` 的筛选、排序和分页字段 | 查询最近约 12 小时发生变化的商品，单次最多约 150 条；不是全部正在进行的 Amazon 活动。 |
+| 查秒杀、Lightning Deals | `lightning-deals` | 无 | `asin`, `state` | 当前和即将开始的秒杀；不传 ASIN 的完整列表成本很高。 |
 
 参数不足时的追问口径：
 
@@ -151,17 +170,18 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 | `导出 flashlight 搜索结果，只要 ASIN` | `scenario="product-search"`, `params={"keyword":"flashlight","asins_only":true}` |
 | `查某店铺的 ASIN 列表` | `scenario="seller"`, `params={"seller":"...","storefront":true}` |
 | `查美国当前秒杀` | `scenario="lightning-deals"`, `site="US"`, `params={}` |
-| `查折扣商品，按 selection 筛选` | `scenario="deals"`, `params={"selection":{...}}` |
-| `要原始 JSON 给后端对比` | 保持原场景和参数，导出 XLSX；后端比对使用任务内部 `raw.json` |
+| `查 Buy Box 价格变化商品` | `scenario="deals"`, `params={"selection":{"priceTypes":[18],"page":0}}` |
+| `查 ASIN 的 Limited Time Deal 和活动关联价` | `scenario="product"`, `params={"asin":"...","offers":20,"stats":30}` |
+| `要原始 JSON 数据` | 保持原场景和参数，传 `export_format="json"`；需要请求和状态包装时再使用内部 `raw.json` |
 
 - 用户未指定站点：`site="US"`。
 - 用户只说“导出”：使用默认 `export_format="xls"`，实际生成自动格式化的 `.xlsx`；也可显式传 `export_format="xlsx"`。
 - 用户只说“查商品详情”：建议 `stats=30`；`product` 场景默认会带 `history=true`。
 - 用户说“不需要历史/不要价格历史”：额外传 `history=false`。
 - 用户说“只要 ASIN”：使用 `asins_only=true`。
-- 用户要求后端比对、原始数据、JSON：仍使用默认 XLSX 导出；说明 MCP 暂不支持 JSON 用户导出，后端比对以任务内部 `raw.json` 为准。
-- 用户未指定页码：`product-search` 可以不传 `page`，需要显式第一页时传 `page=0`。
-- `seller` 默认使用 `storefront=true`；用户明确不要店铺商品/店铺 ASIN，或一次传多个 seller ID 时，传 `storefront=false`。
+- 用户要求结构化 JSON、批量编排或分析报告：使用 `export_format="json"`，直接读取导出文件的 `response`；若要求核对请求参数、前后状态或内部包装，仍以任务内部 `raw.json` 为准。
+- `product-search` 当前单次最多返回 20 条，不支持 `page`。
+- `seller` 默认使用 `storefront=false`；仅在用户明确需要单个店铺的 ASIN 列表时传 `storefront=true`，批量 seller 禁止开启。
 
 ## 用户回答规范
 
@@ -179,8 +199,8 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 当用户问“导出的数据准确吗/字段怎么来的”：
 
 ```text
-表格字段来自 Keepa 原始响应，本地导出层只做中文表头和部分可读化处理；字段单位、倍率和准确性以 Keepa 原始响应、官方文档和后端确认口径为准。原始响应保存在 raw.json，可用于后端对比。
-默认 XLSX 会自动追加可读派生字段和明细 sheet；如需后端比对，请使用任务内部 raw.json。
+导出数据来自 Keepa 原始响应；JSON v2 保留原始业务字段和嵌套结构，XLSX 会生成中文表头、可读派生字段和明细 sheet。字段单位、倍率和准确性以 Keepa 官方文档和后端确认口径为准。
+如需核对请求参数、前后状态和完整内部响应包装，请使用任务内部 raw.json。
 ```
 
 成功模板：

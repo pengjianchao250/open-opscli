@@ -57,3 +57,19 @@ def test_search_insights_formatter_derives_amounts_percent_rating_and_detail_row
         {"index": 1, "categoryId": "172282", "queryName": "portable charger"},
         {"index": 2, "categoryId": "541966", "queryName": "portable charger"},
     ]
+
+
+def test_search_insights_formatter_sorts_rankings_and_handles_missing_minus_two():
+    formatted = format_search_insights_export(
+        {
+            "avgBuyBox": -2,
+            "topBrandsWithCounts": {"Small": 2, "Large": 10},
+            "topSellersWithCounts": {"SELLER2": 1, "SELLER1": 3},
+        },
+        site="US",
+    )
+
+    assert formatted is not None
+    assert formatted.main_rows[0]["avgBuyBoxAmount"] is None
+    assert [row["brand"] for row in formatted.brand_rows] == ["Large", "Small"]
+    assert [row["sellerId"] for row in formatted.seller_rows] == ["SELLER1", "SELLER2"]

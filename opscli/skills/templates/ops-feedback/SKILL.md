@@ -1,7 +1,6 @@
 ---
 name: ops-feedback
 description: Use when submitting or querying Aukeys opscli feedback, or when an opscli CLI/MCP call fails unexpectedly and needs a structured execution summary.
-version: 1.0.1
 ---
 
 # ops-feedback
@@ -144,7 +143,7 @@ version: 1.0.1
 | `severity` | 必填或使用默认 `medium`；只能是 `low` / `medium` / `high` / `critical` |
 | `source` | 必填或使用通道默认值；CLI 用 `cli`，MCP Tool 用 `mcp`，Skill 主动沉淀用 `skill` |
 | `payload` | 可选；必须是 JSON 对象，保存原始业务输入、期望与实际结果 |
-| `context` | 可选；必须是 JSON 对象，只放补充上下文，例如 `cwd`、`agent`、`workflow`、`request_id` |
+| `context` | 可选；必须是 JSON 对象，只放补充上下文，例如 `cwd`、`agent`、`workflow`、`request_id`；标准观测字段可放入 `context.observation` |
 | `execution_summary` | 必填；必须是 JSON 对象，包含 `summary`、`failed_calls`、`successful_calls`、`final_resolution` |
 | `attachments` | 可选；必须是 JSON 数组，只保存文件路径、URL、日志摘要等引用 |
 | `skill_name` | Skill 触发或 Skill 执行失败时必填顶层参数，例如 `ops-dataset-query` |
@@ -153,6 +152,13 @@ version: 1.0.1
 | `mcp_tool_name` | MCP Tool 失败时必填顶层参数，例如 `query_simple` |
 
 `app_version` 和 `client_version` 不要手工传入，不要写入示例文件；它们由当前运行的 `aukeys-opscli` 自动写入，必须以工具实际版本为准。
+
+提交端会在 `context.observation` 自动生成 Observation Schema V2，包含 `event_id`、UTC
+`occurred_at`、`source`、`system_alias`、`operation`、`outcome`、`retry_count`、客户端及
+Python 运行时。调用方可在 `context.observation` 或 context 顶层补充 `correlation_id`、
+`request_id`、`error_code`、`duration_ms`、`retry_count`、`environment`、`fingerprint` 和
+`fingerprint_version`；耗时与重试次数必须为非负数。不要把 Token、Cookie、授权头或原始
+业务载荷放进这些索引字段。
 
 如果同时写顶层参数和 `context`，顶层参数是接口规范字段；`context` 只能作为补充信息，不能替代 `skill_name`、`skill_version`、`command_name`、`mcp_tool_name`。
 

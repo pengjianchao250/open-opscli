@@ -2,8 +2,7 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-from opscli.keepa.domain.models import KeepaExportResult
-from opscli.keepa.domain.models import KeepaScenarioResult
+from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioResult
 from opscli.mcp.tools import keepa as keepa_tools
 
 
@@ -43,6 +42,21 @@ class DummyManager:
                 "tokens_left": 1,
                 "estimated_tokens": 10,
                 "reserve_tokens": 200,
+            }
+        ]
+        result.data = [
+            {
+                "asin": "B0088PUEPK",
+                "title": "Test Product",
+                "brand": "Test Brand",
+                "dealMetadataStatus": "available",
+                "dealTypesJoined": "LIMITED_TIME_DEAL",
+                "statsBuyBoxLandedPrice": 125.99,
+                "statsBuyBoxSavingBasis": 139.99,
+                "statsBuyBoxSavingPercentage": 10,
+                "stats": {"current": [1299] * 100},
+                "offers": [{"offerId": f"offer-{index}"} for index in range(100)],
+                "unknownField": "do not return",
             }
         ]
         return result
@@ -122,6 +136,15 @@ def test_keepa_skill_templates_require_daily_quota_prompt():
         assert "job_status` 和 `export` 默认不重复提示额度" in content
 
 
+def test_keepa_skill_templates_document_deal_request_boundaries():
+    skill_dir = keepa_tools._keepa_skill_dir()
+
+    for filename in ("SKILL.md", "SKILL_MCP.md"):
+        content = (skill_dir / filename).read_text(encoding="utf-8")
+        assert "selection.priceTypes" in content
+        assert "20-100" in content
+
+
 def test_keepa_run_accepts_params_json_string(monkeypatch):
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
@@ -142,9 +165,29 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert "quota" not in result["data"]
     assert "params_path" not in result["data"]
     assert "raw_path" not in result["data"]
+    assert "root_dir" not in result["data"]
+    assert "result_path" not in result["data"]
     assert result["data"]["export"]["url"] == "https://example.com/job-1.xlsx"
     assert "path" not in result["data"]["export"]
     assert "tokens_left" not in str(result["data"])
+    assert "data" not in result["data"]
+    assert result["data"]["data_preview"] == [
+        {
+            "asin": "B0088PUEPK",
+            "title": "Test Product",
+            "brand": "Test Brand",
+            "dealMetadataStatus": "available",
+            "dealTypesJoined": "LIMITED_TIME_DEAL",
+            "statsBuyBoxLandedPrice": 125.99,
+            "statsBuyBoxSavingBasis": 139.99,
+            "statsBuyBoxSavingPercentage": 10,
+        }
+    ]
+    assert result["data"]["data_omitted"] == 0
+    assert any(
+        warning["stage"] == "mcp_response_compact"
+        for warning in result["data"]["warnings"]
+    )
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
 
@@ -240,7 +283,7 @@ def test_keepa_run_skips_auto_login_when_env_api_key_present(monkeypatch):
     assert DummyManager.init_kwargs == {"jwt": None, "session_id": None}
 
 
-def test_keepa_run_rejects_json_export_format(monkeypatch):
+def test_keepa_run_accepts_json_export_format(monkeypatch):
     DummyManager.last_request = None
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
 
@@ -253,9 +296,40 @@ def test_keepa_run_rejects_json_export_format(monkeypatch):
         )
     )
 
-    assert result["success"] is False
-    assert "不支持的导出格式" in result["error"]["message"]
-    assert DummyManager.last_request is None
+    assert result["success"] is True
+    assert DummyManager.last_request.export_format == "json"
+
+
+def test_keepa_run_api_mode_returns_formatted_data_without_export(monkeypatch):
+    """REST mode returns complete formatted rows and disables file upload."""
+    DummyManager.last_request = None
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_load_keepa_settings",
+        lambda: SimpleNamespace(api_key="env-key"),
+    )
+
+    token = keepa_tools._KEEPA_API_MODE.set(True)
+    try:
+        result = _run(
+            keepa_tools.keepa_run(
+                scenario="product",
+                site="US",
+                params='{"asin":"B0088PUEPK"}',
+            )
+        )
+    finally:
+        keepa_tools._KEEPA_API_MODE.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["request_source"] == "api"
+    assert result["data"]["response_mode"] == "formatted_data"
+    assert result["data"]["data"][0]["asin"] == "B0088PUEPK"
+    assert "data_preview" not in result["data"]
+    assert "export" not in result["data"]
+    assert DummyManager.last_request.upload_export is False
 
 
 def test_keepa_job_status_hides_quota(monkeypatch):
