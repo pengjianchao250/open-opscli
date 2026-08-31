@@ -8269,3 +8269,16 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除新增脚本及对应输出目录，并移除本条变更记录。
 
 ---
+## 2026-08-31 AppHub - 新增 D9 Git 直连发布命令
+
+**变更原因**：用户在 Codex 中完成站点开发后，需要通过 opscli 将项目按 AppHub 当前 D9 架构推送到应用仓库，并显式创建 release、持续读取部署状态；原仓库没有 `opscli app` 命令和本地 Git/gitleaks/SSE 编排。
+
+**改动点**：新增 `opscli app publish [PATH] -m/--message`、`--resume`、`--json`，以及 `opscli app git status/bind/revoke`；严格同构校验 `app.yaml` 并在任何 Git 副作用前阻断 Codex Node/static 项目；实现 Git 2.30 前置检查、受控 credential helper、Windows ACL/POSIX 0600、gitleaks 工作区与领先提交双扫描、NOOP、普通 commit/非强制 push、AppHub 无 Cookie session 客户端、SSE 去重与 release id 双通道校验、原子发布句柄和断线续订。新增 PyYAML 直接依赖、使用指南和 `tests/app/` 专项回归。
+
+**验证结果**：`.venv\\Scripts\\python.exe -m pytest tests/app -q -p no:cacheprovider` 通过 22 项；`python -m compileall -q opscli/app` 通过。当前工作区 `.git` 元数据不可用，无法执行可靠的 `git diff --check`；改用编译、专项测试和文本检查完成验证。真实 AppHub/Gitea/Coolify、真实 gitleaks 二进制分发哈希和 Windows 全链路仍需在联调环境验收。
+
+**影响范围**：新增独立 `app` 命令组并在顶层注册，不改变现有 auth/query/skills 等模块；当前仅支持 AppHub MVP 的 streamlit/fastapi/gradio，Node/static Codex 站点会明确失败，不会产生 commit/push。
+
+**回滚方式**：移除 `opscli/app/`、`tests/app/`、顶层 `app` 注册、PyYAML 依赖、使用指南和本条变更记录；已签发凭据应先执行 `opscli app git revoke`，已产生的普通 Git commit/push 不自动回退。
+
+---
