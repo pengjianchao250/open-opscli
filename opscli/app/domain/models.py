@@ -17,6 +17,13 @@ class AppManifest:
     python: str
     entrypoint: str
     raw: dict[str, Any] = field(repr=False)
+    title: str = ""
+    description: str = ""
+    contact: str | None = None
+    sqlite_enabled: bool = False
+    auth_mode: str = "viewer"
+    datasets: tuple[str, ...] = ()
+    visibility: str = "members"
 
 
 @dataclass(frozen=True)
@@ -88,3 +95,40 @@ class PublishResult:
         """转换为稳定输出结构。"""
         return asdict(self)
 
+
+@dataclass(frozen=True)
+class Violation:
+    """本地规范校验结果。"""
+
+    code: str
+    level: str
+    message: str
+    fix_hint: str
+    file: str | None = None
+    line: int | None = None
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class ValidationReport:
+    """独立 validate 与 publish 共用的稳定报告。"""
+
+    slug: str
+    violations: tuple[Violation, ...]
+
+    @property
+    def blocked(self) -> bool:
+        return any(item.level == "block" for item in self.violations)
+
+    def to_dict(self) -> dict:
+        return {
+            "slug": self.slug,
+            "blocked": self.blocked,
+            "violations": [item.to_dict() for item in self.violations],
+            "summary": {
+                "block": sum(item.level == "block" for item in self.violations),
+                "warning": sum(item.level == "warning" for item in self.violations),
+            },
+        }

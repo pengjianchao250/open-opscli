@@ -26,7 +26,7 @@ class AppHubClient:
         timeout: float = 60.0,
     ) -> None:
         self.base_url = (base_url or os.getenv(APPHUB_URL_ENV) or APPHUB_URL_DEFAULT).rstrip("/")
-        self.auth_client = auth_client or AuthClient()
+        self.auth_client = auth_client
         self._owns_client = http_client is None
         self.http = http_client or httpx.Client(timeout=timeout, follow_redirects=False)
 
@@ -51,6 +51,17 @@ class AppHubClient:
             issued_at=data.get("issued_at"),
         )
 
+    def create_app(self, manifest: dict[str, Any]) -> dict[str, Any]:
+        return self._json(self._request(
+            "POST", f"{self.base_url}/api/apps",
+            headers=self._headers("application/json"), json=manifest,
+        ))
+
+    def get_app(self, slug: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}", headers=self._headers("application/json"),
+        ))
+
     def issue_git_credential(self, *, rotate: bool) -> tuple[str, str, str]:
         """签发一次性 Git 凭据，不保留完整响应对象。"""
         response = self._request(
@@ -72,15 +83,138 @@ class AppHubClient:
         data = self._json(response)
         return int(data.get("revoked_count", 0))
 
-    def list_releases(self, slug: str) -> dict[str, Any]:
+    def list_releases(
+        self,
+        slug: str,
+        *,
+        page: int = 1,
+        size: int = 20,
+        is_rollback: bool | None = False,
+    ) -> dict[str, Any]:
         """获取版本列表和服务端选择的 NOOP baseline。"""
         response = self._request(
             "GET",
             f"{self.base_url}/api/apps/{slug}/releases",
             headers=self._headers("application/json"),
-            params={"is_rollback": "false"},
+            params={
+                "page": page,
+                "size": size,
+                **({"is_rollback": str(is_rollback).lower()} if is_rollback is not None else {}),
+            },
         )
         return self._json(response)
+
+    def rollback_preflight(self, slug: str, version: int) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/rollback/preflight",
+            headers=self._headers("application/json"), params={"version": version},
+        ))
+
+    def start_rollback(self, slug: str, version: int) -> dict[str, Any]:
+        return self._json(self._request(
+            "POST", f"{self.base_url}/api/apps/{slug}/rollback",
+            headers=self._headers("application/json"), json={"version": version},
+        ))
+
+    def get_logs(
+        self,
+        slug: str,
+        *,
+        log_type: str = "runtime",
+        tail: int = 200,
+        release: str | None = None,
+    ) -> dict[str, Any]:
+        params = {"type": log_type, "tail": tail, "follow": 0}
+        if release:
+            params["release"] = release
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/logs",
+            headers=self._headers("application/json"), params=params,
+        ))
+
+    @contextmanager
+    def logs_stream(
+        self,
+        slug: str,
+        *,
+        log_type: str = "runtime",
+        tail: int = 200,
+        release: str | None = None,
+    ) -> Iterator[httpx.Response]:
+        params: dict[str, Any] = {"type": log_type, "tail": tail, "follow": 1}
+        if release:
+            params["release"] = release
+        with self.http.stream(
+            "GET", f"{self.base_url}/api/apps/{slug}/logs",
+            headers=self._headers("text/event-stream"), params=params, timeout=None,
+        ) as response:
+            self._raise_for_status(response)
+            yield response
+
+    def get_env(self, slug: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/env", headers=self._headers("application/json"),
+        ))
+
+    def put_env(self, slug: str, env: dict[str, str]) -> dict[str, Any]:
+        return self._json(self._request(
+            "PUT", f"{self.base_url}/api/apps/{slug}/env",
+            headers=self._headers("application/json"), json={"env": env},
+        ))
+
+    def list_secrets(self, slug: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/secrets", headers=self._headers("application/json"),
+        ))
+
+    def put_secrets(self, slug: str, secrets: dict[str, str]) -> dict[str, Any]:
+        return self._json(self._request(
+            "PUT", f"{self.base_url}/api/apps/{slug}/secrets",
+            headers=self._headers("application/json"), json={"secrets": secrets},
+        ))
+
+    def delete_secret(self, slug: str, key: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "DELETE", f"{self.base_url}/api/apps/{slug}/secrets/{key}",
+            headers=self._headers("application/json"),
+        ))
+
+    def list_members(self, slug: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/members", headers=self._headers("application/json"),
+        ))
+
+    def add_member(self, slug: str, email: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "POST", f"{self.base_url}/api/apps/{slug}/members",
+            headers=self._headers("application/json"), json={"email": email, "role": "member"},
+        ))
+
+    def remove_member(self, slug: str, email: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "DELETE", f"{self.base_url}/api/apps/{slug}/members/{email}",
+            headers=self._headers("application/json"),
+        ))
+
+    def get_db(self, slug: str) -> dict[str, Any]:
+        return self._json(self._request(
+            "GET", f"{self.base_url}/api/apps/{slug}/db", headers=self._headers("application/json"),
+        ))
+
+    def restore_db(
+        self,
+        slug: str,
+        *,
+        backup_date: str,
+        confirm: str,
+        filename: str | None = None,
+    ) -> dict[str, Any]:
+        return self._json(self._request(
+            "POST", f"{self.base_url}/api/apps/{slug}/db/restore",
+            headers=self._headers("application/json"),
+            params={"file": filename} if filename else None,
+            json={"backup_date": backup_date, "confirm": confirm},
+        ))
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         try:
@@ -119,6 +253,8 @@ class AppHubClient:
             yield response
 
     def _headers(self, accept: str) -> dict[str, str]:
+        if self.auth_client is None:
+            self.auth_client = AuthClient()
         headers = self.auth_client.build_session_headers()
         headers["Accept"] = accept
         return headers

@@ -28,6 +28,7 @@ _KEEP_SOURCE_MODULE_NAMES = {
     "app_factory",
     "cli",
     "instrumentation",
+    "migrate",
     "server",
     "report_skill_usage",
 }
@@ -170,6 +171,7 @@ setup(
             "skills/templates/**/**/*",
             "mcp/references/**/*.md",
             "collector_monitor/wecom-webhook",
+            "app/contracts/*.json",
         ],
     },
     exclude_package_data={

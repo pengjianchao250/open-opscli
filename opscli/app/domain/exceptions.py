@@ -48,6 +48,10 @@ class AppRuntimeUnsupportedError(AppProjectError):
     """AppHub 当前不支持项目运行时。"""
 
 
+class AppValidationError(AppProjectError):
+    """本地规范校验存在阻断问题。"""
+
+
 class AppGitError(AppError):
     """Git 前置条件或命令失败。"""
 
@@ -78,4 +82,3 @@ class AppHubProtocolError(AppError):
 
 class PublishInterruptedError(AppError):
     """发布流中断，可使用句柄续订。"""
-
