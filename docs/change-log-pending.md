@@ -8294,3 +8294,22 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：恢复精简前的 `opscli/app/`、`tests/app/`、打包配置和 AppHub 文档；源码普通 Git commit/push 不自动回退。
 
 ---
+
+## 2026-09-01 query/api - 取数模块全量 CLI 指令支持 REST API，api 模块重构为 FastAPI 规范结构
+
+**变更原因**：产品化场景需要通过 HTTP API 调用取数能力，此前 REST 外壳只开放了 query/flow 一个端点；同时 api/app.py 单文件已承载合同、路由、业务转换混排，需要按 FastAPI 规范拆分目录。
+
+**改动点**：
+- `opscli/api/` 重构为规范结构：`app.py`（应用工厂，create_api_app/wrap_mcp_app 入口签名不变）、`routers/`（health/query/keepa 三个 APIRouter）、`schemas/`（query/keepa 请求合同，extra="forbid"）、`deps.py`（require_authenticated_user/build_query_manager 共享依赖）、`errors.py`（统一 success/data/error 信封、ApiAuthError/RequestValidationError 异常处理器、domain 异常→400/404/503/502 状态码映射）
+- 新增 12 个 query 端点对齐全部 CLI 指令：plan/flow/preferences/metadata/catalog/intents/match/run/build/simple + charts/{uuid} 三件套；文件传参（--payload/--query-file）改 JSON 请求体，落盘参数（--result-file/--save-result/--output）与 skills_dir 等服务端本地路径不进 REST 合同
+- `QueryManager` 新增 `run_payload()`（dict 直执行，run() 委托之）；`_inner_result_error`/`_field_level_reasons` 从 commands/cli.py 下沉为 `services/result_errors.py`（CLI 与 REST 共用）；`mcp/tools/helpers._query_manager` 增加可选 timeout 参数
+- keepa 场景表保持公开端点，keepa/run 与全部 query 端点要求已验证账号（401 统一信封）
+- 测试：更新 tests/api/test_app.py 打桩位置；新增 tests/api/test_query_routers.py（39 项：鉴权边界/合同转换/错误映射/内层失败语义）与 tests/query/test_run_payload.py（6 项）
+
+**验证结果**：`uv run pytest tests/api tests/query tests/mcp`（排除 4 个 HEAD 上既有损坏用例：test_flow_parity、test_shopify_tools 收集失败，test_pure_units 缺 intent_rules.json、test_seller_sprite_proxy 遥测断言——已用 git stash 验证与本次改动无关）757 passed；OpenAPI 自检确认 15 路径（12 query + 2 keepa + health）；wrap_mcp_app 组合后 health/MCP 路由鉴权行为不变。E2E 验收：① 真实 uvicorn 进程（API Key 中间件全栈）18/19 通过，唯一未过项为脚本断言错误（未认证请求 401 先于 body 校验 422，属正确的安全顺序，422 合同已由已认证单测覆盖）；② stdio 模式真实后端链路 8/8 通过——preferences/metadata/catalog/intents 真实远端调用、simple 真实执行返回 5 行（totalCount=4542）、后端业务错误（缺时间范围）正确映射为 502 统一信封、CLI 与 API 同源 parity 一致。
+
+**影响范围**：REST API 面（新增端点）；CLI 输出行为不变（simple 的内层错误提取逻辑仅迁移位置）；MCP 工具不受影响（_query_manager 新参数向后兼容）；既有调用 create_api_app/wrap_mcp_app 的 opscli-mcp 启动链无需改动。
+
+**回滚方式**：还原 opscli/api/ 目录至单文件 app.py、opscli/query/commands/cli.py、opscli/query/services/manager.py、opscli/mcp/tools/helpers.py 及两个测试文件，删除 opscli/api/{routers,schemas,deps.py,errors.py}、opscli/query/services/result_errors.py、tests/api/test_query_routers.py、tests/query/test_run_payload.py。
+
+---
