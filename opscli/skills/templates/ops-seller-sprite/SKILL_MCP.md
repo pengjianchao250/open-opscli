@@ -1,7 +1,7 @@
 ---
 name: ops-seller-sprite
 mcp-version: v1.0.0
-description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sprite_* 工具执行场景查询、轮询异步任务、读取导出文件并给出用户可读结果。
+description: SellerSprite/卖家精灵 MCP 使用规范。用于通过 seller_sprite_* 工具执行场景查询、轮询异步任务、读取导出文件并给出用户可读结果。Listing Analysis 仅在用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交。
 ---
 
 # ops-seller-sprite MCP
@@ -86,6 +86,8 @@ seller_sprite_run(...) × N
 ## Listing Analysis 三段式
 
 Listing Analysis 必须使用 submit/status/result 专用流程，不属于普通任务批量跟踪；`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`，调用方必须改用 `seller_sprite_listing_analysis_submit`：
+
+显式触发边界：只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才允许调用 submit；普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发。已有 `job_id` 的 status/result 续查不受该触发限制，但不得重新 submit。
 
 1. 提交：`seller_sprite_listing_analysis_submit(asin, station="GLOBAL", site="US", export_format="json")`，后端在新版页面显式选择“全景分析”并保存真实 `taskId`；全景分析会消耗卖家精灵 10 次额度，不要重复提交同一 ASIN。
 2. 续查：约 3 分钟后调用 `seller_sprite_listing_analysis_status(job_id)`；后端优先通过 `task/original/summary/<taskId>` 聚合主任务和子任务状态，只有本地缺少 `taskId` 时才通过 `usage-log` 按 ASIN 恢复全景报告。

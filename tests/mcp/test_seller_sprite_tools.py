@@ -303,6 +303,8 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert result["success"] is True
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
     assert "seller_sprite_listing_analysis_submit" in result["data"]["spec"]
+    assert "只有用户明确要求使用" in result["data"]["spec"]
+    assert "普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发" in result["data"]["spec"]
     assert "`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`" in result["data"]["spec"]
     assert "`aba-research` ABA 数据选品" in result["data"]["spec"]
     assert "固定提交一次 `POST /v3/api/aba-research`" in result["data"]["spec"]
@@ -461,7 +463,19 @@ def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
         assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
 
     version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
-    assert version["version"] == "v0.0.19"
+    assert version["version"] == "v0.0.20"
+
+
+def test_listing_analysis_tools_require_explicit_user_trigger():
+    """Collector 实际 Tool 描述必须阻止 Listing Analysis 被自动提交。"""
+    submit_description = seller_sprite_tools.seller_sprite_listing_analysis_submit.__doc__ or ""
+    status_description = seller_sprite_tools.seller_sprite_listing_analysis_status.__doc__ or ""
+    result_description = seller_sprite_tools.seller_sprite_listing_analysis_result.__doc__ or ""
+
+    assert "仅当用户明确要求使用" in submit_description
+    assert "禁止自动触发" in submit_description
+    assert "仅续查用户已明确提交" in status_description
+    assert "仅读取用户已明确提交" in result_description
 
 
 def test_seller_sprite_identity_proxy_uses_shared_authenticated_email_resolver(monkeypatch):

@@ -1069,7 +1069,7 @@ async def seller_sprite_listing_analysis_submit(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """提交 Listing Analysis AI 任务并立即返回本地 job_id。"""
+    """仅当用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交，禁止自动触发。"""
     try:
         _validate_output_dir(output_dir)
     except Exception as exc:
@@ -1135,7 +1135,7 @@ async def seller_sprite_listing_analysis_status(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """读取 Listing Analysis 本地提交状态，并在可用时续查远端任务状态。"""
+    """仅续查用户已明确提交的 Listing Analysis job_id，不创建或自动触发新任务。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
         binding = await ensure_ops_credentials(
@@ -1188,7 +1188,7 @@ async def seller_sprite_listing_analysis_result(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """读取 Listing Analysis 远端任务结果；未完成时返回 ready=false。"""
+    """仅读取用户已明确提交的 Listing Analysis job_id 结果，不创建或自动触发新任务。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
         binding = await ensure_ops_credentials(

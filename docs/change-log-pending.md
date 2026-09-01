@@ -6983,3 +6983,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：JSON Lens 结果面板的视图切换组件，不影响查询、视图状态或结果数据。
 **回滚方式**：回退 `sites/json-lens-prototype` 中对应响应式样式、测试及本条记录。
 ---
+
+## 2026-09-01 SellerSprite MCP - 限制 Listing Analysis 自动触发
+
+**变更原因**：Listing Analysis 属于早期试验功能，不应被普通 Listing、ASIN 分析或通用数据采集请求默认触发。
+**改动点**：在通用 MCP 代理和 Collector 实际 Tool 描述中把 Listing Analysis submit 标记为仅显式触发，只有用户明确要求使用卖家精灵 Listing Analysis、AI 全景分析或全景分析时才允许提交；status/result 仅续查已有任务。同步更新 `ops-seller-sprite` Skill、正式 MCP 接入说明和行为契约测试，并将 Skill 版本提升为 `v0.0.20`。
+**验证结果**：SellerSprite MCP Tool 注册、Skill 规范和显式触发契约定向测试 11 项通过；Skill Creator `quick_validate.py`、目标模块 `compileall` 和 `git diff --check` 通过。`uv run` 会触发仓库现有 Cython 构建并因 Google Trends、ASIN Data、Scrape.do 的既有编译错误失败，因此测试使用现有 `.venv` 执行。
+**影响范围**：仅影响 Agent 对 Listing Analysis 的工具选择和触发判断，不修改提交接口、任务队列、额度计费或已有 `job_id` 的续查行为。
+**回滚方式**：回退 Listing Analysis Tool 描述、Skill/接入说明、版本号、对应测试及本条记录。
+---

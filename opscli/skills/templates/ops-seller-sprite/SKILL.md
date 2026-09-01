@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、关键词转化率、实时查竞价、ABA 数据选品、全球商标库、关联流量、流量词对比、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
+description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、关键词转化率、实时查竞价、ABA 数据选品、全球商标库、关联流量、流量词对比、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。Listing Analysis 仅在用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交。
 metadata:
   mcp-version: v1.0.0
 ---
@@ -43,6 +43,7 @@ metadata:
 12. 专属账号的绑定、改绑和解绑只能由部署管理员在服务端本机执行 `opscli seller-sprite account-binding ...`，MCP 不提供管理工具；Agent 不得向用户索取或输出卖家精灵密码。
 13. 专属账号登录失效时任务直接失败，不会回退公共账号池；不要通过重新提交任务尝试绕过账号异常。
 14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research`、`aba-research`、`association-traffic`、`traffic-extend`、`keyword-comparison`、`keyword-conversion-rate`、`real-time-bidding` 或 `aba-reverse` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
+15. 只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才允许调用 submit；普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发。status/result 只续查已有 `job_id`，不受本条触发限制。
 
 ## 链路区分
 
@@ -114,6 +115,8 @@ opscli auth login
 ## Listing Analysis 三段式 CLI
 
 Listing Analysis 结果通常 3 分钟以上才生成，正式 CLI 推荐拆成三步：
+
+只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才提交。用户提供已有 `job_id` 或对已提交任务说“继续/查结果”时，可以直接使用 status/result，不能重新 submit。
 
 ```bash
 opscli seller-sprite listing-analysis-submit --asin B0XXXX --station GLOBAL --site US
