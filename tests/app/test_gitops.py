@@ -1,104 +1,138 @@
-"""D9 Git 编排和 credential helper 安全测试。"""
+"""Git 初始化与普通推送测试。"""
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
 
-from opscli.app.domain.exceptions import GitNonFastForwardError
-from opscli.app.services.gitops import GitCommandResult, GitRunner, GitService, _parse_git_version
+from opscli.app.services.gitops import GitCommandResult, GitService, _parse_git_version
 
 
 class FakeRunner:
-    """按命令返回稳定结果并记录参数。"""
+    def __init__(self, responses: dict[tuple[str, ...], GitCommandResult] | None = None) -> None:
+        self.responses = responses or {}
+        self.calls: list[list[str]] = []
 
-    def __init__(self, responses: dict[tuple[str, ...], tuple[int, str]]) -> None:
-        self.responses = responses
-        self.calls: list[tuple[list[str], Path | None, str | None]] = []
-
-    def run(self, cwd, args, *, credential_file=None, input_text=None, check=True):
-        self.calls.append((args, credential_file, input_text))
-        code, stdout = self.responses.get(tuple(args), (0, ""))
-        return GitCommandResult(code, stdout, "")
+    def run(self, cwd, args, *, check=True):
+        self.calls.append(args)
+        result = self.responses.get(tuple(args), GitCommandResult(0, "", ""))
+        if check and result.returncode != 0:
+            raise AssertionError(f"unexpected checked failure: {args}")
+        return result
 
 
 def test_parse_git_version() -> None:
     assert _parse_git_version("git version 2.45.2.windows.1") == (2, 45, 2)
 
 
-def test_clean_local_ahead_uses_normal_push(tmp_path: Path) -> None:
-    local = "b" * 40
-    remote = "a" * 40
+def test_empty_project_fetches_template_and_sets_origin(tmp_path: Path) -> None:
     runner = FakeRunner({
-        ("rev-parse", "HEAD"): (0, local),
-        ("rev-parse", "origin/main"): (0, remote),
-        ("merge-base", "--is-ancestor", "origin/main", "HEAD"): (0, ""),
+        ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
+        ("remote", "get-url", "template"): GitCommandResult(2, "", "missing"),
+        ("remote", "get-url", "origin"): GitCommandResult(2, "", "missing"),
     })
     service = GitService(runner=runner)
 
-    sha, pushed = service.select_publish_sha(
+    result = service.initialize(
         tmp_path,
-        tmp_path / "credentials",
-        dirty=False,
-        message="publish",
+        repo_url="https://gitlab.example/sites/demo.git",
+        template_repo_url="https://gitlab.example/templates/sites.git",
+        template_branch="template",
+        apply_template=True,
     )
 
-    assert (sha, pushed) == (local, True)
-    push_call = next(call for call in runner.calls if call[0][0] == "push")
-    assert push_call[0] == ["push", "origin", "HEAD:main"]
-    assert "--force" not in push_call[0]
+    assert result["template_applied"] is True
+    assert ["fetch", "template", "template"] in runner.calls
+    assert ["checkout", "-B", "main", "FETCH_HEAD"] in runner.calls
+    assert ["remote", "add", "origin", "https://gitlab.example/sites/demo.git"] in runner.calls
 
 
-def test_diverged_branch_is_rejected(tmp_path: Path) -> None:
+def test_push_commits_every_change_and_never_forces(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    sha = "a" * 40
     runner = FakeRunner({
-        ("rev-parse", "HEAD"): (0, "b" * 40),
-        ("rev-parse", "origin/main"): (0, "a" * 40),
-        ("merge-base", "--is-ancestor", "origin/main", "HEAD"): (1, ""),
-        ("merge-base", "--is-ancestor", "HEAD", "origin/main"): (1, ""),
+        ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
+        ("remote", "get-url", "origin"): GitCommandResult(
+            0, "https://gitlab.example/sites/demo.git", ""
+        ),
+        ("status", "--porcelain"): GitCommandResult(0, " M index.html", ""),
+        ("rev-parse", "--verify", "HEAD"): GitCommandResult(0, sha, ""),
     })
+    service = GitService(runner=runner)
 
-    with pytest.raises(GitNonFastForwardError):
-        GitService(runner=runner).select_publish_sha(
-            tmp_path,
-            tmp_path / "credentials",
-            dirty=False,
-            message="publish",
-        )
-
-
-def test_git_runner_places_controlled_helper_before_subcommand(monkeypatch, tmp_path: Path) -> None:
-    captured = {}
-
-    def fake_run(command, **kwargs):
-        captured["command"] = command
-        captured["input"] = kwargs.get("input")
-
-        class Completed:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return Completed()
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-    token = "secret-token-value"
-
-    GitRunner().run(
+    result = service.push_all(
         tmp_path,
-        ["credential", "approve"],
-        credential_file=tmp_path / "git-credentials",
-        input_text=f"password={token}\n\n",
+        repo_url="https://gitlab.example/sites/demo.git",
+        message="优化首页",
     )
 
-    command = captured["command"]
-    assert command[:5] == [
-        "git",
-        "-c",
-        "credential.helper=",
-        "-c",
-        f"credential.helper=store --file={tmp_path / 'git-credentials'}",
-    ]
-    assert token not in " ".join(command)
-    assert token in captured["input"]
+    assert ["add", "-A"] in runner.calls
+    assert ["commit", "-m", "优化首页"] in runner.calls
+    push = ["push", "-u", "origin", "HEAD:main"]
+    assert push in runner.calls
+    assert "--force" not in push
+    assert result == {"commit_sha": sha, "committed": True, "pushed": True}
 
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
+def test_real_git_template_init_preserves_binding_and_pushes(tmp_path: Path) -> None:
+    template_work = tmp_path / "template-work"
+    template_work.mkdir()
+    _git(template_work, "init")
+    _git(template_work, "config", "user.name", "Test User")
+    _git(template_work, "config", "user.email", "test@example.com")
+    (template_work / "index.html").write_text("template", encoding="utf-8")
+    _git(template_work, "add", "-A")
+    _git(template_work, "commit", "-m", "template")
+    _git(template_work, "branch", "-M", "template")
+
+    template_bare = tmp_path / "template.git"
+    subprocess.run(
+        ["git", "clone", "--bare", str(template_work), str(template_bare)],
+        check=True,
+        capture_output=True,
+    )
+    target_bare = tmp_path / "target.git"
+    target_bare.mkdir()
+    _git(target_bare, "init", "--bare")
+
+    site = tmp_path / "site"
+    (site / ".opscli").mkdir(parents=True)
+    binding = site / ".opscli" / "app.json"
+    binding.write_text('{"site_id":"site-1"}\n', encoding="utf-8")
+
+    service = GitService()
+    initialized = service.initialize(
+        site,
+        repo_url=str(target_bare),
+        template_repo_url=str(template_bare),
+        template_branch="template",
+        apply_template=True,
+    )
+
+    assert initialized["template_applied"] is True
+    assert (site / "index.html").read_text(encoding="utf-8") == "template"
+    assert binding.is_file()
+
+    _git(site, "config", "user.name", "Test User")
+    _git(site, "config", "user.email", "test@example.com")
+    pushed = service.push_all(site, repo_url=str(target_bare), message="绑定站点")
+
+    assert pushed["committed"] is True
+    assert _git(target_bare, "rev-parse", "refs/heads/main") == pushed["commit_sha"]
+
+
+def _git(cwd: Path, *args: str) -> str:
+    completed = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+    )
+    return completed.stdout.strip()

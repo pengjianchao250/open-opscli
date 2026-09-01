@@ -1,4 +1,4 @@
-"""AppHub 应用命令组兼容入口。"""
+"""Codex 站点管理命令组入口。"""
 
 from opscli.app.commands.cli import app
 

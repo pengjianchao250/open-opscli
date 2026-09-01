@@ -1,35 +1,13 @@
-"""AppHub 发布链使用的冻结常量。"""
+"""Codex 站点管理命令使用的常量。"""
 
-from __future__ import annotations
-
-import re
-
-APPHUB_URL_DEFAULT = "https://ops.xenkee.com"
-APPHUB_URL_ENV = "OPSCLI_APPHUB_URL"
-APP_YAML_FILENAME = "app.yaml"
-GIT_MIN_VERSION = (2, 30, 0)
+APPHUB_CREATE_SITE_URL_DEFAULT = "https://www.taukeytest.com/test111"
+APPHUB_CREATE_SITE_URL_ENV = "OPSCLI_APPHUB_CREATE_SITE_URL"
+APP_TEMPLATE_REPO_DEFAULT = "https://gitlab.aukeyit.com/polaris/codex-custom-sites.git"
+APP_TEMPLATE_REPO_ENV = "OPSCLI_APP_TEMPLATE_REPO"
+APP_TEMPLATE_BRANCH_DEFAULT = "template"
+APP_TEMPLATE_BRANCH_ENV = "OPSCLI_APP_TEMPLATE_BRANCH"
+BINDING_SCHEMA_VERSION = 1
+BINDING_RELATIVE_PATH = ".opscli/app.json"
 GIT_DEFAULT_BRANCH = "main"
+GIT_MIN_VERSION = (2, 30, 0)
 MESSAGE_MAX_LENGTH = 512
-RUNTIMES_MVP = ("streamlit", "fastapi", "gradio")
-RUNTIMES_PHASE2 = ("dash", "flask", "static")
-RESERVED_SLUGS = frozenset({
-    "login",
-    "api",
-    "static",
-    "internal",
-    "admin",
-    "assets",
-    "authz",
-    "apphub",
-    "healthz",
-    "well-known",
-    "apps",
-    "ui",
-    "datasette",
-})
-SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
-DATASET_PATTERN = re.compile(r"^ds_[0-9a-f]{6,32}$")
-COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
-TERMINAL_STATUSES = frozenset({"healthy", "failed", "cancelled"})
-CODEX_SITE_MARKERS = ("package.json", ".openai/hosting.json", "site.config.json")
-

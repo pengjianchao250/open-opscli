@@ -17,7 +17,6 @@ recursive-include opscli/mcp/tools *.py
 include opscli/mcp/app_factory.py
 include opscli/mcp/instrumentation.py
 include opscli/mcp/server.py
-include opscli/app/migrate.py
 include opscli/collector_monitor/server.py
 include opscli/collector_monitor/wecom-webhook
 include opscli/seller_sprite/mcp_bundle.py
@@ -36,6 +35,3 @@ recursive-exclude opscli/skills/templates __pycache__ *.pyc *.pyo .DS_Store
 # MCP 内部参考文档，供 *_spec_must_read 工具读取
 recursive-include opscli/mcp/references *.md
 recursive-exclude opscli/mcp/references __pycache__ *.pyc *.pyo .DS_Store
-
-# AppHub app.yaml 生成契约，运行时通过 importlib.resources 读取
-recursive-include opscli/app/contracts *.json

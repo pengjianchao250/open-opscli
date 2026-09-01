@@ -8282,3 +8282,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：移除 `opscli/app/`、`tests/app/`、顶层 `app` 注册、PyYAML 依赖、使用指南和本条变更记录；已签发凭据应先执行 `opscli app git revoke`，已产生的普通 Git commit/push 不自动回退。
 
 ---
+
+## 2026-09-01 AppHub - 精简为 create/init/push 三指令
+
+**变更原因**：Codex 站点当前只需要创建并绑定站点、初始化 Git 项目、整体推送源码。原 `opscli app` 的运行时 SDK、app.yaml 校验、gitleaks、release/SSE、版本运维和应用管理超出需求并增加维护成本。
+
+**改动点**：命令树收敛为 `opscli app create/init/push`；新增 `.opscli/app.json` 本地绑定；空目录从 GitLab `template` 分支获取模板，已有项目跳过模板且不覆盖源码；`push` 使用 GitLab 本机凭据执行 `git add -A`、普通 commit 和非强制 `HEAD:main` push，不触发部署。创建站点客户端暂用占位地址，并支持通过环境变量替换。删除旧发布、校验、扫描、迁移、SDK、凭据和运维模块及对应测试、契约资源和 SQLAlchemy 依赖。
+
+**影响范围**：这是 `opscli app` 的破坏性精简，旧 `publish/run/validate/pull/versions/rollback/logs/git/env/secret/members/db` 命令不再提供；其他 opscli 模块不受影响。
+
+**回滚方式**：恢复精简前的 `opscli/app/`、`tests/app/`、打包配置和 AppHub 文档；源码普通 Git commit/push 不自动回退。
+
+---

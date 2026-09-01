@@ -21,7 +21,6 @@ dependencies = [
     "PyMySQL>=1.1",
     "PyYAML>=6.0",
     "jsonschema>=4.23",
-    "SQLAlchemy>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -75,7 +74,4 @@ exclude = ["opscli.skills.templates*"]
 ]
 "opscli.collector_monitor" = [
     "wecom-webhook",
-]
-"opscli.app.contracts" = [
-    "*.json",
 ]
