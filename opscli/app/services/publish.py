@@ -23,6 +23,7 @@ from opscli.app.services.project import ProjectLoader
 from opscli.app.services.scanner import GitleaksScanner
 from opscli.app.services.session import PublishSessionStore
 from opscli.app.services.sse import parse_sse
+from opscli.app.services.validator import AppValidator
 from opscli.app.transport.client import AppHubClient
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -38,6 +39,7 @@ class PublishManager:
         project_loader: ProjectLoader | None = None,
         git_service: GitService | None = None,
         scanner: GitleaksScanner | None = None,
+        validator: AppValidator | None = None,
         session_store: PublishSessionStore | None = None,
         credential_service: GitCredentialService | None = None,
     ) -> None:
@@ -45,6 +47,7 @@ class PublishManager:
         self.project_loader = project_loader or ProjectLoader()
         self.git_service = git_service or GitService()
         self.scanner = scanner or GitleaksScanner()
+        self.validator = validator or AppValidator(self.scanner)
         self.session_store = session_store or PublishSessionStore()
         self.credentials = credential_service or GitCredentialService(
             self.client,
@@ -84,10 +87,12 @@ class PublishManager:
             )
 
         git_config = self.client.get_git_config(project.slug)
+        self.validator.validate(project, include_secrets=False)
         self.git_service.preflight(project.root, project.slug, git_config.repo_url)
         credential_file = self.credentials.ensure_usable(project, git_config)
         self.git_service.fetch(project.root, credential_file)
-        self.scanner.scan(project.root)
+        self.validator.scan_secrets(project)
+        self.validator.ensure_opscli_requirement(project)
 
         dirty = self.git_service.is_dirty(project.root)
         releases_before = self.client.list_releases(project.slug)
@@ -313,4 +318,3 @@ def _optional_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
-

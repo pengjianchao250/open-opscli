@@ -131,6 +131,58 @@ class GitService:
             )
         return origin
 
+    def initialize(
+        self,
+        root: Path,
+        repo_url: str,
+        *,
+        author_name: str = "AppHub User",
+        author_email: str = "apphub-user@local.invalid",
+    ) -> None:
+        """在新项目中初始化 main 与 origin。"""
+        self.runner.run(root, ["--version"])
+        if not (root / ".git").exists():
+            self.runner.run(root, ["init"])
+        self.runner.run(root, ["branch", "-M", GIT_DEFAULT_BRANCH])
+        remote = self.runner.run(root, ["remote", "get-url", "origin"], check=False)
+        if remote.returncode == 0:
+            self.runner.run(root, ["remote", "set-url", "origin", repo_url])
+        else:
+            self.runner.run(root, ["remote", "add", "origin", repo_url])
+        if self.runner.run(root, ["config", "user.name"], check=False).returncode != 0:
+            self.runner.run(root, ["config", "user.name", author_name])
+        if self.runner.run(root, ["config", "user.email"], check=False).returncode != 0:
+            self.runner.run(root, ["config", "user.email", author_email])
+
+    def pull(self, root: Path, credential_file: Path) -> None:
+        """执行普通 pull，不做 reset/rebase/force。"""
+        result = self.runner.run(
+            root,
+            ["pull", "--no-rebase", "origin", GIT_DEFAULT_BRANCH],
+            credential_file=credential_file,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AppGitError(
+                "GIT-PULL-FAILED",
+                "git pull 失败或存在需要人工处理的冲突。",
+                fix_hint="按 git status 提示解决冲突后重新执行 pull。",
+            )
+
+    def initial_push(self, root: Path, credential_file: Path, message: str) -> str:
+        """提交模板并首次普通推送。"""
+        self.fetch(root, credential_file)
+        remote = self.runner.run(root, ["rev-parse", "--verify", "origin/main"], check=False)
+        if remote.returncode == 0:
+            reset = self.runner.run(root, ["reset", "--mixed", "origin/main"], check=False)
+            if reset.returncode != 0:
+                raise AppGitError("GIT-010", "无法建立本地 main 与远端初始提交的关系。")
+        if not self.is_dirty(root):
+            return self.revision(root, "origin/main" if remote.returncode == 0 else "HEAD")
+        commit_sha = self.commit_all(root, message)
+        self.push(root, credential_file)
+        return commit_sha
+
     def probe(self, root: Path, repo_url: str, credential_file: Path) -> None:
         """用受控 credential helper 探测仓库读取权限。"""
         result = self.runner.run(

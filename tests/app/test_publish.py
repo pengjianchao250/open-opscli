@@ -13,6 +13,8 @@ from opscli.app.services.session import PublishSessionStore
 
 
 def _project(tmp_path: Path) -> AppProject:
+    (tmp_path / "app.py").write_text("print('ok')\n", encoding="utf-8")
+    (tmp_path / "requirements.txt").write_text("aukeys-opscli>=0.0.129\n", encoding="utf-8")
     manifest = AppManifest(
         api_version="apps.aukeys/v1",
         name="demo-app",
@@ -190,4 +192,3 @@ def test_resume_uses_saved_release_without_git(tmp_path: Path) -> None:
 
     assert result.release_id == 12
     assert result.status == "healthy"
-

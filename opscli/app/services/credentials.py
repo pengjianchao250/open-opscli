@@ -47,6 +47,26 @@ class GitCredentialService:
             token = ""
         return {"slug": project.slug, "username": username, "token_hint": token_hint, "bound": True}
 
+    def store_issued(
+        self,
+        project: AppProject,
+        *,
+        repo_url: str,
+        username: str,
+        token: str,
+        token_hint: str,
+    ) -> dict:
+        """保存 create app 响应中仅返回一次的凭据。"""
+        try:
+            self._approve(repo_url, username, token, project.root)
+            self.git_service.probe(project.root, repo_url, self.credential_file)
+        except Exception:
+            self._reject(repo_url, username, project.root)
+            raise
+        finally:
+            token = ""
+        return {"slug": project.slug, "username": username, "token_hint": token_hint, "bound": True}
+
     def status(self, project: AppProject) -> dict:
         """返回服务端绑定状态和本地探活结果。"""
         config = self.client.get_git_config(project.slug)
