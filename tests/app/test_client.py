@@ -1,4 +1,4 @@
-"""AppHub HTTP 客户端认证与错误映射测试。"""
+"""AppHub 创建站点占位客户端测试。"""
 
 from __future__ import annotations
 
@@ -14,63 +14,58 @@ class FakeAuth:
         return {"X-Session-Id": "session", "X-Opscli-Version": "0.0.1"}
 
 
-def test_client_sends_headers_without_cookie() -> None:
+def test_create_site_sends_minimal_payload_without_cookie() -> None:
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        observed["headers"] = request.headers
+        observed["request"] = request
         return httpx.Response(
-            200,
-            json={"repo_url": "https://git.example/apps/demo-app.git", "bound": False, "username": None},
+            201,
+            json={
+                "data": {
+                    "site_id": "site-1",
+                    "name": "销售看板",
+                    "slug": "sales-dashboard",
+                    "repo_url": "https://gitlab.example/sites/sales-dashboard.git",
+                }
+            },
         )
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
-    client = AppHubClient(base_url="https://apphub.example", auth_client=FakeAuth(), http_client=http)
+    client = AppHubClient(
+        create_site_url="https://apphub.example/api/sites",
+        auth_client=FakeAuth(),
+        http_client=http,
+    )
 
-    client.get_git_config("demo-app")
+    payload = client.create_site("销售看板")
 
-    assert observed["headers"]["X-Session-Id"] == "session"
-    assert "cookie" not in observed["headers"]
+    request = observed["request"]
+    assert request.url == "https://apphub.example/api/sites"
+    assert request.headers["X-Session-Id"] == "session"
+    assert "cookie" not in request.headers
+    assert request.content == b'{"name":"\xe9\x94\x80\xe5\x94\xae\xe7\x9c\x8b\xe6\x9d\xbf"}'
+    assert payload["site_id"] == "site-1"
 
 
 def test_http_error_envelope_is_mapped() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             409,
-            json={"detail": {"code": "CONFLICT", "message": "busy", "fix_hint": "retry"}},
+            json={"detail": {"code": "CONFLICT", "message": "busy", "fix_hint": "rename"}},
             headers={"X-Request-Id": "req-1"},
         )
 
     http = httpx.Client(transport=httpx.MockTransport(handler))
-    client = AppHubClient(base_url="https://apphub.example", auth_client=FakeAuth(), http_client=http)
+    client = AppHubClient(
+        create_site_url="https://apphub.example/api/sites",
+        auth_client=FakeAuth(),
+        http_client=http,
+    )
 
     with pytest.raises(AppHubHttpError) as caught:
-        client.list_releases("demo-app")
+        client.create_site("demo")
 
     assert caught.value.code == "CONFLICT"
-    assert caught.value.fix_hint == "retry"
+    assert caught.value.fix_hint == "rename"
     assert caught.value.request_id == "req-1"
-
-
-def test_config_and_member_endpoints_use_contract_paths() -> None:
-    observed = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        observed.append((request.method, request.url.path))
-        if request.url.path.endswith("/env") and request.method == "GET":
-            return httpx.Response(200, json={"env": {}, "platform_env": {}})
-        return httpx.Response(200, json={"ok": True})
-
-    http = httpx.Client(transport=httpx.MockTransport(handler))
-    client = AppHubClient(base_url="https://apphub.example", auth_client=FakeAuth(), http_client=http)
-    client.get_env("demo-app")
-    client.put_env("demo-app", {"MODE": "prod"})
-    client.add_member("demo-app", "user@example.com")
-    client.remove_member("demo-app", "user@example.com")
-
-    assert observed == [
-        ("GET", "/api/apps/demo-app/env"),
-        ("PUT", "/api/apps/demo-app/env"),
-        ("POST", "/api/apps/demo-app/members"),
-        ("DELETE", "/api/apps/demo-app/members/user@example.com"),
-    ]

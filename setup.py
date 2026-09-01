@@ -171,7 +171,6 @@ setup(
             "skills/templates/**/**/*",
             "mcp/references/**/*.md",
             "collector_monitor/wecom-webhook",
-            "app/contracts/*.json",
         ],
     },
     exclude_package_data={

@@ -1,163 +1,78 @@
-# opscli app 完整客户端需求与实施方案
+# opscli app 三指令精简方案
 
 > 日期：2026-09-01  
-> 目标仓库：`E:\wwwroot\localProjects\open-opscli`  
-> 权威服务端：`E:\wwwroot\localProjects\codex-custom-sites-all\ops-apphub`
+> 状态：已按当前需求落地，AppHub 创建站点接口仍为占位契约。
 
-## 1. 背景与结论
+## 1. 定位
 
-`opscli app` 是 AppHub 面向业务开发者与 AI 工具的完整客户端，不是单一发布器。AppHub 的 API、`app.yaml` 契约、启动命令和业务规范是客户端实现的权威依据。
+`opscli app` 只负责 Codex 站点源码进入指定 GitLab 仓库前的三个动作：
 
-当前客户端仅具备 `publish` 与 `git status/bind/revoke` 的基础实现，缺少项目初始化、本地同构运行、迁移、独立校验、版本运维、应用配置管理和运行时 SDK。尤其 AppHub 容器启动命令固定执行 `python -m opscli.app.migrate`，客户端缺少该模块会直接影响应用启动。
+1. 创建远端站点并绑定本地目录。
+2. 初始化 Git，空项目获取模板，已有项目保留源码。
+3. 将当前目录全部改动提交并普通 push。
 
-## 2. 强制原则
+本模块不负责本地运行、站点规范校验、密钥扫描、发布部署、版本回滚、日志、环境变量、成员或数据库管理。
 
-1. `apphub/schemas/appyaml.py` 是 `app.yaml` 的单一事实源；客户端只消费其导出的 JSON Schema，不维护第二份手写字段模型。
-2. `opscli app validate` 与 `opscli app publish` 共用同一个校验引擎。
-3. `publish` 必须先完成完整校验；阻断问题存在时不 commit、不 push、不调用 release API。
-4. 客户端只执行普通 Git 操作，禁止 force push、自动 reset 和静默覆盖用户分支。
-5. secret 与 Git token 不得出现在日志、稳定输出、本地普通配置文件或异常详情中。
-6. 本地 `run` 与线上启动保持同构：相同 base path、平台环境变量和 migrations 入口。
-7. 所有命令统一返回 `success/command/data/error`，并支持稳定 JSON 输出。
+## 2. 命令契约
 
-## 3. 必做功能范围
-
-### 3.1 开发
-
-- `opscli app init <slug>`：三 runtime 模板、AppHub 登记、Git 初始化/绑定、重入处理。
-- `opscli app run`：本地同构启动、平台环境注入、启动前迁移。
-- `python -m opscli.app.migrate`：SQLite migrations 顺序、幂等执行。
-
-### 3.2 规范
-
-- `opscli app validate`：AppYaml、文件、SQLite、SDK、依赖与 gitleaks 规则。
-- `opscli app publish`：强制复用 validate，随后执行普通 commit/push/release/SSE。
-
-### 3.3 源码协作
-
-- `opscli app pull`
-- `opscli app git status`
-- `opscli app git bind`
-- `opscli app git revoke`
-
-### 3.4 发布运维
-
-- `opscli app publish`
-- `opscli app versions`
-- `opscli app rollback`
-- `opscli app logs`
-
-### 3.5 应用管理
-
-- `opscli app env get/set/unset`
-- `opscli app secret list/set/unset`
-- `opscli app members list/add/remove`
-- `opscli app db info/backups/restore`
-
-### 3.6 运行时 SDK
-
-- `current_user()`
-- `ops_client()`，含 `query/query_df/metadata`
-- `get_engine()`
-- `base_path()`
-
-## 4. 不进入普通 CLI 的能力
-
-- 超管强制转移 owner。
-- SQLite 任意 SQL 与管理台表级浏览。
-- 应用启停、归档、平台部署诊断等管理台运维能力。
-- MCP 版 AppHub 工具。
-- `diff/archive` 作为后续增强，不阻塞本次核心闭环。
-
-## 5. 模块设计
+### 2.1 `opscli app create`
 
 ```text
-opscli/app/
-├── commands/cli.py
-├── contracts/appyaml.schema.json
-├── domain/{constants,exceptions,models}.py
-├── services/
-│   ├── appignore.py
-│   ├── manager.py
-│   ├── migrate.py
-│   ├── project.py
-│   ├── publish.py
-│   ├── runner.py
-│   ├── templates.py
-│   └── validator.py
-├── sdk/{context,engine,ops_client}.py
-├── transport/client.py
-└── migrate.py
+opscli app create <site-name> [--path PATH] [--json]
 ```
 
-## 6. 发布状态机
+- 调用创建站点服务，当前占位地址为 `https://www.taukeytest.com/test111`。
+- 可通过 `OPSCLI_APPHUB_CREATE_SITE_URL` 替换服务地址。
+- 请求仅提交 `{"name": "<site-name>"}`；创建人和创建时间由服务端根据登录身份生成。
+- 响应当前要求包含 `site_id`、`slug`、`repo_url`，并可包含 `site_name`、`created_by`、`created_at`。
+- `--path` 不存在时创建目录；已存在时保留全部文件。
+- 写入 `.opscli/app.json`，其中不保存 Git token、Cookie 或其他凭据。
+
+### 2.2 `opscli app init`
 
 ```text
-load project
-→ validate AppHub schema
-→ validate local rules
-→ gitleaks
-→ requirements 检查/补齐
-→ Git preflight/fetch
-→ auto commit（有改动）
-→ ordinary push
-→ POST release
-→ SSE/resume
-→ healthy/failed/cancelled
+opscli app init [PATH] [--json]
 ```
 
-## 7. 验收标准
+- 读取 `.opscli/app.json`。
+- 未初始化 Git 时执行普通 `git init`。
+- 目录除 `.opscli`、`.git` 外没有文件时，从模板仓库的 `template` 分支获取源码。
+- 已有任何源码时跳过模板，不 checkout、不覆盖文件。
+- 将站点绑定返回的 `repo_url` 配置为 `origin`。
+- 模板仓库和分支可通过 `OPSCLI_APP_TEMPLATE_REPO`、`OPSCLI_APP_TEMPLATE_BRANCH` 覆盖。
 
-1. 三 runtime 均可生成标准项目，并能生成正确本地启动命令。
-2. `migrate` 在无 SQLite、无 migrations、重复执行三种情况下均安全。
-3. validate 每条阻断规则至少有一对正反测试。
-4. publish 校验失败时 Git 与 AppHub API 均无副作用。
-5. versions/rollback/logs/env/secret/members/db 与 AppHub 契约一致。
-6. secret/token 不进入输出和错误详情。
-7. SDK 四函数在本地模式可用，viewer 模式可消费网关注入上下文。
-8. AppYaml 导出 Schema 与客户端打包副本可自动对比。
-9. app 专项测试、CLI 注册测试、compileall 与 diff 检查通过。
+## 2.3 `opscli app push`
 
-## 8. 实施顺序
+```text
+opscli app push [PATH] -m "Codex 对当前修改的一句话总结" [--json]
+```
 
-1. 契约副本、领域模型、迁移运行器。
-2. init/run/templates 与 Git 初始化。
-3. validate 引擎及 publish 强制接线。
-4. versions/rollback/logs/env/secret/members/db/pull。
-5. SDK 四函数与 requirements 注入。
-6. 测试、文档和构建资源收口。
+- 校验本地绑定和 Git `origin`，不校验站点源码内容。
+- 有工作区改动时执行 `git add -A` 和普通 commit。
+- 使用 GitLab 本机凭据执行 `git push -u origin HEAD:main`。
+- 禁止 force push，不调用部署、release 或 SSE 接口。
+- 工作区无改动时仍会推送已有本地 commit。
 
-## 9. 本次落地结果
+## 3. 本地绑定文件
 
-截至 2026-09-01，本方案中的核心闭环已在 `open-opscli` 落地：
+`.opscli/app.json` 当前结构：
 
-- 开发链路：`init`、`run`、`python -m opscli.app.migrate`。
-- 规范链路：独立 `validate`，以及 `publish` 发布前强制复用同一校验引擎。
-- 源码协作：`pull`、`git status/bind/revoke`。
-- 发布运维：`publish`、`versions`、`rollback`、`logs`。
-- 应用管理：`env`、`secret`、`members`、`db` 命令组。
-- 运行时 SDK：`current_user()`、`ops_client()`、`get_engine()`、`base_path()`。
-- 契约治理：客户端消费 AppHub 导出的 `app.yaml` JSON Schema，并提供同步检查脚本。
+```json
+{
+  "site_id": "site-1",
+  "site_name": "销售看板",
+  "slug": "sales-dashboard",
+  "repo_url": "https://gitlab.example/sites/sales-dashboard.git",
+  "created_by": "owner@aukeys.com",
+  "created_at": "2026-09-01T00:00:00Z",
+  "template_repo_url": "https://gitlab.aukeyit.com/polaris/codex-custom-sites.git",
+  "template_branch": "template",
+  "schema_version": 1
+}
+```
 
-本次明确不包含：`diff/archive`、超管 owner 转移、任意 SQLite SQL/表浏览、应用启停/归档、AppHub MCP 工具。这些属于后续增强或管理台能力，不影响普通开发者从创建、校验、推送、发布到运维的主闭环。
+该文件是源码仓库的一部分，便于重新 clone 后继续识别站点绑定；敏感凭据只由本机 Git 凭据管理器负责。
 
-## 10. 验证记录
+## 4. 后续接入正式服务
 
-- `python scripts/sync_apphub_appyaml_schema.py --check`：通过。
-- `python -m compileall -q opscli/app tests/app scripts/sync_apphub_appyaml_schema.py`：通过。
-- `python -m pytest tests/app tests/test_setup.py -q`：35 项通过。
-- `python -m opscli.app.migrate`：无数据库或无 migrations 时安全跳过。
-- 锁文件同步后，SQLAlchemy `get_engine()` 已通过真实 SQLite `select 1` 烟测。
-- 纯 Python wheel 构建、隔离安装和导入通过；wheel 已确认包含 `opscli/app/migrate.py` 与 `opscli/app/contracts/appyaml.schema.json`。
-- 本机缺少 Microsoft Visual C++ 14.0+，因此生产 Cython wheel 未在本机完成编译；失败发生在编译器环境检查，不是本次 app 模块测试或打包资源错误。
-- pytest 仅出现 `.pytest_cache` 目录无写权限警告，不影响测试结果。
-
-## 11. 上线前联调项
-
-以下项目依赖真实基础设施或运行环境，未在本地自动化测试中执行：
-
-- AppHub 注册、版本列表、回滚、日志、配置、成员和数据库恢复接口联调。
-- Gitea 凭据签发、普通 push、pull 和分支保护联调。
-- Coolify 部署、SSE 断线续传和运行日志跟随联调。
-- gitleaks 二进制下载、哈希校验与真实仓库扫描联调。
-- Streamlit、FastAPI、Gradio 三种 runtime 的浏览器级启动与发布烟测。
+正式 AppHub 服务落地后只替换 `opscli/app/transport/client.py` 的地址或响应适配，三条 CLI 命令、绑定文件和 Git 流程保持不变。若服务响应字段调整，应同步修改客户端契约测试和本文件。
