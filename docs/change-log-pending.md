@@ -6992,3 +6992,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：仅影响 Agent 对 Listing Analysis 的工具选择和触发判断，不修改提交接口、任务队列、额度计费或已有 `job_id` 的续查行为。
 **回滚方式**：回退 Listing Analysis Tool 描述、Skill/接入说明、版本号、对应测试及本条记录。
 ---
+
+## 2026-09-01 MCP - 修复远端 SDK 解包兼容与鹰眼会话头透传
+
+**变更原因**：macOS 用户环境解析到 `mcp 2.1.1` 后，`streamable_http_client` 仅返回读写流，现有三元解包会抛出 `ValueError: not enough values to unpack`；同时鹰眼代理建立远端 MCP 连接时没有传递当前用户的 OPS Session，导致需要业务身份的上游请求缺少 `X-Session-Id`。
+**改动点**：`RemoteMcpClient.call_tool()` 改为只消费 transport 返回值的前两个稳定成员，同时兼容 MCP SDK v1 的三元返回和 v2 的二元返回；鹰眼代理从当前 MCP API Key 隔离凭证中读取 session_id，并向远端客户端传递 `X-Session-Id` 与 `X-Opscli-Version`，不修改远端配置结构，也不转发未定义的任意 headers；新增二元 transport 和鹰眼会话头回归测试，保留现有三元 transport 测试作为旧 SDK 兼容保障。
+**验证结果**：新增两项测试先分别稳定复现 `expected 3, got 2` 和会话头注入点缺失，修复后转绿；远端客户端、鹰眼代理、配置客户端、凭证缓存、session 共用和共享远程适配器共 55 项通过；Keepa、SellerSprite、Canopy、Google Trends 等远程适配器共 28 项通过；`tests/mcp` 排除既有 `test_shopify_tools.py` 收集错误后 420 项通过、1 项既有 SellerSprite 遥测参数断言失败；独立临时环境使用真实 `mcp 2.1.1` 执行二元 transport 调用通过；目标模块 Cython C 代码生成成功并确认使用 `transport_streams[:2]`。完整 wheel 构建仍被 ASIN Data、Google Trends、Scrape.do 的既有 Cython 错误阻断，本机目标扩展链接还因缺少 MSVC 14+ 无法完成，未声称 wheel 构建通过。
+**影响范围**：所有通过 `RemoteMcpClient` 调用远端 Streamable HTTP MCP 的模块获得 SDK v1/v2 返回契约兼容；鹰眼中央代理额外携带当前隔离用户的 OPS Session。远端配置选择、API Key URL、工具参数、重试和超时策略保持不变。
+**回滚方式**：回退 `opscli/mcp_client/remote_client.py`、`opscli/mcp/tools/yingyan_proxy.py`、对应两份测试及本条记录；回滚后 `mcp 2.x` 环境会再次发生三元解包失败，鹰眼远端请求也会再次缺少业务会话头。
+---
