@@ -675,7 +675,9 @@ docs/
 | 使用指南 | Amazon 抓取代理部署与使用指南 | `docs/guide/Amazon抓取代理部署与使用指南.md` |
 | 使用指南 | CLI 升级指南               | `docs/guide/CLI升级指南.md`                 |
 | 使用指南 | SDK 使用文档               | `docs/guide/SDK使用文档.md`                 |
+| 使用指南 | API 使用文档               | `docs/guide/API使用文档.md`                 |
 | 开发规范 | SDK 调用规范               | `docs/spec/SDK调用规范.md`                  |
+| 开发规范 | API 调用规范               | `docs/spec/API调用规范.md`                  |
 
 <!-- BEGIN SUPER DEV CLAUDE -->
 # Super Dev Claude Code Integration

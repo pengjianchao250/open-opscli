@@ -8329,3 +8329,19 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除 `docs/spec/SDK调用规范.md`、`docs/guide/SDK使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
 
 ---
+## 2026-09-02 docs - 新增 API 调用规范与 API 使用文档
+
+**变更原因**：0.0.129 起 opscli-mcp 以服务端形态对外提供 REST API（query 全量指令 + keepa 场景），网站与业务系统将直接通过 HTTP 集成，但缺少统一的 API 调用约束与端点参考文档；同时需要把"授权显式调用"原则延伸到 API 形态（身份只来自传输层 API Key，不接受请求体自报凭证）。
+
+**改动点**：
+- 新增 `docs/spec/API调用规范.md`：服务形态边界（opscli-mcp 组合服务 / stdio 无 REST / collector 系列纯 MCP / create_api_app 裸应用须外挂鉴权）；鉴权规范 A-Auth（API Key 三种传递位置、固定 Key 与远程校验两模式、401/503 语义、身份不自报、隔离目录、重试纪律）；统一信封规范 A-Envelope（success/data/error、query/simple 内层 200+success=false 特例、状态码语义表、错误信息脱敏边界）；请求合同规范 A-Contract（extra=forbid、无本地路径参数、结构化优先、timeout≤300/limit≤500000 显式上限、分页纪律 P-1/P-2、keepa 幂等 job_id 与额度治理）；安全规范 A-Security（Key 只显示一次、HTTPS、日志脱敏、CORS 约束、权限白名单）；部署与扩展规范 A-Deploy（schemas/ 合同先行、MCP 与 REST 同源、错误映射、版本演进纪律）；客户端合规自查清单与端点鉴权速查表。
+- 新增 `docs/guide/API使用文档.md`：服务简介与 15 端点概貌、单用户/多用户两种启动方式、业务账号准备（MCP auth 登录）、快速开始（curl flow 示例）、鉴权说明、统一信封与错误码速查、全部端点逐一参考（参数表 + curl/JSON 示例：plan/flow/preferences/metadata/catalog/intents-match/run/build/simple/charts 三件套/keepa 两组）、4 个典型对接流程（一句话取数、三步精确查询、图表直连、错误处理伪代码）、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——15 个端点与 `opscli/api/routers/{query,keepa,health}.py` 一一对应；请求合同字段/上限与 `opscli/api/schemas/{query,keepa}.py` 一致（MAX_QUERY_LIMIT=500000、MAX_QUERY_TIMEOUT=300、extra="forbid"）；鉴权中间件行为与 `opscli/mcp/auth_middleware.py` 一致（三种 Key 提取顺序、固定/远程两模式、401/503 响应体、60s 新鲜期/300s 宽限）；启动参数与 `opscli/mcp/app_factory.py run_mcp_app` 一致（--transport/--host/--port/--auth-verify-url，默认端口 8765，collector_mcp 无 app_wrapper 故无 REST）；身份解析与 `opscli/mcp/tools/helpers.py` 一致（remote transport 邮箱 / fixed 隔离缓存 / stdio 共享默认存储）；用户管理与 `opscli/mcp/cli.py`（user list/add/remove/rotate，Key 只显示一次）一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI/API 行为或测试。
+
+**回滚方式**：删除 `docs/spec/API调用规范.md`、`docs/guide/API使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
