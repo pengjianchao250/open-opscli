@@ -8,6 +8,7 @@ from typing import Any
 
 from opscli.skills.packaging import get_builtin_templates_dir
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 MAX_PUBLIC_DATA_PREVIEW_ROWS = 20
@@ -100,8 +101,11 @@ async def scrape_do_export(job_id: str) -> dict:
         from opscli.scrape_do.services import ScrapeDoApiManager
 
         status = ScrapeDoApiManager().job_status(job_id)
-        export = _public_export_payload(status.get("export"))
-        if not export.get("url"):
+        public_status = _sanitize_public_strings(_scrub_public_payload(status))
+        if not isinstance(public_status, dict):
+            raise ValueError("任务导出结构不合法")
+        export = _public_export_payload(build_export_payload_with_fallback(public_status))
+        if not export.get("url") and "json_data" not in export:
             raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
@@ -169,6 +173,7 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
     """返回 MCP 安全任务数据，不暴露本地路径、原始响应和敏感字段。"""
     public = _sanitize_public_strings(_scrub_public_payload(payload))
     if isinstance(public, dict):
+        attach_json_data_fallback(public)
         _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
@@ -187,7 +192,7 @@ def _sanitize_public_export(public: dict[str, Any]) -> None:
     if not isinstance(export, dict):
         return
     url = export.get("url")
-    if url:
+    if url or "json_data" in export:
         return
 
     warnings = public.get("warnings")

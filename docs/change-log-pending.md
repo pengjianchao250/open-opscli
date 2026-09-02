@@ -7001,3 +7001,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：所有通过 `RemoteMcpClient` 调用远端 Streamable HTTP MCP 的模块获得 SDK v1/v2 返回契约兼容；鹰眼中央代理额外携带当前隔离用户的 OPS Session。远端配置选择、API Key URL、工具参数、重试和超时策略保持不变。
 **回滚方式**：回退 `opscli/mcp_client/remote_client.py`、`opscli/mcp/tools/yingyan_proxy.py`、对应两份测试及本条记录；回滚后 `mcp 2.x` 环境会再次发生三元解包失败，鹰眼远端请求也会再次缺少业务会话头。
 ---
+
+## 2026-09-02 MCP - 导出上传失败返回 JSON 数据兜底
+
+**变更原因**：Keepa、卖家精灵等 MCP 采集服务已成功获取并生成导出文件时，OSS 上传失败会只返回无效的服务端本地路径，远端调用方既拿不到下载链接，也无法继续消费已经获取的数据。
+**改动点**：新增 MCP 公共导出兜底逻辑，仅在存在 `file_upload` warning、导出没有 HTTP(S) 地址且任务结果包含业务数据时，将完整脱敏数据写入 `export.json_data` 并在原响应缺少 URL 时显式返回 `url: null`；接入 Keepa、卖家精灵、Google Trends、Amazon 商品数据、beta Canopy、西柚和 Sif 的运行结果、任务状态及独立导出读取入口；Sif 从落盘结果提取业务 JSON，并按 `export_key` 仅挂到对应失败导出项。正常 OSS 链接和非上传类缺链错误保持原行为。
+**验证结果**：新增或调整 10 个上传失败回归用例，旧实现下稳定复现缺少 `json_data` 或独立导出接口报错；执行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\mcp\test_google_trends_tools.py tests\mcp\test_scrape_do_tools.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_beta_tools.py tests\mcp\test_sif_tools.py tests\xiyou\test_mcp_tools.py -q` 通过，结果 `178 passed`；目标 MCP 模块 `compileall` 和 `git diff --check` 通过。
+**影响范围**：上述 MCP 服务在 OSS 上传失败后的返回合同；上传成功时响应结构不变，CLI 本地导出和服务端文件生成逻辑不变。
+**回滚方式**：回退 `opscli/mcp/tools/export_fallback.py`、各 MCP 工具接入、对应测试及本条记录。
+---

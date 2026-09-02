@@ -1660,6 +1660,42 @@ def test_seller_sprite_remote_export_rejects_local_file_url(monkeypatch):
     assert "/tmp/job-1.xlsx" not in str(result)
 
 
+def test_seller_sprite_remote_export_returns_json_fallback_after_upload_failure(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    class UploadFailedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "data": [{"asin": "B0TEST123", "keyword": "charger"}],
+                "export": {
+                    "path": "/srv/private/job-1.xlsx",
+                    "filename": "job-1.xlsx",
+                    "url": "file:///srv/private/job-1.xlsx",
+                },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
+            }
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: UploadFailedScheduler(),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["url"] is None
+    assert result["data"]["json_data"] == [
+        {"asin": "B0TEST123", "keyword": "charger"}
+    ]
+    assert "path" not in result["data"]
+
+
 def test_seller_sprite_export_does_not_mutate_scheduler_export_mapping(monkeypatch):
     export = {"path": "/tmp/job-1.xlsx", "filename": "job-1.xlsx"}
 

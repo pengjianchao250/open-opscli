@@ -117,6 +117,9 @@ def test_google_trends_run_accepts_params_json_string(monkeypatch):
     assert "raw_path" not in result["data"]
     assert "raw_response" not in result["data"]
     assert result["data"]["warnings"][0]["message"] == "导出文件上传失败，已保留服务端本地文件"
+    assert result["data"]["export"]["json_data"] == [
+        {"date": "2026-01-01", "flashlight": 42}
+    ]
 
 
 def test_public_result_recursively_strips_secret_fields():

@@ -25,6 +25,7 @@ from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
 from opscli.skills.packaging import get_builtin_templates_dir
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 _KEEPA_API_MODE: ContextVar[bool] = ContextVar("keepa_api_mode", default=False)
@@ -237,8 +238,11 @@ async def keepa_export(job_id: str) -> dict:
         from opscli.keepa.services import KeepaApiManager
 
         status = KeepaApiManager().job_status(job_id)
-        export = _public_export_payload(status.get("export"))
-        if not export.get("url"):
+        public_status = _strip_sensitive(status)
+        if not isinstance(public_status, dict):
+            raise ValueError("任务导出结构不合法")
+        export = _public_export_payload(build_export_payload_with_fallback(public_status))
+        if not export.get("url") and "json_data" not in export:
             raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
@@ -426,6 +430,7 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("params_path", None)
         public.pop("raw_path", None)
         public.pop("result_path", None)
+        attach_json_data_fallback(public)
         _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
@@ -469,7 +474,7 @@ def _sanitize_public_export(public: dict[str, Any]) -> None:
     if isinstance(url, str) and url.startswith("file://"):
         export["url"] = None
         url = None
-    if url:
+    if url or "json_data" in export:
         return
 
     warnings = public.get("warnings")

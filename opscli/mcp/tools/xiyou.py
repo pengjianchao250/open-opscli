@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _get_auth_pair, _ok
 
 
@@ -125,7 +126,9 @@ async def xiyou_run(
         )
         sid, jw = _get_auth_pair("ops", session_id, jwt)
         result = await XiyouApiManager(jwt=jw, session_id=sid).run(request)
-        return _ok(result.to_dict())
+        payload = result.to_dict()
+        attach_json_data_fallback(payload)
+        return _ok(payload)
     except Exception as exc:
         call_params = {
             "function": function,
@@ -166,7 +169,9 @@ async def xiyou_job_status(job_id: str) -> dict:
     try:
         from opscli.xiyou.services import XiyouApiManager
 
-        return _ok(XiyouApiManager().job_status(job_id))
+        payload = XiyouApiManager().job_status(job_id)
+        attach_json_data_fallback(payload)
+        return _ok(payload)
     except Exception as exc:
         return _err(exc, tool="MCP -> xiyou_job_status(...)", call_params={"job_id": job_id})
 
@@ -177,9 +182,7 @@ async def xiyou_export(job_id: str) -> dict:
         from opscli.xiyou.services import XiyouApiManager
 
         status = XiyouApiManager().job_status(job_id)
-        export = dict(status.get("export") or {})
-        if not export:
-            raise ValueError(f"任务无导出文件：{job_id}")
+        export = build_export_payload_with_fallback(status)
         if export.get("path"):
             export.setdefault("local_url", Path(export["path"]).expanduser().resolve().as_uri())
         if status.get("resource_url"):

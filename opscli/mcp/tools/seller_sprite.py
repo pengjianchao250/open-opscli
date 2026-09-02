@@ -28,6 +28,7 @@ from opscli.seller_sprite.services.api_manager import (
     AI_TASK_FAILED_STATUSES,
 )
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _ok, _parse_json_arg
 
 # 状态接口单次等待最多 30 秒，避免 MCP 请求长期占用连接。
@@ -128,7 +129,12 @@ def _validate_output_dir(output_dir: str | None) -> None:
         raise ValueError("HTTP/SSE 模式不接受 output_dir，导出目录由数据采集服务统一管理")
 
 
-def _sanitize_export(export: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_export(
+    export: dict[str, Any],
+    *,
+    data: Any = None,
+    warnings: Any = None,
+) -> dict[str, Any]:
     """远端仅返回 HTTPS 导出地址，stdio 保留本地文件兼容行为。"""
     normalized = dict(export)
     if not _is_remote_mcp_request():
@@ -136,11 +142,16 @@ def _sanitize_export(export: dict[str, Any]) -> dict[str, Any]:
             normalized["url"] = Path(normalized["path"]).expanduser().resolve().as_uri()
         return normalized
 
+    fallback_payload = {"export": normalized, "warnings": warnings}
+    if data is not None:
+        fallback_payload["data"] = data
+    attach_json_data_fallback(fallback_payload)
+
     url = str(normalized.get("url") or "").strip()
-    if not url.lower().startswith("https://"):
+    if not url.lower().startswith("https://") and "json_data" not in normalized:
         raise ValueError("导出文件尚未上传到 HTTPS 地址，请稍后重试")
     normalized.pop("path", None)
-    normalized["url"] = url
+    normalized["url"] = url if url.lower().startswith("https://") else None
     return normalized
 
 
@@ -151,7 +162,11 @@ def _sanitize_status(status: dict[str, Any]) -> dict[str, Any]:
         return normalized
     export = normalized.get("export")
     if isinstance(export, dict):
-        normalized["export"] = _sanitize_export(export)
+        normalized["export"] = _sanitize_export(
+            export,
+            data=normalized.get("data"),
+            warnings=normalized.get("warnings"),
+        )
     for key in (
         "root_dir",
         "params_path",
@@ -1372,7 +1387,14 @@ async def seller_sprite_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        return _ok(_sanitize_export(dict(export)))
+        export_payload = build_export_payload_with_fallback(status)
+        return _ok(
+            _sanitize_export(
+                export_payload,
+                data=status.get("data"),
+                warnings=status.get("warnings"),
+            )
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_export(...)", call_params={"job_id": job_id})
 

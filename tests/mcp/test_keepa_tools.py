@@ -361,10 +361,17 @@ def test_keepa_job_status_warns_when_export_url_missing(monkeypatch):
             return {
                 "job_id": job_id,
                 "row_count": 1,
+                "data": [{"asin": "B0088PUEPK", "title": "Fallback Product"}],
                 "export": {
                     "path": f"/tmp/{job_id}.xlsx",
                     "filename": f"{job_id}.xlsx",
                 },
+                "warnings": [
+                    {
+                        "stage": "file_upload",
+                        "message": "导出文件上传失败，已保留服务端本地文件",
+                    }
+                ],
             }
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
@@ -375,26 +382,32 @@ def test_keepa_job_status_warns_when_export_url_missing(monkeypatch):
     assert result["data"]["export"]["filename"] == "job-2.xlsx"
     assert "path" not in result["data"]["export"]
     assert not result["data"]["export"].get("url")
-    assert any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
+    assert result["data"]["export"]["json_data"] == [
+        {"asin": "B0088PUEPK", "title": "Fallback Product"}
+    ]
+    assert not any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
 
 
-def test_keepa_export_fails_when_download_url_missing(monkeypatch):
+def test_keepa_export_returns_json_fallback_when_upload_failed(monkeypatch):
     class NoUrlManager(DummyManager):
         def job_status(self, job_id):
             return {
                 "job_id": job_id,
+                "data": [{"asin": "B0088PUEPK"}],
                 "export": {
                     "path": f"/tmp/{job_id}.xlsx",
                     "filename": f"{job_id}.xlsx",
                 },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
             }
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
 
     result = _run(keepa_tools.keepa_export("job-2"))
 
-    assert result["success"] is False
-    assert "没有可下载地址" in result["error"]["message"]
+    assert result["success"] is True
+    assert result["data"]["url"] is None
+    assert result["data"]["json_data"] == [{"asin": "B0088PUEPK"}]
 
 
 def test_keepa_history_reads_persisted_rows_by_job_id(monkeypatch):
