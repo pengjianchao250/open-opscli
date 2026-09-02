@@ -215,6 +215,9 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],
     )
+    from opscli.api.seller_sprite import router as seller_sprite_router
+
+    app.include_router(seller_sprite_router)
 
     @app.get("/health/live", tags=["health"])
     async def health_live() -> dict[str, str]:

@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-02 SellerSprite - 增加通用 FastAPI 异步任务网关
+
+**变更原因**：Keepa 已有产品化 FastAPI 场景入口，但 SellerSprite 独立部署在 Collector MCP，网站和内部系统无法使用普通 HTTP 合同提交和查询任务；同时不能为了 REST 直接在通用 MCP 进程启动第二套 SellerSprite 队列、账号池和浏览器 Runtime。
+**改动点**：新增 `/api/v1/seller-sprite` REST 路由，提供场景、额度、普通任务提交/单批状态/结果/导出及 Listing Analysis 提交/状态/结果接口；请求模型拒绝 `session_id`、`jwt`、`output_dir`、执行模式和调度参数；普通任务与 Listing Analysis 提交成功返回 `202`，Collector 配置或可用性故障映射为 `503`；`export_format=json` 的成功任务通过 API 专用 `/result` 或兼容 `/export` 直接返回内联业务 JSON，状态响应不再暴露 JSON 下载链接，只有 `xls/xlsx` 保留 HTTPS 文件下载信息；该转换仅位于 FastAPI REST 适配层，现有 SellerSprite MCP Tool、Collector Scheduler、队列和 MCP 返回合同不变；REST 复用现有 SellerSprite Collector 代理并透传当前用户 API Key，只补网关遥测且不重复扣额度，实际权限、任务所有权、账号池、队列和浏览器生命周期继续由 Collector 负责；同步场景 API 产品化规划和合同测试。
+**验证结果**：产品化 API 组合测试 `31 passed`；SellerSprite 代理与 Collector Bundle 历史回归 `15 passed, 1 deselected`，排除项为仓库既有 `dimension_resolver=None` 断言差异；新增模块与组合入口 `compileall`、行长度检查及 `git diff --check` 通过，并确认 SellerSprite MCP Tool、Collector Scheduler 和对应 MCP 测试文件零代码差异。2026-09-02 以真实用户 API Key 在隔离端口启动当前通用 MCP 与 Collector，验证 OpenAPI 暴露 10 个 SellerSprite 路由，场景与额度接口均返回 HTTP 200，`keyword-reverse` 提交返回 HTTP 202，任务约 11 秒后到达 `succeeded/finished`，browser-route 登录、查询按钮和上游 HTTP 200 均成功；随后复用该成功任务验证 API-only JSON 合同，普通任务 `/result` 与兼容 `/export` 均直接返回内联 `result`，响应不含 `export`、`url` 或 `download_url`，且未再次消耗查询额度。本次样例 ASIN 在 `US/30d` 返回 0 行有效空结果。原 `10.6.53.56:8765` 运行进程的 OpenAPI 仍只有旧 Keepa 路由，需重启加载新代码后才会对外提供 SellerSprite REST。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+**影响范围**：通用 MCP 的 FastAPI 路由和网站调用合同；Collector MCP 部署地址、Tool 合同、Scheduler、SQLite 队列、账号配置与额度执行位置不变。
+**回滚方式**：移除 SellerSprite REST 路由模块及 `create_api_app()` 注册，回退对应测试、规划文档和本条记录即可；无需处理 Collector 任务或数据库。
+
+---
+
 ## 2026-09-01 MCP采集 - 增加共享 MySQL 结果缓存基础合同
 
 **变更原因**：Keepa、Google Trends 和 SellerSprite 的成功结果已经沉淀到共享 MySQL，相同业务请求仍会重复调用上游并消耗额度，需要提供默认一天的新鲜结果复用能力。
