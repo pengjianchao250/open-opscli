@@ -24,7 +24,28 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.1"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.2"}
+
+
+def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
+    """真实业务数据需求必须进入独立规范和数据层构建 Skill。"""
+    skill = _read("SKILL.md")
+    standard = _read("references/data-access-standard.md")
+    content = "\n".join((skill, standard))
+
+    for required in (
+        "references/data-access-standard.md",
+        "$ops-app-data-builder",
+        "页面需要真实业务数据",
+        "不选择或猜测数据集、字段、聚合、筛选、第三方场景",
+        "前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite",
+        "docs/ops-app/data-spec.md",
+        "OPSCLI_API_BASE_URL",
+        "OPSCLI_API_KEY",
+        "未隔离的 viewer 数据",
+        "第一阶段不增加运行时数据 YAML",
+    ):
+        assert required in content
 
 
 def test_ops_app_build_spec_routes_supported_migrations_and_stops_others():
@@ -253,7 +274,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.1"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.2"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
@@ -261,6 +282,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
     assert (installed / "references" / "frontend-standard.md").exists()
     assert (installed / "references" / "initialization-standard.md").exists()
     assert (installed / "references" / "backend-standard.md").exists()
+    assert (installed / "references" / "data-access-standard.md").exists()
     assert (installed / "references" / "migration-standard.md").exists()
     assert (installed / "references" / "deployment-standard.md").exists()
     assert (installed / "assets" / "nginx.conf.template").exists()

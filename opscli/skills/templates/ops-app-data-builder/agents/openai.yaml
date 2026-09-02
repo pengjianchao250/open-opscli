@@ -1,0 +1,7 @@
+interface:
+  display_name: "OPS 应用数据层构建"
+  short_description: "验证真实数据合同并生成 opscli app 站点前后端数据层"
+  default_prompt: "使用 $ops-app-data-builder 为当前 opscli app 站点构建真实业务数据层，先验证数据合同，再生成后端、前端 API、SQLite 迁移、测试和 data-spec。"
+
+policy:
+  allow_implicit_invocation: true
