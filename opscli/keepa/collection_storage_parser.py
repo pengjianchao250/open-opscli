@@ -17,6 +17,7 @@ from opscli.shared.collection_storage.parser_utils import (
     standard_artifacts,
     xlsx_datasets,
 )
+from opscli.shared.collection_storage.result_cache import attach_cache_metadata
 
 # Parser 版本写入 collection_runs，解析合同变化时递增以便追踪口径。
 PARSER_VERSION = "keepa-v4"
@@ -53,7 +54,12 @@ class KeepaCollectionParser:
         return ParsedCollection(
             submission=submission,
             parser_version=self.parser_version,
-            request_params=files.params,
+            request_params=attach_cache_metadata(
+                files.params,
+                cache_key=submission.cache_key,
+                cache_scope=submission.cache_scope,
+                result_metadata=submission.result_metadata,
+            ),
             artifacts=standard_artifacts(
                 files,
                 default_export_mime_type=(

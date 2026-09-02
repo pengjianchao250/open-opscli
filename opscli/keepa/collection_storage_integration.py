@@ -7,12 +7,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from opscli.keepa.domain.models import KeepaScenarioRequest, KeepaScenarioResult
 from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     DataEnvironment,
     ReconciliationBatch,
 )
-from opscli.keepa.domain.models import KeepaScenarioRequest, KeepaScenarioResult
+from opscli.shared.collection_storage.result_cache import (
+    build_cache_key,
+    safe_result_metadata,
+)
+
+KEEPA_CACHE_SCOPE = "shared"
+
+
+def build_keepa_cache_key(request: KeepaScenarioRequest) -> str:
+    """按 Keepa 实际上游参数构造稳定缓存键。"""
+    from opscli.keepa.api.scenarios import get_scenario
+
+    site = (request.site or "US").upper()
+    normalized_params = get_scenario(request.scenario).build_params(
+        params=request.params,
+        site=site,
+    )
+    return build_cache_key(
+        "keepa",
+        {
+            "scenario": request.scenario,
+            "site": site,
+            "params": normalized_params,
+            "export_format": request.export_format,
+        },
+    )
 
 
 class _StorageRuntime(Protocol):
@@ -54,6 +80,9 @@ class KeepaCollectionSubmitter:
             data_environment=cast(DataEnvironment, environment),
             ingestion_mode="live",
             result_path=result.result_path,
+            cache_key=build_keepa_cache_key(request),
+            cache_scope=KEEPA_CACHE_SCOPE,
+            result_metadata=safe_result_metadata(result.to_dict()),
         )
         return self.runtime.submit(submission)
 

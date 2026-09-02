@@ -7,8 +7,14 @@ from types import SimpleNamespace
 import pytest
 
 from opscli.mcp import ops_credentials
-from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
+from opscli.mcp.tools import seller_sprite as seller_sprite_tools
+from opscli.shared.collection_storage.result_cache import (
+    CachedCollectionResult,
+    reset_cache_hit_state,
+    restore_cache_hit_state,
+    was_cache_hit,
+)
 
 
 def _run(coro):
@@ -1548,6 +1554,119 @@ def test_seller_sprite_run_always_enqueues(monkeypatch, tmp_path):
     assert result["data"]["state"] == "queued"
     assert DummyScheduler.enqueue_calls == 1
     assert DummyScheduler.last_mcp_user_email == "mcp-user@example.com"
+
+
+def test_seller_sprite_run_cache_hit_creates_current_user_task(monkeypatch):
+    from opscli.seller_sprite import mcp_bundle
+
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["cache_scope"] == "shared_pool"
+            assert kwargs["include_datasets"] is False
+            return CachedCollectionResult(
+                source_job_id="seller-source-job",
+                scenario="keyword-reverse",
+                site="US",
+                row_count=2,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={
+                    "row_count": 2,
+                    "export": {
+                        "filename": "seller-source-job.xlsx",
+                        "format": "xlsx",
+                        "url": "https://files.example.com/seller-source-job.xlsx",
+                    },
+                },
+                datasets=(),
+            )
+
+    class CacheScheduler:
+        async def enqueue(self, request, **kwargs):
+            raise AssertionError("缓存命中不得进入普通队列")
+
+        async def enqueue_cached_owned_mcp_run(self, request, **kwargs):
+            assert kwargs["mcp_user_email"] == "mcp-user@example.com"
+            assert kwargs["source_job_id"] == "seller-source-job"
+            return {
+                "job_id": request.job_id,
+                "state": "succeeded",
+                "stage": "finished",
+                "position": None,
+                "row_count": kwargs["row_count"],
+                "export": kwargs["export_payload"],
+            }
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda: CacheScheduler())
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_build_mcp_job_id",
+        lambda request, site, period: "current-user-cache-job",
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "get_result_cache_context",
+        lambda: (CacheRepository(), "production"),
+    )
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="US",
+            params={"asin": "B0TEST"},
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "current-user-cache-job"
+    assert result["data"]["state"] == "succeeded"
+    assert result["data"]["row_count"] == 2
+
+
+def test_seller_sprite_cache_task_failure_is_not_settled_as_cache_hit(monkeypatch):
+    from opscli.seller_sprite import mcp_bundle
+
+    class CacheRepository:
+        def find_cached_result(self, **_kwargs):
+            return CachedCollectionResult(
+                source_job_id="seller-source-job",
+                scenario="keyword-reverse",
+                site="US",
+                row_count=2,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={"row_count": 2, "export": None},
+                datasets=(),
+            )
+
+    class FailingCacheScheduler:
+        async def enqueue_cached_owned_mcp_run(self, request, **kwargs):
+            raise RuntimeError("cache task insert failed")
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda: FailingCacheScheduler(),
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "get_result_cache_context",
+        lambda: (CacheRepository(), "production"),
+    )
+
+    token = reset_cache_hit_state()
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                site="US",
+                params={"asin": "B0TEST"},
+            )
+        )
+        assert result["success"] is False
+        assert was_cache_hit() is False
+    finally:
+        restore_cache_hit_state(token)
 
 
 def test_seller_sprite_run_returns_complete_queued_status_without_polling(monkeypatch, tmp_path):

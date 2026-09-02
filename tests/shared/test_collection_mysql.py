@@ -340,3 +340,93 @@ def test_mysql_repository_history_page_returns_pagination_without_records():
         "FROM collection_records" in sql
         for sql, _params in connection.cursor_instance.calls
     )
+
+
+def test_mysql_repository_finds_exact_fresh_cached_result():
+    class CacheCursor:
+        def __init__(self):
+            self.phase = 0
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            self.phase += 1
+            self.calls.append((" ".join(sql.split()), params))
+
+        def fetchone(self):
+            return {
+                "id": 7,
+                "source_job_id": "job-source",
+                "scenario": "product",
+                "site": "US",
+                "request_params": '{"_cache":{"result":{"row_count":1}}}',
+                "source_row_count": 1,
+                "completed_at": None,
+                "persistence_completed_at": None,
+            }
+
+        def fetchall(self):
+            if self.phase == 2:
+                return [{
+                    "id": 9,
+                    "dataset_code": "main",
+                    "dataset_name": "Main",
+                    "source_sheet": "Main",
+                    "columns_json": "[]",
+                    "row_count": 1,
+                }]
+            return [{
+                "source_row_number": 1,
+                "business_key": "B0TEST",
+                "payload": '{"asin":"B0TEST"}',
+            }]
+
+    class CacheConnection:
+        def __init__(self):
+            self.cursor_instance = CacheCursor()
+            self.closed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def close(self):
+            self.closed = True
+
+    connection = CacheConnection()
+    repository = MySqlCollectionRepository(
+        settings=MySqlSettings(),
+        connect_factory=lambda: connection,
+    )
+
+    result = repository.find_cached_result(
+        source_system="keepa",
+        data_environment="production",
+        scenario="product",
+        site="US",
+        cache_key="a" * 64,
+        cache_scope="shared",
+        ttl_seconds=86400,
+    )
+
+    assert result is not None
+    assert result.source_job_id == "job-source"
+    assert result.datasets[0]["records"][0]["payload"] == {"asin": "B0TEST"}
+    cache_sql, cache_params = connection.cursor_instance.calls[0]
+    assert "persistence_completed_at >= TIMESTAMPADD" in cache_sql
+    assert "'$._cache.cache_key'" in cache_sql
+    assert "'$._cache.cache_scope'" in cache_sql
+    assert cache_params == (
+        "keepa",
+        "production",
+        "product",
+        "US",
+        86400,
+        "a" * 64,
+        "shared",
+    )
+    assert connection.closed is True

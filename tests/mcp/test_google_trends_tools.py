@@ -7,6 +7,7 @@ from opscli.google_trends.domain.models import GoogleTrendsExportResult
 from opscli.google_trends.domain.models import GoogleTrendsScenarioResult
 from opscli.mcp.server import mcp
 from opscli.mcp.tools import google_trends as google_trends_tools
+from opscli.shared.collection_storage.result_cache import CachedCollectionResult
 
 
 def _run(coro):
@@ -119,6 +120,47 @@ def test_google_trends_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["warnings"][0]["message"] == "导出文件上传失败，已保留服务端本地文件"
     assert result["data"]["export"]["json_data"] == [
         {"date": "2026-01-01", "flashlight": 42}
+    ]
+
+
+def test_google_trends_run_returns_mysql_cache_before_auth(monkeypatch):
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["site"] == "US"
+            return CachedCollectionResult(
+                source_job_id="trends-source-job",
+                scenario="trends",
+                site="US",
+                row_count=1,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={"row_count": 1, "export": None, "warnings": []},
+                datasets=({
+                    "dataset_code": "main",
+                    "records": [{"payload": {"date": "2026-09-01", "flashlight": 42}}],
+                },),
+            )
+
+    monkeypatch.setattr(
+        google_trends_tools,
+        "_get_auth_pair",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("缓存命中不得读取认证")),
+    )
+
+    result = _run(
+        google_trends_tools._google_trends_run_impl(
+            scenario="trends",
+            geo="US",
+            params={"q": "flashlight", "data_type": "TIMESERIES"},
+            cache_repository=CacheRepository(),
+            cache_environment="production",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "trends-source-job"
+    assert result["data"]["data"] == [
+        {"date": "2026-09-01", "flashlight": 42}
     ]
 
 

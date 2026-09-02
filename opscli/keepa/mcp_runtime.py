@@ -39,6 +39,8 @@ class KeepaMcpRuntime:
 
     def __init__(self) -> None:
         self.collection_submitter: Callable[..., bool] | None = None
+        self.cache_repository: Any | None = None
+        self.cache_environment: str | None = None
         self._ready = False
 
     def register(self, mcp: Any) -> None:
@@ -71,6 +73,8 @@ class KeepaMcpRuntime:
         """注册 Keepa 沉淀 Adapter，并在关闭时逆序解除注册。"""
         source_registered = False
         self.collection_submitter = None
+        self.cache_repository = None
+        self.cache_environment = None
         self._ready = False
         try:
             from opscli.keepa.collection_storage_integration import (
@@ -95,9 +99,13 @@ class KeepaMcpRuntime:
                 )
                 source_registered = True
                 self.collection_submitter = KeepaCollectionSubmitter(storage_runtime)
+                self.cache_repository = getattr(storage_runtime, "repository", None)
+                self.cache_environment = storage_runtime.settings.data_environment
             self._ready = True
         except Exception:  # noqa: BLE001
             self.collection_submitter = None
+            self.cache_repository = None
+            self.cache_environment = None
             self._cleanup_storage(
                 storage_runtime,
                 source_registered=source_registered,
@@ -109,6 +117,8 @@ class KeepaMcpRuntime:
             yield
         finally:
             self.collection_submitter = None
+            self.cache_repository = None
+            self.cache_environment = None
             self._ready = False
             self._cleanup_storage(
                 storage_runtime,
@@ -150,6 +160,8 @@ class KeepaMcpRuntime:
             session_id=session_id,
             jwt=jwt,
             collection_submitter=self.collection_submitter,
+            cache_repository=self.cache_repository,
+            cache_environment=self.cache_environment,
         )
 
     def require_ready(self) -> None:

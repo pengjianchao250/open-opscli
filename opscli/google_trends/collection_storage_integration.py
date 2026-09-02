@@ -16,6 +16,40 @@ from opscli.shared.collection_storage.models import (
     DataEnvironment,
     ReconciliationBatch,
 )
+from opscli.shared.collection_storage.result_cache import (
+    build_cache_key,
+    safe_result_metadata,
+)
+
+GOOGLE_TRENDS_CACHE_SCOPE = "shared"
+
+
+def build_google_trends_cache_identity(
+    request: GoogleTrendsScenarioRequest,
+) -> tuple[str, str]:
+    """返回实际地域和包含 SerpApi 补充参数的稳定缓存键。"""
+    from opscli.google_trends.api.scenarios import get_scenario
+
+    geo = str(request.geo or "US").strip().upper()
+    normalized_params = get_scenario(request.scenario).build_params(
+        params=request.params,
+        geo=geo,
+    )
+    effective_geo = str(normalized_params.get("geo") or geo)
+    if request.hl and request.scenario in {"trends", "autocomplete", "trending-now"}:
+        normalized_params.setdefault("hl", request.hl.split("-", 1)[0])
+    if request.tz is not None and request.scenario == "trends":
+        normalized_params.setdefault("tz", str(request.tz))
+    cache_key = build_cache_key(
+        "google_trends",
+        {
+            "scenario": request.scenario,
+            "geo": effective_geo,
+            "params": normalized_params,
+            "export_format": request.export_format,
+        },
+    )
+    return effective_geo, cache_key
 
 
 class _StorageRuntime(Protocol):
@@ -69,6 +103,7 @@ class GoogleTrendsCollectionSubmitter:
             RuntimeError: 共享存储 Runtime 尚未启动。
         """
         environment = str(self.runtime.settings.data_environment or "").strip()
+        _effective_geo, cache_key = build_google_trends_cache_identity(request)
         submission = CollectionSubmission(
             source_system="google_trends",
             source_job_id=result.job_id,
@@ -78,6 +113,9 @@ class GoogleTrendsCollectionSubmitter:
             data_environment=cast(DataEnvironment, environment),
             ingestion_mode="live",
             result_path=result.result_path,
+            cache_key=cache_key,
+            cache_scope=GOOGLE_TRENDS_CACHE_SCOPE,
+            result_metadata=safe_result_metadata(result.to_dict()),
         )
         return self.runtime.submit(submission)
 

@@ -23,6 +23,12 @@ from opscli.keepa.api.scenarios import (
 )
 from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
+from opscli.shared.collection_storage.result_cache import (
+    CacheMode,
+    dataset_records,
+    find_cached_result,
+    mark_cache_hit,
+)
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
@@ -167,6 +173,9 @@ async def _keepa_run_impl(
     session_id: str | None = None,
     jwt: str | None = None,
     collection_submitter=None,
+    cache_repository=None,
+    cache_environment: str | None = None,
+    cache_mode: CacheMode = "prefer_cache",
 ) -> dict:
     """执行 Keepa，并允许 MCP Runtime 注入内部沉淀提交器。"""
     api_mode = _KEEPA_API_MODE.get()
@@ -182,18 +191,10 @@ async def _keepa_run_impl(
     try:
         export_format = _normalize_mcp_export_format(export_format)
         call_params["export_format"] = export_format
-        sid, jw = _get_auth_pair("ops", session_id, jwt)
-        keepa_settings = _load_keepa_settings()
-        if not sid and not keepa_settings.api_key:
-            login_result = await _try_auto_mcp_login()
-            if login_result.get("success"):
-                sid, jw = _get_auth_pair("ops", session_id, jwt)
-            if not sid:
-                login_error = (login_result.get("error") or {}).get("message")
-                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
-                if login_error:
-                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
-                raise ValueError(message)
+        from opscli.keepa.collection_storage_integration import (
+            KEEPA_CACHE_SCOPE,
+            build_keepa_cache_key,
+        )
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
@@ -210,6 +211,41 @@ async def _keepa_run_impl(
             wait=wait,
             upload_export=not api_mode,
         )
+        cached = None
+        if cache_repository is not None and cache_environment:
+            cached = await find_cached_result(
+                cache_repository,
+                source_system="keepa",
+                data_environment=cache_environment,
+                scenario=request.scenario,
+                site=(request.site or "US").upper(),
+                cache_key=build_keepa_cache_key(request),
+                cache_scope=KEEPA_CACHE_SCOPE,
+                cache_mode=cache_mode,
+            )
+        if cached is not None:
+            cached_payload = _cached_result_payload(cached, source_site_key="site")
+            public_result = (
+                _public_api_result(cached_payload)
+                if api_mode
+                else _public_result(cached_payload)
+            )
+            response = _ok(public_result)
+            mark_cache_hit()
+            return response
+
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
+        keepa_settings = _load_keepa_settings()
+        if not sid and not keepa_settings.api_key:
+            login_result = await _try_auto_mcp_login()
+            if login_result.get("success"):
+                sid, jw = _get_auth_pair("ops", session_id, jwt)
+            if not sid:
+                login_error = (login_result.get("error") or {}).get("message")
+                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
+                if login_error:
+                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
+                raise ValueError(message)
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
@@ -435,6 +471,20 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _cached_result_payload(cached, *, source_site_key: str) -> dict[str, Any]:
+    """把共享 Dataset 重建为 Keepa 既有结果合同。"""
+    metadata = dict(cached.result_metadata)
+    return {
+        "job_id": cached.source_job_id,
+        "scenario": cached.scenario,
+        source_site_key: cached.site,
+        "row_count": int(metadata.get("row_count") or cached.row_count),
+        "export": metadata.get("export"),
+        "data": dataset_records(cached),
+        "warnings": metadata.get("warnings") or [],
+    }
 
 
 def _public_api_result(payload: dict[str, Any]) -> dict[str, Any]:

@@ -55,10 +55,20 @@ def quota_wrap(fn, *, limiter=None):
         if not decision.allowed:
             return decision.error_response
 
-        from opscli.mcp.quota import reset_quota_access_context, set_quota_access_context
+        from opscli.mcp.quota import (
+            reset_quota_access_context,
+            set_quota_access_context,
+        )
+        from opscli.shared.collection_storage.result_cache import (
+            reset_cache_hit_state,
+            restore_cache_hit_state,
+            was_cache_hit,
+        )
 
         token = set_quota_access_context(getattr(decision, "access_context", None))
+        cache_token = reset_cache_hit_state()
         ticket = getattr(decision, "ticket", None)
+        cache_hit = False
         try:
             if trace_keepa:
                 _trace_keepa_instrumentation("quota_business_start tool=keepa_run")
@@ -67,12 +77,18 @@ def quota_wrap(fn, *, limiter=None):
             await quota_limiter.after_exception(ticket)
             raise
         finally:
+            cache_hit = was_cache_hit()
+            restore_cache_hit_state(cache_token)
             reset_quota_access_context(token)
 
         if isinstance(result, dict):
             if trace_keepa:
                 _trace_keepa_instrumentation("quota_after_start tool=keepa_run")
-            return await quota_limiter.after_call(ticket, result)
+            return await quota_limiter.after_call(
+                ticket,
+                result,
+                cache_hit=cache_hit,
+            )
         return result
 
     return _wrapper
