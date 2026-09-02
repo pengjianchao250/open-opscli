@@ -8923,3 +8923,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：恢复精简前的 `opscli/app/`、`tests/app/`、打包配置和 AppHub 文档；源码普通 Git commit/push 不自动回退。
 
 ---
+
+## 2026-09-02 AppHub - 接入真实 Gitea 源码推送仓库
+
+**变更原因**：AppHub 站点源码目标仓库已确定为 Gitea 仓库 `aukeys-admin/apphub`，原实现仅依赖创建站点服务响应中的 `repo_url`，无法保证源码推送到已确认的真实仓库。
+**改动点**：新增 `OPSCLI_APP_REPO_URL` 独立配置，默认使用 `http://10.1.13.143:3000/aukeys-admin/apphub.git`；创建站点服务与源码仓库配置解耦，创建响应不再强制返回 `repo_url`；`app init` 会同步绑定文件和 Git origin 到当前目标仓库；环境仓库发生变化但尚未重新初始化时，`app push` 会阻止误推并提示先执行 `opscli app init`；增加默认仓库地址锁定回归，避免后续误改成 Gitea 页面 URL 或旧 GitLab 地址。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/app -q -p no:cacheprovider` 通过，`15 passed`；`compileall` 通过；使用测试账号对 `http://10.1.13.143:3000/aukeys-admin/apphub.git` 执行只读 `git ls-remote` 成功，仓库当前为首次推送前的空仓状态（0 refs）。
+**影响范围**：仅影响 `opscli app create/init/push` 的目标源码仓库解析，不改变模板仓库、创建站点 HTTP 地址、普通 commit 和非强制 push 行为。
+**回滚方式**：回退 `APP_TARGET_REPO_URL_*` 配置、AppManager 目标仓库同步逻辑、相关测试和文档；已修改的本地 Git origin 需按项目实际仓库手动恢复。
+---
