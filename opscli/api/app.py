@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
+from opscli.api.cors import LOCAL_PROTOTYPE_ORIGINS, PRIVATE_LAN_PROTOTYPE_ORIGIN
+
 _logger = logging.getLogger("opscli.api")
 
 
@@ -210,7 +212,8 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
     # 允许本地 HTML 原型跨端口调用 REST API；生产环境仍应通过部署层收紧来源。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://127.0.0.1:4173", "http://localhost:4173"],
+        allow_origins=list(LOCAL_PROTOTYPE_ORIGINS),
+        allow_origin_regex=PRIVATE_LAN_PROTOTYPE_ORIGIN,
         allow_credentials=False,
         allow_methods=["GET", "POST", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type"],

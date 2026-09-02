@@ -4,6 +4,25 @@ import { tableCsv, tableKeys, tableValue, visibleTableRows } from "./table-utils
 const HISTORY_STORAGE_KEY = "json-lens-query-history";
 const HISTORY_LIMIT = 20;
 
+function defaultApiEndpoint(locationValue = globalThis.location) {
+  const protocol = locationValue?.protocol === "https:" ? "https:" : "http:";
+  const hostname = locationValue?.hostname || "127.0.0.1";
+  const host = hostname.includes(":") && !hostname.startsWith("[") ? "[" + hostname + "]" : hostname;
+  return protocol + "//" + host + ":8765/api/v1/keepa/run";
+}
+
+function createHistoryId(cryptoValue = globalThis.crypto) {
+  if (typeof cryptoValue?.randomUUID === "function") return cryptoValue.randomUUID();
+  if (typeof cryptoValue?.getRandomValues === "function") {
+    const bytes = cryptoValue.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+  }
+  return "history-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+}
+
 const SAMPLE_DATA = [
   {
     asin: "B0A1LAMP01",
@@ -337,7 +356,7 @@ class JsonLensApp extends HTMLElement {
       scenario: "product-search",
       site: "US",
       wait: true,
-      endpoint: "http://127.0.0.1:8765/api/v1/keepa/run",
+      endpoint: defaultApiEndpoint(),
       apiKey: "",
       params: { keyword: "flashlight" },
       paramsByScenario: { "product-search": { keyword: "flashlight" } },
@@ -498,7 +517,7 @@ class JsonLensApp extends HTMLElement {
 
   recordHistory() {
     const record = {
-      id: crypto.randomUUID(),
+      id: createHistoryId(),
       createdAt: new Date().toISOString(),
       scenario: this.state.scenario,
       site: this.state.site,

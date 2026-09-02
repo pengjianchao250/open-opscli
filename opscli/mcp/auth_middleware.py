@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from opscli.api.cors import cors_headers_for_scope
 from opscli.config import __version__
 
 # 直接使用 Starlette 官方类型，消除中间件接口与 Starlette 的类型不兼容问题
@@ -229,7 +230,7 @@ class ApiKeyAuthMiddleware:
                         )
                     )
                 # 临时故障不代表 Key 无效，返回 503 让客户端稍后重试，避免误走 OAuth。
-                await self._send_503(send, reason="auth_service_unavailable")
+                await self._send_503(scope, send, reason="auth_service_unavailable")
                 return
             if not user_info:
                 if trace_keepa:
@@ -444,7 +445,7 @@ class ApiKeyAuthMiddleware:
             raise ApiKeyVerificationUnavailable(failure_desc)
         return None
 
-    async def _send_401(self, _scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
+    async def _send_401(self, scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
         body = f'{{"error":"Unauthorized","message":"Invalid or missing API Key","reason":"{reason}"}}'
         await send({
             "type": "http.response.start",
@@ -452,14 +453,14 @@ class ApiKeyAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"www-authenticate", b'Bearer realm="opscli-mcp"'),
-            ],
+            ] + cors_headers_for_scope(scope),
         })
         await send({
             "type": "http.response.body",
             "body": body.encode("utf-8"),
         })
 
-    async def _send_503(self, send: Send, reason: str) -> None:
+    async def _send_503(self, scope: Scope, send: Send, reason: str) -> None:
         """返回鉴权依赖临时不可用，避免把未完成校验的 Key 误判为无效。"""
         body = (
             '{"error":"Service Unavailable",'
@@ -472,7 +473,7 @@ class ApiKeyAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"retry-after", b"5"),
-            ],
+            ] + cors_headers_for_scope(scope),
         })
         await send({
             "type": "http.response.body",
