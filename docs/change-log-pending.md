@@ -8313,3 +8313,19 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：还原 opscli/api/ 目录至单文件 app.py、opscli/query/commands/cli.py、opscli/query/services/manager.py、opscli/mcp/tools/helpers.py 及两个测试文件，删除 opscli/api/{routers,schemas,deps.py,errors.py}、opscli/query/services/result_errors.py、tests/api/test_query_routers.py、tests/query/test_run_payload.py。
 
 ---
+## 2026-09-01 docs - 新增 SDK 调用规范与 SDK 使用文档
+
+**变更原因**：opscli 已从"CLI 工具"扩展为"CLI + SDK"双形态（40+ 子模块），但缺少统一的 SDK 调用约束与面向使用者的 API 参考文档；且"授权使用显式调用"原则（显式发起/显式传入/显式检查）此前仅散落在显式授权中间件设计文档中，需要上升为 SDK 层的强制规范。
+
+**改动点**：
+- 新增 `docs/spec/SDK调用规范.md`：确立"授权使用显式调用"核心原则（E-1~E-5）；定义三种合法授权方式（A 本地登录态 / B 无状态显式凭证 / C 进程级显式凭证上下文）及优先级与选型决策；统一鉴权调用规范（`build_request_auth` 单点、禁止行为表）；Client/Manager 构造范式（auth_client/jwt/session_id）；平台自有凭证模块的例外清单（keepa/seller_sprite/google_trends/xiyou/sif/scrape_do/notify、app 运行时 OpsClient）；异常处理与 407 环境一致性说明；测试规范与合规自查清单；各模块鉴权速查表。
+- 新增 `docs/guide/SDK使用文档.md`：安装、快速开始、三种显式授权方式操作步骤（含 CLI 全局参数 `--session-id/--ops-jwt-token/--polaris-jwt-token`）、AuthClient 全量 API 参考（11 个方法的签名/返回/示例）、显式凭证上下文 API、业务模块 SDK 总览（走 AuthClient 与平台自有凭证两类）、QueryManager 查询示例、典型场景（脚本/定时任务/多租户服务端）、异常参考表、Token 生命周期（session 30 天、JWT 7200s/上限 86400s、刷新阈值 300s）与凭证存储、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——AuthClient 方法面与 `opscli/auth/__init__.py` 一致；ExplicitCredentials/CLI argv 注入与 `opscli/auth/context.py`、`opscli/cli.py:180-248` 一致；各模块 SDK 类与构造签名经 Explore 代理逐模块核对源码（shopify/query/shared/integration_accounts 等）；Token TTL 常量与 `opscli/auth/core/token_manager.py:54-56,123-125` 一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI 行为或测试。
+
+**回滚方式**：删除 `docs/spec/SDK调用规范.md`、`docs/guide/SDK使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
