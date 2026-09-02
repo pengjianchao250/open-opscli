@@ -26,6 +26,7 @@ _quota_wrap = quota_wrap
 _telemetry_wrap = telemetry_wrap
 _TelemetryMcpProxy = InstrumentedMcpProxy
 
+from opscli.mcp.tools import amazon_reviews as _amazon_reviews_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import asin_data as _asin_data_tools
 from opscli.mcp.tools import asin_review as _asin_review_tools
@@ -76,6 +77,7 @@ def _register_optional_amazon_tools(mcp_proxy) -> None:
 _REGISTRARS_BEFORE_KEEPA = (
     _auth_tools.register,
     _amazon_rufus_tools.register,
+    _amazon_reviews_tools.register,
     _beta_tools.register,
     _chatgpt_tools.register,
     _dashboard_tools.register,

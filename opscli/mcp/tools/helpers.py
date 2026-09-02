@@ -327,19 +327,24 @@ def _get_auth_pair(
     return session_id, jwt
 
 
-def _query_manager(jwt: str | None = None, session_id: str | None = None) -> Any:
+def _query_manager(
+    jwt: str | None = None,
+    session_id: str | None = None,
+    timeout: float | None = None,
+) -> Any:
     """创建 QueryManager 实例，支持外部传入认证凭证。
 
     Args:
         jwt:        可选，已有 JWT Token
         session_id: 可选，OAuth 授权后的 Session ID
+        timeout:    可选，查询执行接口的 HTTP 超时秒数（REST API 按请求传入）
 
     Returns:
         QueryManager 实例
     """
     from opscli.query.services.manager import QueryManager
 
-    return QueryManager(auth_client=_auth_client(), jwt=jwt, session_id=session_id)
+    return QueryManager(auth_client=_auth_client(), jwt=jwt, session_id=session_id, timeout=timeout)
 
 
 def _registry() -> Any:

@@ -87,6 +87,31 @@ def test_snapshot_metric_uses_snapshot_aggregation_policy():
     assert result["field_guidance"]["snapshot_field_count"] == 1
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询8月各部门的销售情况",
+        "所有部门的销售情况，按部门分组，不筛选具体部门",
+        "按部门汇总销售额和销量",
+        "不限部门，按部门统计销量",
+        "不按部门筛选，按部门汇总销售额",
+        "部门筛选为空，按部门统计销量",
+    ],
+)
+def test_department_grouping_is_not_ranked_as_specific_filter_value(query):
+    """guidance 不能把部门分组或否定筛选提升为具体部门筛选意图。"""
+    assert dataset_guidance._has_department_filter_value(query) is False
+
+
+@pytest.mark.parametrize(
+    "query",
+    ["查询项目二部的销量", "部门是宁波的销量", "分析泛泰克的数据"],
+)
+def test_specific_department_value_is_still_detected(query):
+    """收紧规则后仍保留编号、显式标签和组织分析三类真实筛选。"""
+    assert dataset_guidance._has_department_filter_value(query) is True
+
+
 def test_unknown_requested_field_triggers_clarify():
     """点名一个不存在字段 → clarify_required 并回显 unknown_requested_fields。"""
     adapter = MetadataAdapter(_payload())

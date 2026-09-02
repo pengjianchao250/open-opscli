@@ -16,6 +16,7 @@ import respx
 from opscli.mcp import permissions
 from opscli.mcp.context import mcp_request_ctx
 from opscli.mcp.permissions import (
+    BASE_AMAZON_REVIEW_SPEC_TOOLS,
     BASE_ALWAYS_ALLOWED_TOOLS,
     BASE_AUTH_TOOLS,
     BASE_DASHBOARD_SPEC_TOOLS,
@@ -192,6 +193,7 @@ def test_stdio_mode_fetches_allowed_tools(stdio_env):
     assert "query_simple" in first
     assert BASE_AUTH_TOOLS <= first
     assert BASE_DASHBOARD_SPEC_TOOLS <= first
+    assert BASE_AMAZON_REVIEW_SPEC_TOOLS <= first
     assert first == second
     assert route.calls.call_count == 1
 
