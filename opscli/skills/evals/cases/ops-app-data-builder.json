@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "skill": "ops-app-data-builder",
+  "evaluation_type": "static_contract",
+  "min_score": 1.0,
+  "required_skill_files": [
+    "SKILL.md",
+    "data/VERSION.json",
+    "agents/openai.yaml",
+    "references/data-layer-contract.md",
+    "references/runtime-source-routing.md"
+  ],
+  "required_skill_terms": [
+    "当前工作对象是通过 opscli app 创建或符合 `ops-app-build-spec` 的站点",
+    "$ops-dataset-query",
+    "$ops-query-wizard",
+    "$ops-keepa",
+    "$ops-seller-sprite",
+    "viewer-live",
+    "docs/ops-app/data-spec.md",
+    "不修改 `opscli/app/sdk`",
+    "不让前端直连 OPS、opscli REST、Keepa 或 SellerSprite",
+    "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议"
+  ],
+  "agent_prompts": [
+    {
+      "id": "ops-sales-site-data-layer",
+      "prompt": "当前 opscli app 站点要做销售经营页面，请验证 OPS 销售数据合同并生成 FastAPI 和前端取数层。"
+    },
+    {
+      "id": "ambiguous-inventory-site-requirement",
+      "prompt": "给当前站点加一个库存页面，具体库存口径我还没想清楚。"
+    },
+    {
+      "id": "ops-keepa-hybrid",
+      "prompt": "当前产品分析站点要组合 OPS 销售数据和 Keepa 价格历史，并把 Keepa 快照保存到 SQLite。"
+    },
+    {
+      "id": "seller-sprite-runtime-gap",
+      "prompt": "站点需要卖家精灵关键词反查数据，请把数据层和页面接口都搭好。"
+    },
+    {
+      "id": "single-query-exclusion",
+      "prompt": "查询近 7 天美国站销售额，不需要改站点。"
+    },
+    {
+      "id": "dashboard-exclusion",
+      "prompt": "在当前 Dashboard 增加销售趋势图。"
+    },
+    {
+      "id": "frontend-direct-call-remediation",
+      "prompt": "当前站点前端直接请求运营系统，请改成合规的站点后端取数。"
+    },
+    {
+      "id": "viewer-cache-boundary",
+      "prompt": "把所有访问用户查到的 OPS 数据统一缓存到站点 SQLite，方便大家共用。"
+    }
+  ],
+  "success_criteria": [
+    "只在 opscli app 站点数据层构建或改造时使用",
+    "按数据源委托现有 Skill 验证真实合同，不猜测字段和场景",
+    "OPS 默认使用 viewer-live 且不写未隔离共享 SQLite",
+    "Keepa 只通过后端正式 opscli REST 和 Secret 调用",
+    "SellerSprite 缺少正式运行时入口时只生成合同、Mock 和阻塞边界",
+    "前端只调用当前站点 /api，跨来源加工进入 FastAPI service",
+    "生成 data-spec、schema、前端类型、迁移和测试",
+    "单次查询和 Dashboard 请求不由本 Skill 处理"
+  ]
+}

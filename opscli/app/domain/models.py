@@ -33,15 +33,15 @@ class SiteBinding:
         site_name: str,
         payload: dict[str, Any],
         *,
+        repo_url: str,
         template_repo_url: str,
         template_branch: str,
     ) -> "SiteBinding":
         site_id = payload.get("site_id") or payload.get("id") or payload.get("project_id")
         slug = payload.get("slug")
-        repo_url = payload.get("repo_url")
         missing = [
             key
-            for key, value in (("site_id", site_id), ("slug", slug), ("repo_url", repo_url))
+            for key, value in (("site_id", site_id), ("slug", slug))
             if value in (None, "")
         ]
         if missing:

@@ -14,6 +14,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | 判断或改造前端 | `references/frontend-standard.md` |
 | 空项目初始化 | `references/initialization-standard.md` |
 | 新建或改造后端 | `references/backend-standard.md` |
+| 页面需要真实业务数据 | `references/data-access-standard.md` |
 | 现有项目不是目标结构 | `references/migration-standard.md` |
 | 初始化部署或首次发布 | `references/deployment-standard.md` |
 
@@ -39,6 +40,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 
 - 当前前端、后端、数据库和包管理器。
 - 关键入口、构建命令与运行方式。
+- 页面真实数据用途、现有数据源、调用路径和前端直连或凭证风险。
 - 支持结论、迁移风险和未识别项。
 - 预计新增、修改、保留的文件。
 
@@ -59,7 +61,13 @@ Next.js 仅自动迁移能保持客户端行为的项目。发现 SSR、RSC、IS
 
 ### 3. 生成迁移计划
 
-`检查`模式到此停止并返回评估文件。`初始化/迁移`模式继续生成 `docs/ops-app/migration-plan.md`，列出页面、路由、接口、数据和部署映射。大范围移动、覆盖或删除文件前必须取得用户明确确认。
+`检查`模式到此停止并返回评估文件。`初始化/迁移`模式继续生成 `docs/ops-app/migration-plan.md`，列出页面、路由、接口、数据、加工、存储和部署映射。大范围移动、覆盖或删除文件前必须取得用户明确确认。
+
+### 3.1 真实数据层路由
+
+发现页面需要 OPS、Keepa、SellerSprite 或组合数据时，读取 `references/data-access-standard.md` 并使用 `$ops-app-data-builder`。向其传递项目根目录、页面业务需求和已确认范围，由它验证真实合同并生成或改造站点数据层。
+
+本 Skill 只负责识别和委托，不选择或猜测数据集、字段、聚合、筛选、第三方场景、SDK 导入路径或运行时方法签名。`检查`模式只记录需求和风险，不执行数据层改造。
 
 ### 4. 规范化项目
 
@@ -78,6 +86,7 @@ ops-app.config
 生成或更新：
 
 - `docs/ops-app/project-spec.md`：当前技术栈、目录、命令、路由、接口、数据和约束。
+- 有真实数据需求时生成 `docs/ops-app/data-spec.md`：数据产品、真实合同、执行模式、站点 API、加工、SQLite、安全、测试和阻塞项。
 - `docs/ops-app/development.md`：本地开发、环境变量和联调方式。
 - 后端交付后生成 `docs/ops-app/deployment.md`：构建、路径、持久化、发布检查和回滚说明。
 - 根目录 `AGENTS.md`：只写简短受管区块，引用上述规范；已有文件时保留其他内容。
@@ -137,6 +146,11 @@ Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requi
 - 前后端构建、测试、健康检查及 `docker compose config` 通过。
 - 构建产物引用部署前缀，本地开发仍使用根路径。
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。
+- 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
+- `VITE_*`、源码、镜像、Compose、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
+- OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
+- Keepa 只使用正式 opscli REST 端点和后端 Secret；SellerSprite Mock 没有被当作真实线上接入。
+- `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试、构建和 Compose 配置校验，不启动容器。
 
@@ -145,6 +159,7 @@ Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requi
 - 识别证据冲突：列出冲突并询问，不猜测。
 - 迁移后行为不一致：停止后续迁移，保留失败证据，不删除旧实现。
 - 项目注册工具或 `opscli`/MCP 工具失败：按 `ops-feedback` 规范立即提交结构化反馈；认证未授权和用户取消除外。
+- 数据合同无法验证、OPS 运行时适配器缺失或 SellerSprite 没有正式入口：保留已验证部分，在 data-spec 标记阻塞，不伪造调用代码。
 - 部分写入或发布状态不确定：重新读取本地状态后停止，不重复创建项目或重复发布。
 
 ## 输出规范
