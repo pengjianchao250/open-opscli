@@ -80,9 +80,10 @@ Docker 的缓存命中取决于指令和被复制文件的内容。精确 `COPY`
 ## 后端镜像
 
 - 使用官方 Python 基础镜像和非 root 用户。
-- 依赖层与源码层分开复制，启动命令使用 exec 形式。
-- 监听 `0.0.0.0`，提供 `/health`。
+- 依赖层与源码层分开复制：先复制 `pyproject.toml`、`uv.lock` 执行 `uv sync --locked --no-install-project --no-dev`，再复制源码完成安装；启动命令使用 exec 形式。
+- 监听 `0.0.0.0`，提供 `/health`（存活，不查依赖）与 `/ready`（就绪，检查数据库）。Compose `healthcheck` 与 `depends_on.condition: service_healthy` 以 `/ready` 为准。
 - SQLite 默认路径为 `/data/app.db`，镜像内不包含数据库文件。
+- 后端代码结构、配置、迁移与测试按 `backend-standard.md` 与 `sqlite-standard.md` 执行。
 
 ## Compose
 

@@ -1,6 +1,6 @@
 ---
 name: ops-app-build-spec
-description: 用于盘点未知 Web 项目、生成项目规范，并将受支持项目规范化为 Vite + React/Vue、FastAPI + SQLite 和 Docker Compose 部署结构；遇到不支持的技术栈时停止并提示联系 IT。
+description: 用于盘点未知 Web 项目、生成项目规范，并将受支持项目规范化为 Vite + React/Vue、FastAPI + SQLite 和 Docker Compose 部署结构；提供 FastAPI + SQLite 后端规范、opscli 接入规范与项目级 CLAUDE.md/AGENTS.md 模板；遇到不支持的技术栈时停止并提示联系 IT。
 ---
 
 # OPS 应用规范与部署初始化
@@ -13,16 +13,17 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | --- | --- |
 | 判断或改造前端 | `references/frontend-standard.md` |
 | 空项目初始化 | `references/initialization-standard.md` |
-| 新建或改造后端 | `references/backend-standard.md` |
+| 新建或改造后端 | `references/backend-standard.md`、`references/sqlite-standard.md`、`references/backend-redlines.md` |
+| 后端调用 opscli SDK 或 REST | `references/opscli-integration-standard.md` |
 | 现有项目不是目标结构 | `references/migration-standard.md` |
 | 初始化部署或首次发布 | `references/deployment-standard.md` |
 
-只读取当前阶段需要的文档。进入迁移时同时读取目标端规范；进入发布时读取全部与实际服务相关的规范。
+只读取当前阶段需要的文档。进入迁移时同时读取目标端规范；进入发布时读取全部与实际服务相关的规范。后端 references 是 `assets/backend/docs/开发指南/` 全文规范的执行摘要，编写具体代码需要代码模板或完整论述时读对应全文，冲突时以全文为准。
 
 ## 必要输入
 
 - 项目根目录。
-- 操作意图：`检查`、`初始化/迁移` 或 `发布检查`。用户未明确时，根据动词判断；仍有歧义才询问。
+- 操作意图：`检查`、`初始化/迁移`、`初始化后端` 或 `发布检查`。用户未明确时，根据动词判断；仍有歧义才询问。`初始化后端` 只在用户明确要求由 Skill 新建或补齐后端时成立，默认无后端项目仍只初始化前端。
 - 应用名称。优先读取现有包名或仓库名；无法得到唯一 URL 安全名称时询问。
 - 应用 ID 仅在第一次发布时必需，初始化阶段允许为空。
 
@@ -50,8 +51,8 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | Vite + Vue 3 | 保留 Vue 3，按前端规范补齐 |
 | Next.js + React | 按迁移规范转换为 Vite + React |
 | 普通 HTML/CSS/JS | 转换为 Vite + Vue 3 + Element Plus |
-| 无后端 | 只初始化前端，等待后端人员交付 |
-| FastAPI + SQLite | 按后端规范补齐 |
+| 无后端 | 只初始化前端，等待后端人员交付；用户明确要求 `初始化后端` 时按下文“后端规范落地”执行 |
+| FastAPI + SQLite | 按“后端规范落地”补齐规范文件，再按后端规范补齐代码 |
 
 Vue 2、其他前端框架、非 FastAPI 后端和任何非 SQLite 数据库，均停止自动改造。列出识别证据、保留现状并告诉用户：`当前技术栈不在自动迁移范围，请联系 IT 人员处理。`
 
@@ -85,6 +86,19 @@ ops-app.config
 保留现有包管理器及唯一锁文件。依赖安装、服务启动和数据迁移仍遵守当前宿主的授权要求。
 
 根目录 `.dockerignore` 必须复制 Skill 的 `assets/.dockerignore`，再按实际构建输入补充；不得删掉密钥、本地数据库和依赖缓存排除项。
+
+### 4.1 后端规范落地
+
+意图为 `初始化后端`，或现有 FastAPI + SQLite 项目缺少下列文件时执行；只写入 `backend/`，不触碰前端与部署文件：
+
+1. 复制 `assets/backend/docs/开发指南/` 全部 6 份文件到 `backend/docs/开发指南/`，原样复制，不在项目内修改；已存在同名文件时用 Skill 版本覆盖并在评估文档记录。
+2. 复制 `assets/backend/AGENTS.md` 为 `backend/AGENTS.md`。已有 `backend/AGENTS.md` 时只补齐“唯一事实来源”和“配套文档”两节，保留其他内容。
+3. 复制 `assets/backend/CLAUDE.md` 为 `backend/CLAUDE.md`，并把全部 `〈…〉` 占位符替换为项目实际内容：一句话项目说明、软删除字段、口径常量清单、3.4 项目特有机制、共享契约清单、对外 ID 方案、worktree 需复制的本地配置、十二 项目特有约定。没有内容的项写“暂无”，不得留下 `〈…〉`。已有 `backend/CLAUDE.md` 时逐节合并，保留项目已有的特化内容。
+4. 在根目录 `AGENTS.md` 的受管区块追加一行：后端规范见 `backend/AGENTS.md` 与 `backend/CLAUDE.md`。
+5. 创建 `backend/docs/CHANGELOG.md`（首条记录本次规范落地）和 `backend/docs/API规范/` 目录；`openapi.json` 由应用生成，不手写。
+6. 后续编写或改造后端代码时，先读 `references/backend-standard.md`、`sqlite-standard.md`、`backend-redlines.md`，涉及 opscli 时读 `opscli-integration-standard.md`，逐条对照执行；代码风格、目录、探针、前缀、数据库路径与部署契约保持一致。
+
+规范文件落地不等于后端交付。后端交付仍以 `backend-standard.md` 验收项为准：`uv sync --locked`、静态检查、测试、`/health`、`/ready`、OpenAPI 契约与 SQLite 持久化全部通过。
 
 ### 5. 项目配置
 
@@ -149,4 +163,4 @@ Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requi
 
 ## 输出规范
 
-最终回复只包含：识别结果、支持结论、完成的规范/迁移/部署文件、验证结果、阻塞项和需要用户执行的下一步。不得把未运行的构建、容器或浏览器检查写成已通过。
+最终回复只包含：识别结果、支持结论、完成的规范/迁移/部署文件、验证结果、阻塞项和需要用户执行的下一步。不得把未运行的构建、容器或浏览器检查写成已通过；不得把规范文件落地写成后端已交付。

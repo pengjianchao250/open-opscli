@@ -52,7 +52,8 @@
 ## 后端初始化
 
 - 没有后端时只初始化前端，记录后端交接要求并等待其他人员实现；不得创建 FastAPI 占位服务、假健康检查或占位业务表。
-- 已有 FastAPI + SQLite 时按规范补齐，不重建数据库。
+- 用户明确要求由 Skill 新建后端时，按 SKILL.md“后端规范落地”章节先落地规范文档与 `backend/CLAUDE.md`，再按 `backend-standard.md` 编写真实后端。
+- 已有 FastAPI + SQLite 时按 `backend-standard.md`、`sqlite-standard.md` 补齐，不重建数据库；缺少 `backend/CLAUDE.md`、`AGENTS.md` 或 `docs/开发指南/` 时同样按“后端规范落地”补齐。
 - 其他后端或任何非 SQLite 数据库均停止；只生成评估和交接清单。
 
 ## 不支持范围

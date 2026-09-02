@@ -8345,3 +8345,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除 `docs/spec/API调用规范.md`、`docs/guide/API使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
 
 ---
+
+## 2026-09-02 skills - ops-app-build-spec 按后端规范文档补齐 FastAPI + SQLite 规范与项目模板
+
+**变更原因**：`ops-app-build-spec` 的 `references/backend-standard.md` 只有 65 行，目录结构（`app/db/`、`/api` 前缀）与团队新发布的《FastAPI后端开发通用规范》《SQLite数据库使用通用规范》《AI开发通用规范 CLAUDE.md/AGENTS.md》以及 OPSCLI SDK/API 规范不一致，AI 按 Skill 初始化后端时缺少可执行的规范依据与项目级 CLAUDE.md 模板。用户中途收窄范围：不做脚手架脚本与代码模板，只沉淀规范文档。
+**改动点**：
+- 重写 `references/backend-standard.md`（技术栈、目录、分层事务、API、异常日志、配置、定时任务、迁移、测试、容器、验收）；新增 `references/sqlite-standard.md`（路径、PRAGMA、`BEGIN IMMEDIATE`、单写者、Alembic batch、类型命名、备份恢复、安全）、`references/backend-redlines.md`（合并 26 条铁律 + FastAPI 附录 D + SQLite 硬规则，统一编号 62 条）、`references/opscli-integration-standard.md`（方式 B 每请求 Manager、cookie `polarisUserToken` / `X-Session-Id` 鉴权依赖、异常映射、REST 重试纪律）。
+- 小改 `initialization-standard.md`（`/health` 存活 + `/ready` 就绪、前缀 `/api/v1`、指向后端规范落地）、`deployment-standard.md`（`uv sync --locked --no-dev`、healthcheck 用 `/ready`）、`migration-standard.md`。
+- 新增 `assets/backend/`：`AGENTS.md`（路径固定，追加 4 份 OPSCLI 文档）、`CLAUDE.md`（基于用户提供模板做 SQLite/uv/ops-app 特化，新增 4.8 opscli 接入，保留项目特化 `〈…〉` 占位符）、`docs/开发指南/` 6 份全文（FastAPI、SQLite 来自用户文档；4 份 OPSCLI 文档复制自仓库 `docs/spec`、`docs/guide`，仅改写头部相对链接）。
+- `SKILL.md`：description、Reference 路由、`初始化后端` 意图、新增 4.1 后端规范落地流程、输出规范补充。
+- `data/VERSION.json` v0.0.1 → v0.0.2；`tests/skills/test_ops_app_build_spec_skill.py` 同步版本断言并新增 3 个测试（后端 references 契约、模板占位符状态、OPSCLI 文档漂移守卫）。
+**验证结果**：`pytest --noconftest tests/skills/test_ops_app_build_spec_skill.py`：12 passed（本机 .venv，Python 3.13）。`validate_release_manifest()` 返回空；`SkillsManager.install` 冒烟确认 `assets/backend/` 6 份文档与 2 份模板随安装复制。注意：`tests/skills/conftest.py` 依赖的 `ops-dataset-query/scripts/enum_cache.py` 在 release 分支不存在，整个 `tests/skills` 目录在不加 `--noconftest` 时全部 ERROR，为预存问题，与本次改动无关。长期记忆 MCP 本会话连接失败，未写入 MCP，恢复后补录。
+**影响范围**：仅 `ops-app-build-spec` Skill 内容与其契约测试；不涉及 opscli 运行时代码、打包配置与其他 Skill。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-app-build-spec tests/skills/test_ops_app_build_spec_skill.py` 并删除新增的 `assets/backend/` 与 3 份新 references。
+---

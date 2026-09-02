@@ -24,7 +24,7 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.1"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.2"}
 
 
 def test_ops_app_build_spec_routes_supported_migrations_and_stops_others():
@@ -253,7 +253,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.1"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.2"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
@@ -269,3 +269,133 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
     assert (installed / "assets" / "ops-app-config.mjs").exists()
     assert (installed / "assets" / "ops-app-config.d.mts").exists()
     assert (installed / "assets" / "render-nginx-config.mjs").exists()
+    assert (installed / "references" / "sqlite-standard.md").exists()
+    assert (installed / "references" / "backend-redlines.md").exists()
+    assert (installed / "references" / "opscli-integration-standard.md").exists()
+    assert (installed / "assets" / "backend" / "AGENTS.md").exists()
+    assert (installed / "assets" / "backend" / "CLAUDE.md").exists()
+    assert len(list((installed / "assets" / "backend" / "docs" / "开发指南").glob("*.md"))) == 6
+
+
+BACKEND_DOCS = (
+    "FastAPI后端开发通用规范.md",
+    "SQLite数据库使用通用规范.md",
+    "OPSCLI_SDK调用规范.md",
+    "OPSCLI_SDK使用文档.md",
+    "OPSCLI_API调用规范.md",
+    "OPSCLI_API使用文档.md",
+)
+
+
+def test_ops_app_build_spec_backend_references_follow_spec_contracts():
+    """后端 references 必须覆盖新规范的关键契约并与部署合同一致。"""
+    backend = _read("references/backend-standard.md")
+    sqlite = _read("references/sqlite-standard.md")
+    redlines = _read("references/backend-redlines.md")
+    integration = _read("references/opscli-integration-standard.md")
+    skill = _read("SKILL.md")
+
+    for required in (
+        "/api/v1",
+        "/health",
+        "/ready",
+        "cli.py",
+        "uv.lock",
+        "pydantic-settings",
+        "SCHEDULED_JOBS",
+        "max_instances=1",
+        "python cli.py jobs run",
+        "response_model",
+        "docs/API规范/openapi.json",
+        "docs/开发指南/FastAPI后端开发通用规范.md",
+        "include_object",
+        "render_as_batch",
+        "/data/app.db",
+    ):
+        assert required in backend, required
+    assert "loguru" not in backend
+    assert "app/db/" not in backend
+
+    for required in (
+        "journal_mode",
+        "foreign_keys",
+        "busy_timeout",
+        "BEGIN IMMEDIATE",
+        "sqlite+aiosqlite",
+        "NullPool",
+        "render_as_batch",
+        "VACUUM INTO",
+        "backup(",
+        "INTEGER",
+        "只能有一个写事务",
+    ):
+        assert required in sqlite, required
+
+    assert "唯一入口" in redlines
+    assert "--autogenerate" in redlines
+    assert "alembic_version" in redlines
+    assert "polarisUserToken" in integration
+    assert "X-Session-Id" in integration
+    assert "get_me(session_id=" in integration
+    assert "set_explicit_credentials" in integration
+    assert "userEmail" in integration
+
+    for reference in (
+        "references/sqlite-standard.md",
+        "references/backend-redlines.md",
+        "references/opscli-integration-standard.md",
+    ):
+        assert reference in skill
+    assert "后端规范落地" in skill
+    assert "assets/backend/CLAUDE.md" in skill
+    assert "不得把规范文件落地写成后端已交付" in skill
+
+
+def test_ops_app_build_spec_backend_templates_are_filled_or_marked():
+    """AGENTS 模板路径必须已固定，CLAUDE 模板只保留项目特化占位符。"""
+    agents = _read("assets/backend/AGENTS.md")
+    claude = _read("assets/backend/CLAUDE.md")
+
+    assert "〈" not in agents
+    for doc in BACKEND_DOCS:
+        assert f"docs/开发指南/{doc}" in agents, doc
+    assert "docs/API规范/openapi.json" in agents
+
+    assert "loguru" not in claude
+    assert "backend/" in claude
+    assert "uv run uvicorn app.main:app" in claude
+    assert "sqlite+aiosqlite" in claude
+    assert "BEGIN IMMEDIATE" in claude
+    assert "render_as_batch" in claude
+    assert "### 4.8 opscli 接入" in claude
+    assert "polarisUserToken" in claude
+    assert "docs/CHANGELOG.md" in claude
+    assert "〈docs/" not in claude
+    assert "Numeric/DECIMAL" not in claude
+    # 项目特化占位符必须保留，供落地时填写
+    for placeholder in (
+        "〈一句话说明这个服务是做什么的〉",
+        "### 3.4 〈项目特有的关键机制〉",
+        "## 十二、〈项目特有约定〉",
+    ):
+        assert placeholder in claude, placeholder
+
+    for doc in BACKEND_DOCS:
+        assert (SKILL_DIR / "assets" / "backend" / "docs" / "开发指南" / doc).is_file(), doc
+
+
+def test_ops_app_build_spec_bundled_opscli_docs_match_repo_docs():
+    """打包进 Skill 的 OPSCLI 文档除头部链接改写外必须与仓库文档一致，防止漂移。"""
+    pairs = {
+        "OPSCLI_SDK调用规范.md": ROOT / "docs" / "spec" / "SDK调用规范.md",
+        "OPSCLI_SDK使用文档.md": ROOT / "docs" / "guide" / "SDK使用文档.md",
+        "OPSCLI_API调用规范.md": ROOT / "docs" / "spec" / "API调用规范.md",
+        "OPSCLI_API使用文档.md": ROOT / "docs" / "guide" / "API使用文档.md",
+    }
+    # 头部 6 行是文档引言，其中相对链接被改写为同目录文件名
+    header_lines = 6
+    for bundled_name, source in pairs.items():
+        bundled = (SKILL_DIR / "assets" / "backend" / "docs" / "开发指南" / bundled_name).read_text(encoding="utf-8")
+        original = source.read_text(encoding="utf-8")
+        assert bundled.splitlines()[header_lines:] == original.splitlines()[header_lines:], bundled_name
+        assert "](../" not in bundled, bundled_name

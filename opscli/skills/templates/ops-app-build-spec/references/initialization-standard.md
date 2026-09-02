@@ -83,12 +83,14 @@ Vite 开发服务器必须监听 `0.0.0.0`，端口使用 Vite 默认或自动�
 
 - 服务名：`backend`。
 - 容器端口：`8000`。
-- 健康检查：`/health`。
-- 业务 API 前缀：`/api`。
+- 健康检查：`/health` 为存活探针，不查外部依赖；`/ready` 为就绪探针，Compose `healthcheck` 使用它。
+- 业务 API 前缀：`/api/v1`（Nginx 只代理 `/api/`，`/api/v1` 包含在内）。
 - 启动命令、`pyproject.toml`、`uv.lock`、Dockerfile target 和数据库配置由后端人员提供。
 - 若使用 SQLite，数据库路径固定为 `/data/app.db`，卷由 Compose 管理。
 
 后端交付前，项目状态为“前端初始化完成，等待后端交付”，不得宣称 Compose、Dockerfile 或生产发布已完成。不得用空 FastAPI 容器、假健康检查或占位数据库绕过交接。
+
+用户明确要求由 Skill 新建或补齐后端时，按 SKILL.md“后端规范落地”章节执行：先落地 `backend/docs/开发指南/`、`backend/AGENTS.md`、`backend/CLAUDE.md`，再按 `backend-standard.md`、`sqlite-standard.md` 与 `backend-redlines.md` 编写真实后端，交接边界中的端口、探针、前缀和数据库路径保持不变。
 
 ## 初始化验收
 
