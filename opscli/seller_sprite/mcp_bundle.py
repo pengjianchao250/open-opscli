@@ -127,6 +127,14 @@ def require_ready() -> None:
         raise SellerSpriteQueueUnavailableError()
 
 
+def get_result_cache_context() -> tuple[Any | None, str | None]:
+    """返回 Collector 生命周期注入的内部缓存仓储和数据环境。"""
+    return (
+        _MODULE_STATE.get("_cache_repository"),
+        _MODULE_STATE.get("_cache_environment"),
+    )
+
+
 @asynccontextmanager
 async def lifespan(
     storage_runtime: CollectionStorageRuntime,
@@ -162,6 +170,15 @@ async def lifespan(
         # 由调度器按租约恢复过期任务，避免服务启动时抢占其他实例的运行任务。
         await scheduler.start()
         _set_module_state("ready", queue="ok", scheduler="running")
+        if storage_runtime.settings.enabled:
+            _MODULE_STATE["_cache_repository"] = getattr(
+                storage_runtime,
+                "repository",
+                None,
+            )
+            _MODULE_STATE["_cache_environment"] = (
+                storage_runtime.settings.data_environment
+            )
     except Exception as exc:
         error_code, error_class = _startup_error_fields(exc)
         _set_module_state(

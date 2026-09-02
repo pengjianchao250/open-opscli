@@ -1202,6 +1202,40 @@ def test_store_persists_listing_task_id_only_for_current_generation(tmp_path: Pa
     assert store.get_listing_analysis_task_id("listing-job") == "remote-current"
 
 
+def test_store_creates_owned_cached_success_without_collection_event(tmp_path: Path):
+    from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore
+
+    store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+    request = _request(job_id="current-user-cache-job")
+
+    status = store.enqueue_cached_owned_mcp_run(
+        request=request,
+        queue_scope="seller_sprite",
+        root_dir=tmp_path / "current-user-cache-job",
+        user_email="current@example.com",
+        source_job_id="source-cache-job",
+        row_count=2,
+        export_payload={
+            "format": "xlsx",
+            "filename": "source-cache-job.xlsx",
+            "url": "https://files.example.com/source-cache-job.xlsx",
+        },
+    )
+
+    assert status["job_id"] == "current-user-cache-job"
+    assert status["state"] == "succeeded"
+    assert status["row_count"] == 2
+    assert status["result_path"] is None
+    owner = store.get_mcp_run("current-user-cache-job")
+    assert owner["user_email"] == "current@example.com"
+    assert owner["mode"] == "cache"
+    assert owner["result_export_job_id"] == "source-cache-job"
+    assert store.list_succeeded_for_collection_storage(
+        cutover_at="2000-01-01T00:00:00+00:00",
+        cursor=0,
+    ) == []
+
+
 def test_store_claim_initializes_progress_and_rejects_stale_progress_update(tmp_path: Path):
     """领取任务应写入 claimed 时间线，旧代际不得推进当前进度。"""
     from opscli.seller_sprite.services.task_queue_store import SellerSpriteTaskQueueStore

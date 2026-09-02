@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-01 MCP采集 - 增加共享 MySQL 结果缓存基础合同
+
+**变更原因**：Keepa、Google Trends 和 SellerSprite 的成功结果已经沉淀到共享 MySQL，相同业务请求仍会重复调用上游并消耗额度，需要提供默认一天的新鲜结果复用能力。
+**改动点**：新增稳定请求缓存键、内部缓存模式、环境开关、默认 86400 秒新鲜度、缓存命中上下文和安全结果摘要；扩展 CollectionSubmission 以携带缓存键、作用域及结果摘要；MySQL Repository 按来源、数据环境、场景、站点、精确缓存键、作用域和 persistence_completed_at 新鲜窗口读取完整 Dataset，并允许 SellerSprite 只读取命中元数据；Keepa 与 Google Trends 提交器按实际上游规范化参数生成共享作用域缓存索引并在认证前读缓存；Collector 生命周期向 SellerSprite Tool 注入缓存仓储，SellerSprite 按共享池或专属账号散列隔离缓存作用域，成功提交和对账均写入缓存索引，缓存命中时在队列与 MCP 所有权表中原子创建当前用户的新 succeeded 任务且不发布 Worker 成功事件；统一 quota 切面仅在缓存响应成功构造后退回预占次数且不增加失败数；三类私有执行入口支持 live 模式绕过缓存，公开 Tool 与 Skill 参数不变，不新增 MySQL Schema。
+**验证结果**：目标模块 compileall 与 git diff --check 已通过；缓存、公开 Tool 和 quota 专项 172 passed，SellerSprite 队列/调度/Parser 96 passed，Google Trends 完整目录 85 passed，Collector MCP 完整目录 13 passed，Keepa 存储链路 9 passed。测试覆盖缓存键、JSON 信封、默认 TTL、live 绕过、MySQL 故障回退、精确新鲜结果查询、Keepa/Google Trends 认证前命中、SellerSprite 当前用户合成任务不产生沉淀事件、专属账号作用域散列隔离、合成任务失败不误标缓存命中、公开 Tool 不暴露 cache_mode，以及缓存配额退款不增加失败数；Ruff 已修正本次新增 import 块，并对新增缓存代码通过 E9/F63/F7/F82 高置信检查，全量旧文件规则仍存在历史 lint 存量。
+**影响范围**：共享采集 Outbox 提交合同和内部缓存辅助模块；公开 MCP Tool 参数与 Skill 不变。
+**回滚方式**：回退共享缓存模块、CollectionSubmission 扩展及本条记录即可；当前不涉及数据库结构迁移。
+
+---
+
 ## 2026-08-31 Keepa - 支持从共享 MySQL 查询历史任务和明细
 
 **变更原因**：Keepa 成功结果已经沉淀到共享 MySQL，但公共 MCP 只能从服务端本地任务目录按 `job_id` 读取，无法复用数据库中的历史任务，也无法按原查询条件检索。

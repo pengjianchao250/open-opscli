@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioResult
 from opscli.mcp.tools import keepa as keepa_tools
+from opscli.shared.collection_storage.result_cache import CachedCollectionResult
 
 
 def _run(coro):
@@ -189,6 +190,57 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
         for warning in result["data"]["warnings"]
     )
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
+
+
+def test_keepa_run_returns_mysql_cache_before_auth(monkeypatch):
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["data_environment"] == "production"
+            assert kwargs["cache_scope"] == "shared"
+            return CachedCollectionResult(
+                source_job_id="keepa-source-job",
+                scenario="product",
+                site="US",
+                row_count=1,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={
+                    "row_count": 1,
+                    "export": {
+                        "filename": "keepa-source-job.xlsx",
+                        "format": "xlsx",
+                        "url": "https://files.example.com/keepa-source-job.xlsx",
+                    },
+                    "warnings": [],
+                },
+                datasets=({
+                    "dataset_code": "main",
+                    "records": [{"payload": {"asin": "B0088PUEPK", "title": "Cached"}}],
+                },),
+            )
+
+    monkeypatch.setattr(
+        keepa_tools,
+        "_get_auth_pair",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("缓存命中不得读取认证")),
+    )
+
+    result = _run(
+        keepa_tools._keepa_run_impl(
+            scenario="product",
+            site="US",
+            params={"asin": "B0088PUEPK"},
+            cache_repository=CacheRepository(),
+            cache_environment="production",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "keepa-source-job"
+    assert result["data"]["data_preview"] == [
+        {"asin": "B0088PUEPK", "title": "Cached"}
+    ]
+    assert result["data"]["export"]["url"].startswith("https://")
 
 
 def test_keepa_run_auto_logins_when_session_missing(monkeypatch):

@@ -322,6 +322,34 @@ class SellerSpriteTaskScheduler:
             await self.start()
         return status
 
+    async def enqueue_cached_owned_mcp_run(
+        self,
+        request: SellerSpriteScenarioRequest,
+        *,
+        mcp_user_email: str,
+        source_job_id: str,
+        row_count: int,
+        export_payload: dict[str, Any] | None,
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
+        requested_account_id: str | None = None,
+        requested_account_key: str | None = None,
+    ) -> dict[str, Any]:
+        """为当前用户创建不进入 Worker 的缓存成功任务。"""
+        normalized = self._normalize_request(request)
+        get_scenario(normalized.scenario)
+        return self.store.enqueue_cached_owned_mcp_run(
+            request=normalized,
+            queue_scope=QUEUE_SCOPE,
+            root_dir=self._build_root_dir(normalized),
+            user_email=mcp_user_email,
+            source_job_id=source_job_id,
+            row_count=row_count,
+            export_payload=export_payload,
+            account_route=account_route,
+            requested_account_id=requested_account_id,
+            requested_account_key=requested_account_key,
+        )
+
     async def start(self) -> None:
         """恢复过期任务并启动后台调度循环。"""
         async with self._start_lock:
@@ -1814,6 +1842,7 @@ class SellerSpriteTaskScheduler:
             status = self.store.get_status(result.job_id)
             if status.get("state") != "succeeded":
                 return
+            status.update(self.store.get_task_account_binding(result.job_id))
             self.collection_submitter(request=request, result=result, status=status)
         except Exception:
             logger.exception(

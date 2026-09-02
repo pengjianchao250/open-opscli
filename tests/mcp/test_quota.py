@@ -51,6 +51,12 @@ class MemoryQuotaStore:
         self.failures += 1
         return self._snapshot(policy)
 
+    async def refund_cached_call(self, policy, identity):
+        if self.unavailable:
+            raise QuotaUnavailableError("sqlite down")
+        self.calls = max(self.calls - 1, 0)
+        return self._snapshot(policy)
+
     def _snapshot(self, policy):
         return {
             "service": policy.service,
@@ -218,6 +224,28 @@ def test_limiter_refunds_failed_call_and_records_failure():
     assert response["quota"]["failures"] == 1
 
 
+def test_limiter_refunds_cached_call_without_recording_failure():
+    store = MemoryQuotaStore()
+    limiter = QuotaLimiter(
+        store=store,
+        identity_resolver=lambda: "user:user-1",
+    )
+
+    decision = _run(limiter.before_call("seller_sprite_run"))
+    response = _run(
+        limiter.after_call(
+            decision.ticket,
+            {"success": True, "data": {"state": "succeeded"}},
+            cache_hit=True,
+        )
+    )
+
+    assert store.calls == 0
+    assert store.failures == 0
+    assert response["quota"]["used"] == 0
+    assert response["quota"]["failures"] == 0
+
+
 def test_limiter_reads_policy_from_sqlite_on_each_call(tmp_path):
     db_path = tmp_path / "quota.sqlite3"
     store = SQLiteQuotaStore(db_path)
@@ -364,6 +392,23 @@ def test_sqlite_quota_store_refunds_failed_call_and_records_failure(tmp_path):
     assert row[1] == 1
     assert row[2] == "user@example.com"
     assert "user@example.com" not in row[3]
+
+
+def test_sqlite_quota_store_refunds_cached_call_without_failure(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    policy = QuotaPolicy(
+        tool_name="seller_sprite_run",
+        service="seller_sprite",
+        daily_limit=5,
+    )
+    store = SQLiteQuotaStore(db_path)
+
+    allowed, _ = _run(store.reserve(policy, "email:user@example.com"))
+    snapshot = _run(store.refund_cached_call(policy, "email:user@example.com"))
+
+    assert allowed is True
+    assert snapshot["used"] == 0
+    assert snapshot["failures"] == 0
 
 
 def test_sqlite_quota_store_applies_bonus_daily_limit(tmp_path):

@@ -9,6 +9,7 @@ from typing import Any
 
 from opscli.shared.collection_storage.config import MySqlSettings
 from opscli.shared.collection_storage.models import ParsedCollection
+from opscli.shared.collection_storage.result_cache import CachedCollectionResult
 from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
 
 
@@ -156,6 +157,96 @@ class MySqlCollectionRepository:
             record_limit=record_limit,
             record_offset=record_offset,
         )["runs"]
+
+    def find_cached_result(
+        self,
+        *,
+        source_system: str,
+        data_environment: str,
+        scenario: str,
+        site: str,
+        cache_key: str,
+        cache_scope: str,
+        ttl_seconds: int,
+        include_datasets: bool = True,
+    ) -> CachedCollectionResult | None:
+        """精确读取仍在新鲜窗口内的最近成功采集结果。"""
+        connection = self._connect_factory()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, source_job_id, scenario, site, request_params,
+                           source_row_count, completed_at, persistence_completed_at
+                    FROM collection_runs
+                    WHERE source_system = %s
+                      AND data_environment = %s
+                      AND scenario = %s
+                      AND site = %s
+                      AND collection_status = 'succeeded'
+                      AND persistence_completed_at IS NOT NULL
+                      AND persistence_completed_at >= TIMESTAMPADD(
+                          SECOND, -%s, UTC_TIMESTAMP(6)
+                      )
+                      AND JSON_UNQUOTE(JSON_EXTRACT(
+                          request_params, '$._cache.cache_key'
+                      )) = %s
+                      AND JSON_UNQUOTE(JSON_EXTRACT(
+                          request_params, '$._cache.cache_scope'
+                      )) = %s
+                    ORDER BY persistence_completed_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        source_system,
+                        data_environment,
+                        scenario,
+                        site,
+                        max(1, int(ttl_seconds)),
+                        cache_key,
+                        cache_scope,
+                    ),
+                )
+                run = cursor.fetchone()
+                if not run:
+                    return None
+                request_params = _json_load_value(run.get("request_params"))
+                cache_payload = (
+                    request_params.get("_cache")
+                    if isinstance(request_params, dict)
+                    else None
+                )
+                result_metadata = (
+                    cache_payload.get("result")
+                    if isinstance(cache_payload, dict)
+                    else None
+                )
+                datasets = (
+                    self._cached_datasets(
+                        cursor,
+                        run_id=int(run.get("id") or 0),
+                    )
+                    if include_datasets
+                    else []
+                )
+                return CachedCollectionResult(
+                    source_job_id=str(run.get("source_job_id") or ""),
+                    scenario=str(run.get("scenario") or ""),
+                    site=str(run.get("site") or ""),
+                    row_count=int(run.get("source_row_count") or 0),
+                    completed_at=_db_datetime_value(run.get("completed_at")),
+                    persistence_completed_at=_db_datetime_value(
+                        run.get("persistence_completed_at")
+                    ),
+                    result_metadata=(
+                        dict(result_metadata)
+                        if isinstance(result_metadata, dict)
+                        else {}
+                    ),
+                    datasets=tuple(datasets),
+                )
+        finally:
+            connection.close()
 
     def query_history_page(
         self,
@@ -356,6 +447,49 @@ class MySqlCollectionRepository:
                         0,
                         total - record_offset - len(records),
                     ),
+                }
+            )
+        return datasets
+
+    @staticmethod
+    def _cached_datasets(cursor: Any, *, run_id: int) -> list[dict[str, Any]]:
+        """读取缓存命中任务的全部 Dataset 和记录。"""
+        cursor.execute(
+            """
+            SELECT id, dataset_code, dataset_name, source_sheet, columns_json, row_count
+            FROM collection_datasets
+            WHERE run_id = %s
+            ORDER BY id
+            """,
+            (run_id,),
+        )
+        datasets: list[dict[str, Any]] = []
+        for dataset in cursor.fetchall() or []:
+            cursor.execute(
+                """
+                SELECT source_row_number, business_key, payload
+                FROM collection_records
+                WHERE dataset_id = %s
+                ORDER BY source_row_number
+                """,
+                (int(dataset.get("id") or 0),),
+            )
+            records = [
+                {
+                    "row_number": int(row.get("source_row_number") or 0),
+                    "business_key": row.get("business_key"),
+                    "payload": _json_load_value(row.get("payload")),
+                }
+                for row in (cursor.fetchall() or [])
+            ]
+            datasets.append(
+                {
+                    "dataset_code": dataset.get("dataset_code"),
+                    "dataset_name": dataset.get("dataset_name"),
+                    "source_sheet": dataset.get("source_sheet"),
+                    "columns": _json_load_value(dataset.get("columns_json")) or [],
+                    "row_count": int(dataset.get("row_count") or 0),
+                    "records": records,
                 }
             )
         return datasets

@@ -113,6 +113,13 @@ class QuotaStore(Protocol):
     async def refund_failure(self, policy: QuotaPolicy, identity: str) -> dict[str, Any]:
         """业务失败后退回调用次数并增加失败次数。"""
 
+    async def refund_cached_call(
+        self,
+        policy: QuotaPolicy,
+        identity: str,
+    ) -> dict[str, Any]:
+        """缓存命中后退回调用次数，不增加失败次数。"""
+
     async def snapshot(self, policy: QuotaPolicy, identity: str) -> dict[str, Any]:
         """读取当前身份的额度快照，不占用次数。"""
 
@@ -241,6 +248,55 @@ class SQLiteQuotaStore:
                 )
                 conn.commit()
                 return _snapshot(policy.service, effective_limit, calls, failures, now)
+        except QuotaUnavailableError:
+            raise
+        except Exception as exc:
+            raise QuotaUnavailableError(str(exc)) from exc
+
+    async def refund_cached_call(
+        self,
+        policy: QuotaPolicy,
+        identity: str,
+    ) -> dict[str, Any]:
+        """缓存命中后退回一次 calls，并保留 failures。"""
+        now = datetime.now(UTC)
+        identity_type, identity_key, identity_hash = _identity_public_parts(identity)
+        try:
+            with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                effective_limit = self._effective_daily_limit(
+                    conn,
+                    policy,
+                    identity_type,
+                    identity_key,
+                )
+                calls, failures = self._read_or_create_record(
+                    conn,
+                    policy,
+                    identity_type,
+                    identity_key,
+                    identity_hash,
+                    now,
+                )
+                calls = max(calls - 1, 0)
+                self._update_record(
+                    conn,
+                    policy,
+                    identity_key,
+                    identity_hash,
+                    calls,
+                    failures,
+                    effective_limit,
+                    now,
+                )
+                conn.commit()
+                return _snapshot(
+                    policy.service,
+                    effective_limit,
+                    calls,
+                    failures,
+                    now,
+                )
         except QuotaUnavailableError:
             raise
         except Exception as exc:
@@ -596,13 +652,28 @@ class QuotaLimiter:
             access_context=access_context,
         )
 
-    async def after_call(self, ticket: QuotaTicket | None, response: dict[str, Any]) -> dict[str, Any]:
+    async def after_call(
+        self,
+        ticket: QuotaTicket | None,
+        response: dict[str, Any],
+        *,
+        cache_hit: bool = False,
+    ) -> dict[str, Any]:
         """真实工具返回后结算限额并补充 quota 元信息。"""
         if not ticket:
             return response
 
         snapshot = ticket.snapshot
-        if ticket.metered and response.get("success") is False:
+        if ticket.metered and cache_hit:
+            try:
+                snapshot = await self.store.refund_cached_call(
+                    ticket.policy,
+                    ticket.identity,
+                )
+            except QuotaUnavailableError:
+                # 缓存退款失败不覆盖成功结果，保留调用前占用时快照供排查。
+                snapshot = ticket.snapshot
+        elif ticket.metered and response.get("success") is False:
             try:
                 snapshot = await self.store.refund_failure(ticket.policy, ticket.identity)
             except QuotaUnavailableError:

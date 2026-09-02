@@ -13,6 +13,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from opscli.shared.collection_storage.result_cache import (
+    CacheMode,
+    dataset_records,
+    find_cached_result,
+    mark_cache_hit,
+)
 from opscli.skills.packaging import get_builtin_templates_dir
 
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
@@ -92,9 +98,11 @@ async def _google_trends_run_impl(
     session_id: str | None = None,
     jwt: str | None = None,
     collection_submitter=None,
+    cache_repository=None,
+    cache_environment: str | None = None,
+    cache_mode: CacheMode = "prefer_cache",
 ) -> dict:
     """执行 Google Trends，并允许 MCP Runtime 注入内部沉淀提交器。"""
-    sid, jw = _get_auth_pair("ops", session_id, jwt)
     call_params = {
         "scenario": scenario,
         "geo": geo,
@@ -104,6 +112,10 @@ async def _google_trends_run_impl(
         "tz": tz,
     }
     try:
+        from opscli.google_trends.collection_storage_integration import (
+            GOOGLE_TRENDS_CACHE_SCOPE,
+            build_google_trends_cache_identity,
+        )
         from opscli.google_trends.domain.models import GoogleTrendsScenarioRequest
         from opscli.google_trends.services import GoogleTrendsApiManager
 
@@ -118,6 +130,25 @@ async def _google_trends_run_impl(
             hl=hl,
             tz=tz,
         )
+        effective_geo, cache_key = build_google_trends_cache_identity(request)
+        cached = None
+        if cache_repository is not None and cache_environment:
+            cached = await find_cached_result(
+                cache_repository,
+                source_system="google_trends",
+                data_environment=cache_environment,
+                scenario=request.scenario,
+                site=effective_geo,
+                cache_key=cache_key,
+                cache_scope=GOOGLE_TRENDS_CACHE_SCOPE,
+                cache_mode=cache_mode,
+            )
+        if cached is not None:
+            response = _ok(_public_result(_cached_result_payload(cached)))
+            mark_cache_hit()
+            return response
+
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
@@ -169,6 +200,20 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         _sanitize_public_export(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _cached_result_payload(cached) -> dict[str, Any]:
+    """把共享 Dataset 重建为 Google Trends 既有结果合同。"""
+    metadata = dict(cached.result_metadata)
+    return {
+        "job_id": cached.source_job_id,
+        "scenario": cached.scenario,
+        "geo": cached.site,
+        "row_count": int(metadata.get("row_count") or cached.row_count),
+        "export": metadata.get("export"),
+        "data": dataset_records(cached),
+        "warnings": metadata.get("warnings") or [],
+    }
 
 
 def _sanitize_public_export(public: dict[str, Any]) -> None:
