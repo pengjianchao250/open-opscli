@@ -24,7 +24,7 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.3"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.4"}
 
 
 def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
@@ -85,6 +85,9 @@ def test_ops_app_build_spec_enforces_template_first_initialization():
     initialization = _read("references/initialization-standard.md")
     skill = _read("SKILL.md")
 
+    for intent in ("新建站点", "新建看板", "从零开发运营数据应用"):
+        assert intent in skill
+
     for required in (
         "模板先行初始化规范",
         'opscli app create "<站点显示名称>" --path <项目根目录>',
@@ -104,7 +107,9 @@ def test_ops_app_build_spec_enforces_template_first_initialization():
 
     assert "references/initialization-standard.md" in skill
     assert "### 0. 新项目模板门禁" in skill
+    assert "本 Skill 作为统一建站入口" in skill
     assert "template_applied=true" in skill
+    assert "不进入后续写文件步骤" in skill
     assert "pnpm create vue@latest frontend" not in initialization
 
 
@@ -273,7 +278,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.3"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.4"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

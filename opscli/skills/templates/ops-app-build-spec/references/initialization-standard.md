@@ -1,114 +1,108 @@
-# 空项目初始化规范
+# 模板先行初始化规范
 
-本规范适用于空目录、只有 README/需求文档的仓库，或没有可识别前端入口的项目。初始化目标是生成最小、真实、可发布的 Vue 3 + FastAPI 单应用；不得虚构业务接口、业务数据或权限结果。
+本规范适用于用户通过自然语言表达新建站点、新建看板或从零开发运营数据应用，并要求
+使用 `opscli app` 创建独立 AppHub 站点的场景。
 
-## 仓库前置
+本 Skill 是自然语言建站的统一入口，但全新项目不由它自行生成脚手架。阶段 0 只编排应用
+创建和模板拉取；AppHub 当前环境配置的标准模板是唯一基线，模板成功后同一个 Skill 才进入
+项目盘点、业务开发和发布检查。
 
-- 目标目录必须是独立 Git 仓库根目录，不能嵌套在其他仓库中。
-- 初始化分支固定为 `main`。
-- 根目录放置 `app.yaml`，它是唯一发布声明。
-- 不创建提交、不配置远端、不执行发布，除非用户明确要求。
+## 1. 新建意图
 
-## 默认技术栈
+以下表达进入全新项目流程：
 
-```text
-pnpm + create-vue
-Vue 3
-Vite
-Element Plus
-Axios
-Vue Router
-Pinia
-JavaScript
-FastAPI
-SQLite
-```
+- 帮我用 `opscli app` 创建销售看板；
+- 新建一个库存站点；
+- 从零开发一个运营数据应用；
+- 搭建一个需要真实业务数据的独立看板站点。
 
-使用初始化当日 registry 的稳定版本，前端实际解析版本写入 `package.json` 和 `pnpm-lock.yaml`。Python 普通依赖写入根目录 `requirements.txt` 并使用 `==` 精确锁定；平台 SDK 使用真实包 `aukeys-opscli>=0.0.129`，构建阶段必须验证 `import opscli.app`。若索引尚无兼容正式版本，停止发布并联系 IT。
+如果用户是在修改当前 Dashboard、执行一次性数据分析或接入已有源码项目，不使用全新模板
+流程。存在歧义时只确认是否创建独立 AppHub 站点、站点显示名称和目标目录。
 
-不得创建本地 `opscli/` 包、同名模块或路径依赖。网络不可用时停止依赖初始化并说明原因，不猜测版本号。
+## 2. 目录前置
 
-不默认加入 TypeScript、E2E 或额外代码质量工具。已有项目已经使用这些工具时保留；用户单独要求时再加入。
+全新项目目标目录必须不存在、为空，或只包含 `.git` 与 `.opscli`。在模板完成前：
 
-## 初始化结构
+- 不得提前写入 `assessment.md`、README、需求文档、前端、后端、配置或部署文件；
+- 需求内容保留在 Codex 会话或目标目录之外；
+- 不运行 `pnpm create vue`、`create-vue` 或其他脚手架；
+- 不复制 Skill assets 形成替代项目。
 
-```text
-frontend/
-├── public/
-├── src/
-│   ├── api/http.js
-│   ├── assets/
-│   ├── components/
-│   ├── router/index.js
-│   ├── stores/app.js
-│   ├── styles/index.css
-│   ├── views/HomeView.vue
-│   ├── App.vue
-│   └── main.js
-├── index.html
-├── package.json
-├── pnpm-lock.yaml
-└── vite.config.js
-backend/
-├── __init__.py
-└── app.py
-migrations/
-tests/
-docs/ops-app/
-app.yaml
-requirements.txt
-nixpacks.toml
-Dockerfile
-.dockerignore
-.gitignore
-.data/                  # 本地运行生成，必须忽略
-```
+目录中已经存在业务源码时进入“已有项目边界”，不得为了拉模板删除或覆盖用户文件。
 
-只创建实际使用的目录。`HomeView.vue` 至少展示一个 Element Plus 组件、加载状态、空状态和错误状态，不写虚假业务数据。`backend/app.py` 只负责平台健康路由、已有业务 API 和 Vite 产物托管；没有业务需求时不创建占位 CRUD。
+## 3. 固定命令顺序
 
-## 前端初始化
-
-```bash
-pnpm create vue@latest frontend
-pnpm --dir frontend install
-pnpm --dir frontend add element-plus axios vue-router pinia
-```
-
-`create-vue` 选项固定为：TypeScript=No、Vue Router=Yes、Pinia=Yes；其他测试和代码质量工具按项目需要选择。
-
-- `frontend/vite.config.js` 固定 `base: './'`，生产输出 `frontend/dist`。
-- `frontend/src/api/http.js` 创建统一 Axios 实例，基础地址使用 `./api`。
-- WebSocket 从当前页面 URL 派生相对 `./ws`，不拼接平台公开前缀。
-- `frontend/src/router/index.js` 使用 `import.meta.env.BASE_URL`，并验证 SPA 刷新。
-- Vite 开发服务器可监听 `0.0.0.0`；启动前仍需遵守宿主授权。
-
-## 根级配置
-
-从 Skill 复制并按项目调整：
-
-- `assets/app.yaml`
-- `assets/nixpacks.toml`
-- `assets/Dockerfile`
-- `assets/requirements.txt`
-- `assets/.dockerignore`
-
-`app.yaml` 保持 `runtime: fastapi`、`entrypoint: backend/app.py`。若使用 SQLite，保持 `services.sqlite: true`；本地默认使用已忽略的 `.data/app.db`，生产通过 `APP_DB_PATH=/data/app.db` 使用平台数据盘。
-
-## 初始化验收
+由 Codex 依次执行：
 
 ```text
-pnpm --dir frontend install --frozen-lockfile
-pnpm --dir frontend run build
-python -m pytest tests -q
+opscli app create "<站点显示名称>" --path <项目根目录>
+opscli app init <项目根目录>
 ```
 
-验收项目：
+`app create` 负责调用 AppHub 创建应用、`apps/{slug}` 独立仓库和 `main`，并把
+非敏感 binding 写入 `.opscli/app.json`。该阶段不生成业务项目文件。
 
-- Git 根独立，当前分支为 `main`。
-- `app.yaml` 能通过当前 schema，且入口文件存在。
-- Vite 产物使用相对静态资源 URL。
-- FastAPI 能托管根页面、静态资源和 SPA fallback。
-- `/__apphub_healthz` 返回 200，且不依赖业务数据。
-- 相对 API 与 WebSocket 请求在 `root-v1` 下可用。
-- `requirements.txt` 的普通依赖精确锁定，真实 `aukeys-opscli` 已通过兼容模块导入检查。
-- 没有生成真实密钥、本地数据库文件或虚假业务实现。
+`app init` 负责获取最新 `git-config`、配置本地凭据和 `origin/main`，再从
+`OPSCLI_APP_TEMPLATE_REPO` 的 `OPSCLI_APP_TEMPLATE_BRANCH` 匿名拉取模板。模板 fetch
+必须禁用 Git credential helper，不能把站点仓库 Token 发送到模板仓库。
+
+首次初始化必须确认返回 `template_applied=true`。如果失败或返回未应用模板，停止项目文件
+写入并处理目录、模板仓库、分支或 Git 错误，不自行生成替代脚手架。
+
+## 4. 模板是唯一基线
+
+模板应提供可继续开发的前端、后端、测试、SQLite、应用配置和发布基线。模板拉取成功后，
+本 Skill 重新执行只读盘点，再决定需要补齐或修改的内容。
+
+全新项目不得运行 `pnpm create vue`。不得使用初始化前的空目录结论生成第二套
+`frontend/`、`backend/`、`app.yaml` 或部署结构。
+
+模板缺少 `ops-app.config`、应用入口或其他必需结构时，记录模板问题并停止全新项目自动
+初始化；不得静默复制 Skill assets 掩盖模板缺陷。
+
+## 5. 项目身份同步
+
+模板完成后读取：
+
+- `.opscli/app.json.app_id`；
+- `.opscli/app.json.slug`。
+
+分别写入或校验：
+
+- `ops-app.config.appId`；
+- `ops-app.config.appName`。
+
+站点仓库完整 `repo_url` 继续以 AppHub 返回值为事实源。应用代码不得自行派生平台身份、
+公开 URL 或 `apps/{slug}` 仓库地址，也不在首次发布阶段重新注册应用。
+
+## 6. 模板后开发
+
+模板和身份校验完成后：
+
+1. 重新盘点前端、后端、数据库、测试和部署文件；
+2. 生成 `docs/ops-app/assessment.md` 和其他项目规范；
+3. 需要真实数据时调用 `$ops-app-data-builder`；
+4. Codex 在模板上完成业务开发和验证；
+5. 本 Skill 执行发布检查；
+6. 用户授权后执行 `opscli app push <root> --message <summary>`。
+
+## 7. 已有项目边界
+
+已有源码项目不套用全新模板流程：
+
+1. 先盘点并按支持范围规范化现有项目；
+2. 未绑定 AppHub 时执行 `opscli app create`；
+3. 执行 `opscli app init` 配置 binding、凭据、`origin` 和 `main`；
+4. `app init` 必须跳过模板并保留用户代码；
+5. 发布检查通过后执行 `opscli app push`。
+
+不得为了复用模板删除、移动或覆盖已有项目文件。
+
+## 8. 验收
+
+- 全新项目先完成 `create → init`，再写入项目文件；
+- 首次模板初始化返回 `template_applied=true`；
+- 模板是唯一基线，没有运行第二套脚手架；
+- binding 与 `ops-app.config` 的应用身份一致；
+- 已有源码项目不会被模板覆盖；
+- 最终发布仍通过 `opscli app push` 完成。

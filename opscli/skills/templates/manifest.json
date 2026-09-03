@@ -261,7 +261,7 @@
       "binary": false,
       "binary_full": true,
       "tier": "internal",
-      "reason": "内部 Web 应用规范、受支持技术栈迁移和 Compose 部署初始化流程"
+      "reason": "内部 Web 应用模板先行开发、受支持技术栈迁移、真实数据路由、发布检查流程和 Compose 部署初始化流程"
     },
     "ops-skills-sync": {
       "source": true,

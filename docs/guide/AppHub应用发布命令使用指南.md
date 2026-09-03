@@ -12,7 +12,7 @@ opscli app push
 
 平台遵循“一站点一仓库”：每个站点对应 AppHub 管理的独立 Gitea 仓库 `apps/{slug}`。站点仓库地址不在 opscli 中全局配置，也不由 opscli 根据 Gitea 根地址自行拼接；`POST /apps` 和 `GET /apps/{slug}/git-config` 返回的完整 `repo_url` 是仓库事实源。
 
-全新项目遵循“模板先行”：Codex 和 `ops-app-build-spec` 先确认站点名称与目标目录，但在 `opscli app init` 成功前不得向目录写入 assessment、README、前后端或部署文件。标准顺序为 `app create → app init → 拉取模板 → Skill 基于模板开发 → app push`。已有源码项目继续跳过模板，禁止覆盖用户代码。
+全新项目遵循“模板先行”：Codex 识别用户的新建站点、新建看板或从零开发运营数据应用意图后，加载 `ops-app-build-spec` 作为统一入口。Skill 阶段 0 确认站点名称和空目标目录并编排 `app create → app init`；模板成功后，同一个 Skill 才进入正式盘点和开发，最后执行 `app push`。`app init` 成功前不得向目录写入 assessment、README、前后端或部署文件。已有源码项目继续跳过模板，禁止覆盖用户代码。
 
 ## 2. AppHub 与模板环境配置
 
@@ -35,7 +35,7 @@ OPSCLI_APPHUB_URL
 http://10.1.13.143:8080/api/apphub/v1
 ```
 
-配置优先级从高到低为：进程环境变量、项目根目录 `.env`、`~/.config/opscli/config.ini`、代码默认值。
+配置优先级与 OPS、Polaris 等现有配置保持一致：项目根目录 `.env`、`~/.config/opscli/config.ini`、代码默认值。
 
 建站模板使用两个独立配置：
 
@@ -44,7 +44,7 @@ OPSCLI_APP_TEMPLATE_REPO
 OPSCLI_APP_TEMPLATE_BRANCH
 ```
 
-当前预发布与生产暂定使用同一组地址，部署时仍应按环境成组注入：
+当前预发布与生产暂定使用同一组地址，各环境应在自身配置中成组维护：
 
 ```env
 OPSCLI_APPHUB_URL=http://10.1.13.143:8080
@@ -92,7 +92,7 @@ opscli app init .\sales-daily-dashboard
 6. 模板仓库和分支仍分别通过 `OPSCLI_APP_TEMPLATE_REPO`、`OPSCLI_APP_TEMPLATE_BRANCH` 配置，它们不是站点源码推送仓库。
 7. 模板 fetch 会显式禁用 Git credential helper，以匿名方式拉取公开模板，避免向模板仓库发送站点仓库 token。
 8. 空项目成功应用模板后，binding 才更新为当前环境的模板地址和分支；已有源码继续保留原模板元数据。
-9. 模板完成后，`ops-app-build-spec` 才重新盘点项目并生成 assessment、项目规范和业务代码；不得再运行另一套脚手架覆盖模板。
+9. 模板完成后，作为入口的 `ops-app-build-spec` 从阶段 0 进入正式阶段，重新盘点项目并生成 assessment、项目规范和业务代码；不得再运行另一套脚手架覆盖模板。
 
 ## 5. 推送并发布
 
