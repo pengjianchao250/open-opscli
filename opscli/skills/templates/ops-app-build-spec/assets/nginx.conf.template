@@ -35,18 +35,22 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
-    location = /ops-app/${OPS_APP_ID}/${OPS_APP_NAME} {
-        return 308 /ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/;
-    }
-
-    # Vite base 生成带部署前缀的 URL；dist 内容位于 root，查找文件前必须剥离前缀。
-    location ^~ /ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/ {
-        rewrite ^/ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/(.*)$ /$1 last;
+    # Traefik 已将公开路径剥离为固定根路径 /ws。
+    location = /ws {
+        proxy_pass $backend_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_buffering off;
     }
 
     # SPA 入口每次返回最新内容，并禁止外层 Nginx 代理缓存。
     location = /index.html {
-        internal;
         try_files /index.html =404;
         etag off;
         if_modified_since off;
@@ -56,9 +60,8 @@ server {
         add_header X-Accel-Expires "0" always;
     }
 
-    # 其他静态文件允许本地保存，但每次通过 ETag 或 Last-Modified 协商验证。
+    # Traefik 已剥离公开前缀，根页面和静态资源直接从容器根路径访问。
     location / {
-        internal;
         try_files $uri $uri/ /index.html;
         etag on;
         if_modified_since exact;
