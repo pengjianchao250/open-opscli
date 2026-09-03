@@ -8322,3 +8322,63 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：恢复精简前的 `opscli/app/`、`tests/app/`、打包配置和 AppHub 文档；源码普通 Git commit/push 不自动回退。
 
 ---
+
+## 2026-09-01 query/api - 取数模块全量 CLI 指令支持 REST API，api 模块重构为 FastAPI 规范结构
+
+**变更原因**：产品化场景需要通过 HTTP API 调用取数能力，此前 REST 外壳只开放了 query/flow 一个端点；同时 api/app.py 单文件已承载合同、路由、业务转换混排，需要按 FastAPI 规范拆分目录。
+
+**改动点**：
+- `opscli/api/` 重构为规范结构：`app.py`（应用工厂，create_api_app/wrap_mcp_app 入口签名不变）、`routers/`（health/query/keepa 三个 APIRouter）、`schemas/`（query/keepa 请求合同，extra="forbid"）、`deps.py`（require_authenticated_user/build_query_manager 共享依赖）、`errors.py`（统一 success/data/error 信封、ApiAuthError/RequestValidationError 异常处理器、domain 异常→400/404/503/502 状态码映射）
+- 新增 12 个 query 端点对齐全部 CLI 指令：plan/flow/preferences/metadata/catalog/intents/match/run/build/simple + charts/{uuid} 三件套；文件传参（--payload/--query-file）改 JSON 请求体，落盘参数（--result-file/--save-result/--output）与 skills_dir 等服务端本地路径不进 REST 合同
+- `QueryManager` 新增 `run_payload()`（dict 直执行，run() 委托之）；`_inner_result_error`/`_field_level_reasons` 从 commands/cli.py 下沉为 `services/result_errors.py`（CLI 与 REST 共用）；`mcp/tools/helpers._query_manager` 增加可选 timeout 参数
+- keepa 场景表保持公开端点，keepa/run 与全部 query 端点要求已验证账号（401 统一信封）
+- 测试：更新 tests/api/test_app.py 打桩位置；新增 tests/api/test_query_routers.py（39 项：鉴权边界/合同转换/错误映射/内层失败语义）与 tests/query/test_run_payload.py（6 项）
+
+**验证结果**：`uv run pytest tests/api tests/query tests/mcp`（排除 4 个 HEAD 上既有损坏用例：test_flow_parity、test_shopify_tools 收集失败，test_pure_units 缺 intent_rules.json、test_seller_sprite_proxy 遥测断言——已用 git stash 验证与本次改动无关）757 passed；OpenAPI 自检确认 15 路径（12 query + 2 keepa + health）；wrap_mcp_app 组合后 health/MCP 路由鉴权行为不变。E2E 验收：① 真实 uvicorn 进程（API Key 中间件全栈）18/19 通过，唯一未过项为脚本断言错误（未认证请求 401 先于 body 校验 422，属正确的安全顺序，422 合同已由已认证单测覆盖）；② stdio 模式真实后端链路 8/8 通过——preferences/metadata/catalog/intents 真实远端调用、simple 真实执行返回 5 行（totalCount=4542）、后端业务错误（缺时间范围）正确映射为 502 统一信封、CLI 与 API 同源 parity 一致。
+
+**影响范围**：REST API 面（新增端点）；CLI 输出行为不变（simple 的内层错误提取逻辑仅迁移位置）；MCP 工具不受影响（_query_manager 新参数向后兼容）；既有调用 create_api_app/wrap_mcp_app 的 opscli-mcp 启动链无需改动。
+
+**回滚方式**：还原 opscli/api/ 目录至单文件 app.py、opscli/query/commands/cli.py、opscli/query/services/manager.py、opscli/mcp/tools/helpers.py 及两个测试文件，删除 opscli/api/{routers,schemas,deps.py,errors.py}、opscli/query/services/result_errors.py、tests/api/test_query_routers.py、tests/query/test_run_payload.py。
+
+---
+## 2026-09-01 docs - 新增 SDK 调用规范与 SDK 使用文档
+
+**变更原因**：opscli 已从"CLI 工具"扩展为"CLI + SDK"双形态（40+ 子模块），但缺少统一的 SDK 调用约束与面向使用者的 API 参考文档；且"授权使用显式调用"原则（显式发起/显式传入/显式检查）此前仅散落在显式授权中间件设计文档中，需要上升为 SDK 层的强制规范。
+
+**改动点**：
+- 新增 `docs/spec/SDK调用规范.md`：确立"授权使用显式调用"核心原则（E-1~E-5）；定义三种合法授权方式（A 本地登录态 / B 无状态显式凭证 / C 进程级显式凭证上下文）及优先级与选型决策；统一鉴权调用规范（`build_request_auth` 单点、禁止行为表）；Client/Manager 构造范式（auth_client/jwt/session_id）；平台自有凭证模块的例外清单（keepa/seller_sprite/google_trends/xiyou/sif/scrape_do/notify、app 运行时 OpsClient）；异常处理与 407 环境一致性说明；测试规范与合规自查清单；各模块鉴权速查表。
+- 新增 `docs/guide/SDK使用文档.md`：安装、快速开始、三种显式授权方式操作步骤（含 CLI 全局参数 `--session-id/--ops-jwt-token/--polaris-jwt-token`）、AuthClient 全量 API 参考（11 个方法的签名/返回/示例）、显式凭证上下文 API、业务模块 SDK 总览（走 AuthClient 与平台自有凭证两类）、QueryManager 查询示例、典型场景（脚本/定时任务/多租户服务端）、异常参考表、Token 生命周期（session 30 天、JWT 7200s/上限 86400s、刷新阈值 300s）与凭证存储、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——AuthClient 方法面与 `opscli/auth/__init__.py` 一致；ExplicitCredentials/CLI argv 注入与 `opscli/auth/context.py`、`opscli/cli.py:180-248` 一致；各模块 SDK 类与构造签名经 Explore 代理逐模块核对源码（shopify/query/shared/integration_accounts 等）；Token TTL 常量与 `opscli/auth/core/token_manager.py:54-56,123-125` 一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI 行为或测试。
+
+**回滚方式**：删除 `docs/spec/SDK调用规范.md`、`docs/guide/SDK使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
+## 2026-09-02 docs - 新增 API 调用规范与 API 使用文档
+
+**变更原因**：0.0.129 起 opscli-mcp 以服务端形态对外提供 REST API（query 全量指令 + keepa 场景），网站与业务系统将直接通过 HTTP 集成，但缺少统一的 API 调用约束与端点参考文档；同时需要把"授权显式调用"原则延伸到 API 形态（身份只来自传输层 API Key，不接受请求体自报凭证）。
+
+**改动点**：
+- 新增 `docs/spec/API调用规范.md`：服务形态边界（opscli-mcp 组合服务 / stdio 无 REST / collector 系列纯 MCP / create_api_app 裸应用须外挂鉴权）；鉴权规范 A-Auth（API Key 三种传递位置、固定 Key 与远程校验两模式、401/503 语义、身份不自报、隔离目录、重试纪律）；统一信封规范 A-Envelope（success/data/error、query/simple 内层 200+success=false 特例、状态码语义表、错误信息脱敏边界）；请求合同规范 A-Contract（extra=forbid、无本地路径参数、结构化优先、timeout≤300/limit≤500000 显式上限、分页纪律 P-1/P-2、keepa 幂等 job_id 与额度治理）；安全规范 A-Security（Key 只显示一次、HTTPS、日志脱敏、CORS 约束、权限白名单）；部署与扩展规范 A-Deploy（schemas/ 合同先行、MCP 与 REST 同源、错误映射、版本演进纪律）；客户端合规自查清单与端点鉴权速查表。
+- 新增 `docs/guide/API使用文档.md`：服务简介与 15 端点概貌、单用户/多用户两种启动方式、业务账号准备（MCP auth 登录）、快速开始（curl flow 示例）、鉴权说明、统一信封与错误码速查、全部端点逐一参考（参数表 + curl/JSON 示例：plan/flow/preferences/metadata/catalog/intents-match/run/build/simple/charts 三件套/keepa 两组）、4 个典型对接流程（一句话取数、三步精确查询、图表直连、错误处理伪代码）、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——15 个端点与 `opscli/api/routers/{query,keepa,health}.py` 一一对应；请求合同字段/上限与 `opscli/api/schemas/{query,keepa}.py` 一致（MAX_QUERY_LIMIT=500000、MAX_QUERY_TIMEOUT=300、extra="forbid"）；鉴权中间件行为与 `opscli/mcp/auth_middleware.py` 一致（三种 Key 提取顺序、固定/远程两模式、401/503 响应体、60s 新鲜期/300s 宽限）；启动参数与 `opscli/mcp/app_factory.py run_mcp_app` 一致（--transport/--host/--port/--auth-verify-url，默认端口 8765，collector_mcp 无 app_wrapper 故无 REST）；身份解析与 `opscli/mcp/tools/helpers.py` 一致（remote transport 邮箱 / fixed 隔离缓存 / stdio 共享默认存储）；用户管理与 `opscli/mcp/cli.py`（user list/add/remove/rotate，Key 只显示一次）一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI/API 行为或测试。
+
+**回滚方式**：删除 `docs/spec/API调用规范.md`、`docs/guide/API使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
+
+## 2026-09-02 AppHub - 接入真实 Gitea 源码推送仓库
+
+**变更原因**：AppHub 站点源码目标仓库已确定为 Gitea 仓库 `aukeys-admin/apphub`，原实现仅依赖创建站点服务响应中的 `repo_url`，无法保证源码推送到已确认的真实仓库。
+**改动点**：新增 `OPSCLI_APP_REPO_URL` 独立配置，默认使用 `http://10.1.13.143:3000/aukeys-admin/apphub.git`；创建站点服务与源码仓库配置解耦，创建响应不再强制返回 `repo_url`；`app init` 会同步绑定文件和 Git origin 到当前目标仓库；环境仓库发生变化但尚未重新初始化时，`app push` 会阻止误推并提示先执行 `opscli app init`；增加默认仓库地址锁定回归，避免后续误改成 Gitea 页面 URL 或旧 GitLab 地址。
+**验证结果**：`.venv\Scripts\python.exe -m pytest tests/app -q -p no:cacheprovider` 通过，`15 passed`；`compileall` 通过；使用测试账号对 `http://10.1.13.143:3000/aukeys-admin/apphub.git` 执行只读 `git ls-remote` 成功，仓库当前为首次推送前的空仓状态（0 refs）。
+**影响范围**：仅影响 `opscli app create/init/push` 的目标源码仓库解析，不改变模板仓库、创建站点 HTTP 地址、普通 commit 和非强制 push 行为。
+**回滚方式**：回退 `APP_TARGET_REPO_URL_*` 配置、AppManager 目标仓库同步逻辑、相关测试和文档；已修改的本地 Git origin 需按项目实际仓库手动恢复。
+---

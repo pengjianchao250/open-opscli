@@ -13,6 +13,7 @@ import typer
 from opscli.query.domain.exceptions import InvalidPayloadError, QueryError
 from opscli.query.services.manager import QueryManager
 from opscli.query.services.planner import run_flow, run_plan
+from opscli.query.services.result_errors import extract_inner_result_error
 
 app = typer.Typer(help="数据查询入口，统一转发远端查询请求")
 
@@ -584,56 +585,6 @@ def build(
     _emit(payload, pretty)
 
 
-def _inner_result_error(result: object) -> dict | None:
-    """提取取数服务内层的失败信息（HTTP 200 + 外层 code=200 但内层 success=false）。
-
-    为什么必须单独处理：服务端有两层错误信封。外层 Laravel 信封的字段级原因在
-    error_details 里（已由 shared.http 透传），但取数引擎自己的校验失败是包在
-    成功的外层信封里返回的——`data.result.success=false`，真正的字段级原因埋在
-    `data.result.error.details.errors[]`。此前 CLI 对这种情况照样输出 success=true，
-    调用方看到「命令成功」却拿不到数据，只能自己去翻嵌套结构。
-    实测形态：limit 超上限时返回
-    `{"code":"VALIDATION_ERROR","message":"请求参数验证失败",
-      "details":{"errors":[{"field":"body.query.limit",
-                            "message":"Input should be less than or equal to 500000"}]}}`
-    """
-    if not isinstance(result, dict):
-        return None
-    inner = result.get("result")
-    if not isinstance(inner, dict) or inner.get("success") is not False:
-        return None
-    error = inner.get("error")
-    if not isinstance(error, dict):
-        error = {}
-    message = str(error.get("message") or "取数服务返回失败但未说明原因").strip()
-    reasons = _field_level_reasons(error.get("details"))
-    return {
-        "code": str(error.get("code") or "QUERY_SERVICE_ERROR"),
-        "message": f"{message}（{reasons}）" if reasons else message,
-        "details": error.get("details"),
-    }
-
-
-def _field_level_reasons(details: object) -> str:
-    """把取数引擎的 details.errors[] 压成一行可读原因。"""
-    if not isinstance(details, dict):
-        return ""
-    errors = details.get("errors")
-    if not isinstance(errors, (list, tuple)):
-        return ""
-    parts = []
-    for item in errors[:6]:
-        if not isinstance(item, dict):
-            continue
-        field = str(item.get("field") or "").strip()
-        text = str(item.get("message") or "").strip()
-        if field and text:
-            parts.append(f"{field}: {text}")
-        elif text:
-            parts.append(text)
-    return "；".join(parts)
-
-
 def _inline_json_hint(raw: str) -> str:
     """内联 JSON 解析失败时给出可直接照做的替代命令。
 
@@ -768,7 +719,7 @@ def simple(
         # 调用方看到「命令成功」却拿不到数据。此处提取为顶层 error 并以非零码退出。
         # 注意：不能在 try 内 emit 后 raise typer.Exit——typer.Exit 继承自 RuntimeError，
         # 会被下面的 except Exception 接住而重复输出一遍。
-        inner_error = _inner_result_error(result) if run else None
+        inner_error = extract_inner_result_error(result) if run else None
         payload = {
             "success": not inner_error,
             "command": command_name,

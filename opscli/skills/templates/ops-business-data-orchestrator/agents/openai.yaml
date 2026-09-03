@@ -1,7 +1,0 @@
-interface:
-  display_name: "业务取数编排"
-  short_description: "在 Codex 中拆解复合取数需求，编排查询 Skill 并汇总真实结果"
-  default_prompt: "使用 $ops-business-data-orchestrator 为后续业务使用准备数据；不要读取、分析或修改 Dashboard 页面。"
-
-policy:
-  allow_implicit_invocation: true

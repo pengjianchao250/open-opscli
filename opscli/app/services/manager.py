@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 
 from opscli.app.domain.constants import (
+    APP_TARGET_REPO_URL_DEFAULT,
+    APP_TARGET_REPO_URL_ENV,
     APP_TEMPLATE_BRANCH_DEFAULT,
     APP_TEMPLATE_BRANCH_ENV,
     APP_TEMPLATE_REPO_DEFAULT,
@@ -26,10 +29,21 @@ class AppManager:
         client: AppHubClient | None = None,
         binding_store: BindingStore | None = None,
         git_service: GitService | None = None,
+        target_repo_url: str | None = None,
     ) -> None:
         self.client = client or AppHubClient()
         self.binding_store = binding_store or BindingStore()
         self.git_service = git_service or GitService()
+        self.target_repo_url = (
+            target_repo_url
+            or os.getenv(APP_TARGET_REPO_URL_ENV)
+            or APP_TARGET_REPO_URL_DEFAULT
+        ).strip()
+        if not self.target_repo_url:
+            raise AppProjectError(
+                "APP-REPO-CONFIG",
+                f"目标源码仓库不能为空，请检查 {APP_TARGET_REPO_URL_ENV}。",
+            )
 
     def close(self) -> None:
         self.client.close()
@@ -53,6 +67,7 @@ class AppManager:
         binding = SiteBinding.from_create_response(
             normalized_name,
             payload,
+            repo_url=self.target_repo_url,
             template_repo_url=os.getenv(APP_TEMPLATE_REPO_ENV) or APP_TEMPLATE_REPO_DEFAULT,
             template_branch=os.getenv(APP_TEMPLATE_BRANCH_ENV) or APP_TEMPLATE_BRANCH_DEFAULT,
         )
@@ -74,6 +89,9 @@ class AppManager:
     def init_git(self, path: str | Path = ".") -> dict:
         root = self.binding_store.prepare_root(path)
         binding = self.binding_store.load(root)
+        if binding.repo_url != self.target_repo_url:
+            binding = replace(binding, repo_url=self.target_repo_url)
+            self.binding_store.save(root, binding)
         source_exists = self.binding_store.has_source_files(root)
         result = self.git_service.initialize(
             root,
@@ -104,6 +122,12 @@ class AppManager:
             raise AppProjectError("APP-ARGUMENT", f"修改总结最长 {MESSAGE_MAX_LENGTH} 字符。")
         root = self.binding_store.prepare_root(path)
         binding = self.binding_store.load(root)
+        if binding.repo_url != self.target_repo_url:
+            raise AppProjectError(
+                "APP-REPO-CONFIG-CHANGED",
+                "站点绑定的目标仓库与当前配置不一致。",
+                fix_hint="请先执行 opscli app init 更新 Git origin，再重新 push。",
+            )
         result = self.git_service.push_all(root, repo_url=binding.repo_url, message=summary)
         return {
             "site_id": binding.site_id,
