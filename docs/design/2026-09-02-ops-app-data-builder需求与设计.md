@@ -1,16 +1,17 @@
 # OPS 站点数据层构建能力需求与设计
 
 > 文档日期：2026-09-02  
-> 文档状态：已确认并实施  
+> 更新日期：2026-09-03  
+> 文档状态：已确认并按标准模板 QueryGateway 优化  
 > 新 Skill：`ops-app-data-builder`  
 > 原 Skill：`ops-business-data-orchestrator`  
-> 本轮约束：允许修改 `ops-app-build-spec` 并重写、改名数据 Skill；暂不修改 `opscli/app/sdk`
+> 本轮约束：`ops-app-data-builder` 只支持通过 `opscli app create/init` 拉取的标准模板，不兼容旧数据层项目；OPS 运行时统一复用模板 QueryGateway。
 
 ## 1. 业务背景
 
 当前业务流程为：用户安装 `aukeys-opscli`，通过 `opscli app create` 创建站点，通过 `opscli app init` 拉取包含前端、FastAPI 后端和 SQLite 能力的完整模板，在 Codex 中按 `ops-app-build-spec` 搭建业务页面，最后通过 `opscli app push` 推送并自动部署。
 
-全新项目必须严格按上述顺序执行：Codex 识别新建站点、新建看板或从零开发运营数据应用意图后，加载 `ops-app-build-spec` 作为统一入口；Skill 阶段 0 只确认站点名称和空目标目录并编排 `opscli app create/init`，模板拉取成功后同一个 Skill 才进入正式盘点和开发。`ops-app-data-builder` 只在模板初始化完成后进入，已有源码项目不套用模板。
+项目必须严格按上述顺序执行：Codex 识别新建站点、新建看板或从零开发运营数据应用意图后，加载 `ops-app-build-spec` 作为统一入口；Skill 阶段 0 只确认站点名称和空目标目录并编排 `opscli app create/init`，模板拉取成功后同一个 Skill 才进入正式盘点和开发。`ops-app-data-builder` 只在标准模板初始化完成后进入；旧数据层项目不进入本 Skill，需重新按标准流程初始化。
 
 当前建站、Git 和发布主流程已经存在，本次要补齐的是：
 
@@ -20,7 +21,7 @@
 
 | 数据源 | 典型数据 | 当前正式能力 |
 | --- | --- | --- |
-| OPS 公司运营系统 | 销售、库存、广告、流量、利润、权限数据 | REST query、Query SDK、应用运行时 `OpsClient` |
+| OPS 公司运营系统 | 销售、库存、广告、流量、利润、权限数据 | 标准模板 `QueryGateway`；线上 `ViewerQueryGateway`，显式 Session 使用 `OpsQueryGateway`，本地开发使用 `LocalQueryGateway` |
 | Keepa | 商品、价格历史、Offer、Buy Box、排名 | 正式 REST `/api/v1/keepa/*`、Keepa SDK/CLI |
 | SellerSprite | 关键词、反查词、转化率、竞品流量 | SellerSprite SDK/CLI；当前正式 REST 文档未声明 SellerSprite 端点 |
 
@@ -43,7 +44,7 @@
 2. FastAPI 路由只处理协议、参数和响应，业务编排进入 service，数据库访问进入 repository/db。
 3. SQLite 只允许单写实例，不适合多实例共享、高并发持续写入或高频任务队列。
 4. opscli REST API 当前正式覆盖 query 和 Keepa。
-5. 应用运行时 `OpsClient` 从请求头 `x-ops-token` 取得身份，不走普通 `AuthClient`。
+5. 标准模板通过 `get_query_gateway` 选择 Gateway；AppHub 线上由 `ViewerQueryGateway` 使用宿主注入的 `X-Ops-Token`，业务代码不得自行创建 `AuthClient` 或 `QueryManager`。
 6. Keepa 和 SellerSprite 使用各自平台凭证，不能与 OPS 用户身份混用。
 7. API Key、JWT、Cookie 和账号信息不得进入源码、前端产物、日志或项目文档。
 
@@ -64,13 +65,13 @@
 
 原 `ops-business-data-orchestrator` 只拆解多个查询、调用 `ops-dataset-query` / `ops-query-wizard`、汇总一次性结果，并明确禁止创建站点代码、API、数据库和同步任务，无法满足站点数据层建设需求。
 
-### 4.3 运行时入口不统一
+### 4.3 运行时入口已由标准模板统一
 
-- OPS 可以复用应用运行时 `OpsClient`。
+- OPS 统一复用标准模板 `backend/clients/ops_query_client.py` 和 `backend/core/auth.py`。
 - Keepa 可以使用正式 opscli REST API。
 - SellerSprite 当前未出现在正式 REST 端点清单中。
 
-本轮不修改 `opscli/app/sdk`，因此新 Skill 必须基于现有能力生成代码，不能假设存在统一 Provider SDK。
+标准模板已提供 `QueryGateway`、`ViewerQueryGateway`、`OpsQueryGateway` 和 `LocalQueryGateway`。新 Skill 必须复用该基线，不生成或引用不存在的 `opscli.app.sdk.OpsClient`，也不兼容旧项目私有适配器。
 
 ## 5. 本次目标
 
@@ -124,7 +125,7 @@ ops-app-data-builder
   └─ 验证数据合同并生成项目数据层
        ↓
 站点 FastAPI 后端
-  ├─ OPS：现有应用运行时 OpsClient
+  ├─ OPS：标准模板 QueryGateway
   ├─ Keepa：后端统一 opscli REST Client
   ├─ SellerSprite：第一阶段标记运行时阻塞
   └─ SQLite：保存允许共享的业务结果
@@ -138,11 +139,11 @@ ops-app-data-builder
 
 ### 7.2 `ops-app-data-builder`
 
-负责项目化需求分析、数据源路由、合同验证、执行模式判断、代码生成、文档、迁移和测试。不负责修改 `opscli/app/sdk`、新增服务端端点、创建认证协议或保存用户凭证。
+负责项目化需求分析、数据源路由、合同验证、执行模式判断、代码生成、文档、迁移和测试。只支持标准模板数据层，不负责新增服务端端点、创建认证协议、重写 QueryGateway 或保存用户凭证。
 
 ### 7.3 运行期
 
-本轮不修改 `opscli/app/sdk`。生成后的站点只执行普通 Python/FastAPI 代码，线上运行不加载 Skill。
+生成后的站点只执行标准模板内的 Python/FastAPI 和 QueryGateway 代码，线上运行不加载 Skill，也不依赖 `opscli.app.sdk`。
 
 ## 8. 数据源路由
 
@@ -155,14 +156,18 @@ ops-app-data-builder
 ```text
 浏览器
 → 站点 FastAPI /api
-→ 现有应用运行时 OpsClient
+→ Depends(get_query_gateway)
+→ ViewerQueryGateway
 → OPS data-metrics
 ```
 
 约束：
 
-- 使用宿主请求中注入的 `x-ops-token`。
-- 生成调用代码前必须检查当前站点或正式模板实际提供的运行时适配器导入路径、方法签名和错误合同；当前同步仓库只有规范引用，没有对应 SDK 源码，不得据此猜测实现。
+- 使用宿主请求中注入的 `X-Ops-Token`。
+- 标准入口固定为 `backend.core.auth.get_query_gateway` 和 `backend.clients.ops_query_client.QueryGateway`。
+- 业务 API 使用 FastAPI `Depends(get_query_gateway)`，service 通过参数接收 Gateway。
+- 每个正式 OPS 数据集同步加入 `app.yaml.opscli.datasets` 白名单。
+- 测试使用 FakeGateway 和 dependency override，不连接真实网络或本机登录态。
 - 不读取本地 opscli 登录凭证。
 - 不在前端保存 Token。
 - 不自行拼用户身份字段。
@@ -205,7 +210,7 @@ OPSCLI_API_KEY
 
 开发期使用 `$ops-seller-sprite` 验证场景、参数、返回结构和少量样本，可以生成数据规范、Pydantic Schema、Mock、SQLite 表设计和页面 API 合同。
 
-当前正式 API 文档没有声明 SellerSprite REST 端点，本轮又不修改 `opscli/app/sdk`，因此第一阶段默认策略为：
+当前正式 API 文档没有声明 SellerSprite REST 端点，标准模板也没有 SellerSprite Gateway，因此第一阶段默认策略为：
 
 ```text
 只完成开发合同和待接入边界
@@ -214,7 +219,7 @@ OPSCLI_API_KEY
 
 禁止站点读取本机 Cookie、执行 opscli CLI 子进程、临时连接 MCP、固化个人 session/JWT 或由前端直连 SellerSprite。
 
-如果项目已经存在经过批准的 SellerSprite 运行时适配器，Skill 可以复用现有适配器，但不得自行发明新的认证入口。
+不兼容或复用旧项目私有 SellerSprite 适配器；必须等待标准模板或正式 REST API 提供统一入口。
 
 ## 9. 数据执行模式
 
@@ -290,14 +295,14 @@ product_operation_overview
 按项目现有结构生成实际需要的文件，典型职责为：
 
 ```text
-backend/app/api/             FastAPI 路由
-backend/app/clients/         OPS/opscli API 调用封装
-backend/app/services/        业务编排和二次加工
-backend/app/repositories/    SQLite 访问
-backend/app/schemas/         Pydantic 合同
-backend/app/models/          数据库模型
-backend/app/db/              迁移与连接
-backend/tests/               数据合同和接口测试
+backend/api/v1/              FastAPI 路由
+backend/clients/             标准 QueryGateway 与第三方 API Client
+backend/services/            业务编排和二次加工
+backend/repositories/        SQLite 访问；需要时创建
+backend/schemas/             Pydantic 合同
+backend/models/              数据库模型
+migrations/                  Alembic 迁移
+tests/                       数据合同和接口测试
 frontend/src/api/            前端 API Client
 frontend/src/types/          前端类型
 ```
@@ -454,7 +459,9 @@ opscli/skills/templates/ops-app-data-builder/
 
 ## 18. 本轮明确不做
 
-- 不修改 `opscli/app/sdk`。
+- 不生成或引用 `opscli.app.sdk.OpsClient`。
+- 不兼容旧数据层项目或旧项目私有适配器。
+- 不重写标准模板 QueryGateway 和鉴权基础设施。
 - 不新增或修改 opscli REST API 服务端端点。
 - 不实现 SellerSprite 正式 REST 接入。
 - 不实现每用户第三方账号切换。
@@ -495,7 +502,7 @@ opscli/skills/templates/ops-app-data-builder/
 ```text
 ops-app-build-spec 负责识别和委托
 ops-app-data-builder 负责验证真实数据合同并生成站点数据层
-现有 opscli/app/sdk 继续承担 OPS 应用运行时身份通道
+标准模板 QueryGateway 承担 OPS 应用运行时身份通道
 正式 opscli REST API 承担 Keepa 运行时调用
 SellerSprite 在第一阶段只完成开发合同和待接入边界
 ```
