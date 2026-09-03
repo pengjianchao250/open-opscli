@@ -10,7 +10,7 @@
 
 当前业务流程为：用户安装 `aukeys-opscli`，通过 `opscli app create` 创建站点，通过 `opscli app init` 拉取包含前端、FastAPI 后端和 SQLite 能力的完整模板，在 Codex 中按 `ops-app-build-spec` 搭建业务页面，最后通过 `opscli app push` 推送并自动部署。
 
-全新项目必须严格按上述顺序执行：`ops-app-build-spec` 在模板拉取前只识别新项目、确认站点名称和目标目录，不向目录写入 assessment、配置或代码；`ops-app-data-builder` 只在模板初始化完成后进入。已有源码项目不套用模板。
+全新项目必须严格按上述顺序执行：Codex 识别新建站点、新建看板或从零开发运营数据应用意图后，加载 `ops-app-build-spec` 作为统一入口；Skill 阶段 0 只确认站点名称和空目标目录并编排 `opscli app create/init`，模板拉取成功后同一个 Skill 才进入正式盘点和开发。`ops-app-data-builder` 只在模板初始化完成后进入，已有源码项目不套用模板。
 
 当前建站、Git 和发布主流程已经存在，本次要补齐的是：
 

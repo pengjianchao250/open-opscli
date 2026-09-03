@@ -6,7 +6,7 @@
 
 | 场景 | 标准 |
 | --- | --- |
-| 空项目 | Vite + Vue 3 + Element Plus + Axios + Vue Router + Pinia |
+| 全新 opscli app | 保留标准模板中的 Vite + React/Vue 技术栈，不另建脚手架 |
 | 现有 React 或 Next.js | Vite + React，保留原语言和已验证工具链 |
 | 现有 Vue 3 | Vite + Vue 3，保留原语言和已验证工具链 |
 | 普通 HTML/CSS/JS | Vite + Vue 3 + Element Plus，默认保留 JavaScript |

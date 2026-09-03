@@ -1,6 +1,6 @@
 ---
 name: ops-app-build-spec
-description: 用于盘点未知 Web 项目、生成项目规范，并将受支持项目规范化为 Vite + React/Vue、FastAPI + SQLite 和 AppHub 单应用发布结构；遇到不支持的技术栈时停止并提示联系 IT。
+description: 用于新建站点、新建看板、从零开发运营数据应用或改造未知 Web 项目；全新 opscli app 必须先通过 app create/init 拉取模板，再盘点、开发和执行发布检查，已有项目按受支持技术栈规范化。
 ---
 
 # OPS 应用规范与发布初始化
@@ -12,7 +12,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 | 场景                 | 必须读取                                |
 | -------------------- | --------------------------------------- |
 | 判断或改造前端       | `references/frontend-standard.md`       |
-| 空项目初始化         | `references/initialization-standard.md` |
+| 全新站点模板初始化   | `references/initialization-standard.md` |
 | 新建或改造后端       | `references/backend-standard.md`        |
 | 后端 SQLite 细则、调用 opscli、红线总表 | `references/sqlite-standard.md`、`references/opscli-integration-standard.md`、`references/backend-redlines.md` |
 | 页面需要真实业务数据 | `references/data-access-standard.md`    |
@@ -32,6 +32,29 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 应用名称只允许 3-64 位小写字母、数字和连字符，必须以字母开头、字母或数字结尾。发布身份和公开地址由 AppHub 管理，应用代码不得保存或派生平台身份字段。
 
 ## 执行流程
+
+### 0. 新项目模板门禁
+
+用户表达新建站点、新建看板、从零开发运营数据应用等意图时，本 Skill 作为统一建站入口，
+先判断目标目录是全新项目还是已有源码项目。该判断必须发生在写入任何项目文件之前。
+
+全新 opscli app 必须按以下顺序执行：
+
+```text
+opscli app create "<站点显示名称>" --path <项目根目录>
+opscli app init <项目根目录>
+确认首次初始化返回 template_applied=true
+重新读取模板项目并进入只读盘点
+```
+
+在 `app init` 成功前，不得提前写入 `assessment.md`、README、需求文档、前后端、
+`app.yaml`、配置或部署文件，也不运行 `pnpm create vue` 或其他脚手架。需求内容暂时
+保留在会话或项目目录之外。模板是唯一基线；模板缺少必需结构时停止并报告模板问题，
+不得静默生成另一套项目。
+
+全新项目在模板完成前只执行上述门禁和命令编排，不进入后续写文件步骤；模板完成后由同一个
+Skill 重新盘点并继续正式开发，不使用初始化前的空目录结论。已有源码项目进入既有盘点和迁移流程，后续
+`opscli app init` 会保留源码并跳过模板。
 
 ### 1. 只读盘点
 
@@ -90,7 +113,7 @@ Dockerfile
 .gitignore
 ```
 
-只创建实际使用的目录和功能。空项目可以生成最小托管入口与平台健康路由，但不得生成虚假业务接口、业务表或示例生产数据。
+只创建实际使用的目录和功能。全新 opscli app 必须在模板项目上改造，不自行初始化空项目或生成第二套脚手架；已有项目按支持结论补齐必要结构。任何项目都不得生成虚假业务接口、业务表或示例生产数据。
 
 生成或更新：
 
@@ -104,7 +127,7 @@ Dockerfile
 
 ### 5. 唯一发布声明
 
-根目录 `app.yaml` 是应用发布声明的唯一来源。初始化时复制 `assets/app.yaml`，再按实际应用修改 `name`、展示信息、数据集和可见范围；保持：
+根目录 `app.yaml` 是应用发布声明的唯一来源。全新项目校验并调整模板已有声明；已有项目迁移时才按计划使用 `assets/app.yaml` 补齐，再按实际应用修改 `name`、展示信息、数据集和可见范围；保持：
 
 ```yaml
 apiVersion: apps.aukeys/v1
@@ -117,7 +140,9 @@ services:
 
 禁止在应用代码、环境文件、构建文件或前端配置中重复维护平台身份、公开前缀或发布地址。`app.yaml` 必须位于独立 Git 仓库根目录，发布分支必须为 `main`；模板源目录嵌套在另一个仓库中时先迁出并初始化独立仓库。
 
-同时复制根级资产：
+全新项目从 `.opscli/app.json.app_id` 和 `.opscli/app.json.slug` 读取平台身份，分别写入或校验 `ops-app.config.appId` 和 `ops-app.config.appName`，不在首次发布阶段重新注册应用。
+
+已有项目迁移时按计划补齐根级资产；全新模板缺少这些必需资产时报告模板问题，不静默复制另一套基线：
 
 - `assets/nixpacks.toml` → `nixpacks.toml`
 - `assets/Dockerfile` → `Dockerfile`
@@ -162,7 +187,7 @@ AppHub 发布主路径固定为 Nixpacks：
 - 后端依赖统一使用 `uv`、`pyproject.toml`、`uv.lock`；Nginx 以非 root 用户监听 `8080`；Dockerfile 不声明 `VOLUME`，持久卷只由 Compose 管理。
 - 根目录 `.dockerignore` 排除依赖目录、构建缓存、本地数据库、环境文件和密钥，同时保留锁文件、配置和部署资产。
 - Compose 使用最新 Compose Specification；前后端镜像名由 `ops-app.config` 派生为 `<appId>-<appName>-frontend|backend`，同时发布 `:sha-<git-sha>` 和 `:latest`，线上始终拉取 `:latest`。
-- 空项目初始化只要求 Node.js 主版本大于 22；补丁版本 engine 警告允许记录到评估文档，不作为初始化、构建或测试的阻断条件。
+- 模板项目开发只要求 Node.js 主版本大于 22；补丁版本 engine 警告允许记录到评估文档，不作为构建或测试的阻断条件。
 - 前后端构建、测试、健康检查及 `docker compose config` 通过。
 - 构建产物引用部署前缀，本地开发仍使用根路径。
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。
@@ -173,6 +198,8 @@ AppHub 发布主路径固定为 Nixpacks：
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
+
+发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app push <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
 
 ## 错误处理
 

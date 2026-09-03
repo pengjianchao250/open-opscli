@@ -1,8 +1,8 @@
 # opscli app 模板先行建站流程需求定稿
 
 > 日期：2026-09-03  
-> 状态：需求定稿，进入实现  
-> 范围：调整 `ops-app-build-spec`、`ops-app-data-builder` 的新站点执行顺序和相关文档、测试；不增加 opscli 用户命令，不修改 AppHub API。
+> 状态：已落地  
+> 范围：固化自然语言新建站点意图的模板先行顺序，最小调整 `ops-app-build-spec` 入口门禁和相关文档、测试；不增加 opscli 用户命令，不修改 AppHub API。
 
 ## 1. 背景与问题
 
@@ -33,12 +33,12 @@ OPSCLI_APP_TEMPLATE_BRANCH=main
 ## 3. 全新项目标准流程
 
 ```text
-用户提出站点和业务数据需求
+用户表达新建站点、新建看板或从零开发运营数据应用意图
     ↓
-Codex 加载 ops-app-build-spec
+Codex 加载 ops-app-build-spec 作为统一建站入口
     ↓
-ops-app-build-spec 识别全新项目、确认站点名称和目标目录
-此阶段只在会话中整理需求，不写入目标目录
+ops-app-build-spec 阶段 0 识别为全新 opscli app，确认站点名称和空目标目录
+此阶段只做门禁和命令编排，不写入目标目录
     ↓
 opscli app create <site_name> --path <project_root>
     ↓
@@ -49,7 +49,9 @@ opscli app init <project_root>
 opscli app init 配置凭据、origin 和 main
 并从当前环境模板仓库匿名拉取 main
     ↓
-ops-app-build-spec 重新读取模板项目并生成 assessment、项目规范和改造计划
+首次初始化确认 template_applied=true
+    ↓
+同一个 ops-app-build-spec 进入正式阶段，重新读取模板项目并生成 assessment、项目规范和改造计划
     ↓
 需要真实数据时调用 ops-app-data-builder
     ↓
@@ -76,8 +78,8 @@ Git push、AppHub release、构建部署和 SSE 结果
 
 ### 5.1 ops-app-build-spec
 
-- 在任何项目文件写入前识别“全新项目”或“已有项目”。
-- 全新项目未绑定时，先执行或明确引导执行 `app create` 和 `app init`。
+- 作为自然语言新建站点的统一入口，先识别“全新项目”或“已有项目”。
+- 全新项目未绑定时，阶段 0 只执行或明确引导执行 `app create` 和 `app init`，不进入项目文件生成步骤。
 - 在 `app init` 成功前，不生成 assessment、migration-plan、前后端、配置或部署文件。
 - 模板拉取完成后重新盘点，不使用初始化前的空目录结论代替模板盘点。
 - 从 `.opscli/app.json` 读取 `app_id` 和 `slug`，分别写入或校验
@@ -108,10 +110,10 @@ SQLite、测试和部署基线。模板不得包含：
 
 ### 修改
 
-- `ops-app-build-spec` 新项目启动门禁和模板优先规则；
+- `ops-app-build-spec` 新项目启动门禁、自然语言意图和模板优先规则；
 - `ops-app-build-spec` 初始化、项目身份和发布检查规范；
-- `ops-app-data-builder` 模板初始化前置检查；
-- 两个 Skill 的版本、契约测试和流程文档；
+- `ops-app-build-spec` 版本、契约测试和流程文档；
+- 保留 `ops-app-data-builder` 现有模板初始化门禁；
 - AppHub 使用指南与待发布变更记录。
 
 ### 不修改
@@ -125,7 +127,7 @@ SQLite、测试和部署基线。模板不得包含：
 
 ## 8. 验收标准
 
-1. Skill 明确要求全新项目先执行 `create → init`，再写入任何项目文件。
+1. 用户表达新建站点、新建看板或从零开发运营数据应用意图时，Codex 加载 `ops-app-build-spec` 作为入口；Skill 阶段 0 先执行 `create → init`，再进入项目文件生成步骤。
 2. 全新项目不再通过 Skill 执行 `create-vue` 创建另一套脚手架。
 3. 模板拉取完成后，Skill 才生成 assessment、项目规范和业务代码。
 4. 已有源码项目仍跳过模板且不被覆盖。

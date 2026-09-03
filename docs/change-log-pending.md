@@ -8427,3 +8427,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退两个 Skill、版本、测试和对应流程文档；无需回滚 AppHub 应用、站点仓库、binding 或已经推送的源码。
 
 ---
+
+## 2026-09-03 opscli app - 固化自然语言新建站点编排
+
+**变更原因**：用户在 Codex 中通常通过“新建站点”“新建看板”“从零开发运营数据应用”等自然语言表达建站意图。最新同步的 `ops-app-build-spec` 仍允许自行初始化空项目并运行 `create-vue`，可能在 `opscli app init` 前写入文件，导致标准模板被跳过。
+
+**改动点**：新增 `docs/design/2026-09-03-opscli-app自然语言建站编排需求定稿.md`；`ops-app-build-spec` 升级到 `v0.0.4`，作为自然语言建站的统一入口并增加新项目模板门禁；阶段 0 只编排 `opscli app create → opscli app init`，首次初始化确认 `template_applied=true` 后，同一个 Skill 才进入正式盘点和开发；`initialization-standard.md` 改为模板先行规范，不再运行 `pnpm create vue` 或复制第二套脚手架；已有源码项目继续保留现有代码并跳过模板。同步 AppHub 使用指南、开发规范、数据层需求文档、既有模板先行定稿、Skill 版本和契约测试。`opscli app` Python 行为、三个用户命令、AppHub API、环境配置和 release/SSE 闭环均未修改。
+
+**验证结果**：模板先行元数据、初始化门禁和安装契约测试 `3 passed`；`ops-app-data-builder` 回归 `10 passed`；`tests/app` 回归 `21 passed`；Skill Creator 使用 Python UTF-8 模式校验通过。`ops-app-build-spec` 全量契约当前为 `5 passed, 5 failed`，剩余失败来自 Git 同步后既有的 Compose/Nginx 旧测试与当前 Nixpacks 单应用内容不一致，以及既有“无后端”迁移断言，不属于本次自然语言模板先行范围。
+
+**影响范围**：影响 Codex 对全新站点意图的执行顺序和 `ops-app-build-spec` 的空项目入口；不影响已有项目、`opscli app` 运行时代码、AppHub、Gitea 或已发布站点。
+
+**回滚方式**：回退 `ops-app-build-spec` 的模板门禁、初始化 Reference、版本与相关文档测试；无需回滚应用、仓库、binding 或发布记录。
+
+---

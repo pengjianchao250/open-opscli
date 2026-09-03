@@ -85,6 +85,9 @@ def test_ops_app_build_spec_enforces_template_first_initialization():
     initialization = _read("references/initialization-standard.md")
     skill = _read("SKILL.md")
 
+    for intent in ("新建站点", "新建看板", "从零开发运营数据应用"):
+        assert intent in skill
+
     for required in (
         "模板先行初始化规范",
         'opscli app create "<站点显示名称>" --path <项目根目录>',
@@ -104,7 +107,9 @@ def test_ops_app_build_spec_enforces_template_first_initialization():
 
     assert "references/initialization-standard.md" in skill
     assert "### 0. 新项目模板门禁" in skill
+    assert "本 Skill 作为统一建站入口" in skill
     assert "template_applied=true" in skill
+    assert "不进入后续写文件步骤" in skill
     assert "pnpm create vue@latest frontend" not in initialization
 
 
