@@ -7,8 +7,14 @@ from types import SimpleNamespace
 import pytest
 
 from opscli.mcp import ops_credentials
-from opscli.mcp.tools import seller_sprite as seller_sprite_tools
 from opscli.mcp.server import _quota_wrap
+from opscli.mcp.tools import seller_sprite as seller_sprite_tools
+from opscli.shared.collection_storage.result_cache import (
+    CachedCollectionResult,
+    reset_cache_hit_state,
+    restore_cache_hit_state,
+    was_cache_hit,
+)
 
 
 def _run(coro):
@@ -303,6 +309,8 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert result["success"] is True
     assert "# 卖家精灵场景参数手册" in result["data"]["spec"]
     assert "seller_sprite_listing_analysis_submit" in result["data"]["spec"]
+    assert "只有用户明确要求使用" in result["data"]["spec"]
+    assert "普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发" in result["data"]["spec"]
     assert "`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`" in result["data"]["spec"]
     assert "`aba-research` ABA 数据选品" in result["data"]["spec"]
     assert "固定提交一次 `POST /v3/api/aba-research`" in result["data"]["spec"]
@@ -461,7 +469,19 @@ def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
         assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
 
     version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
-    assert version["version"] == "v0.0.19"
+    assert version["version"] == "v0.0.20"
+
+
+def test_listing_analysis_tools_require_explicit_user_trigger():
+    """Collector 实际 Tool 描述必须阻止 Listing Analysis 被自动提交。"""
+    submit_description = seller_sprite_tools.seller_sprite_listing_analysis_submit.__doc__ or ""
+    status_description = seller_sprite_tools.seller_sprite_listing_analysis_status.__doc__ or ""
+    result_description = seller_sprite_tools.seller_sprite_listing_analysis_result.__doc__ or ""
+
+    assert "仅当用户明确要求使用" in submit_description
+    assert "禁止自动触发" in submit_description
+    assert "仅续查用户已明确提交" in status_description
+    assert "仅读取用户已明确提交" in result_description
 
 
 def test_seller_sprite_identity_proxy_uses_shared_authenticated_email_resolver(monkeypatch):
@@ -1536,6 +1556,119 @@ def test_seller_sprite_run_always_enqueues(monkeypatch, tmp_path):
     assert DummyScheduler.last_mcp_user_email == "mcp-user@example.com"
 
 
+def test_seller_sprite_run_cache_hit_creates_current_user_task(monkeypatch):
+    from opscli.seller_sprite import mcp_bundle
+
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["cache_scope"] == "shared_pool"
+            assert kwargs["include_datasets"] is False
+            return CachedCollectionResult(
+                source_job_id="seller-source-job",
+                scenario="keyword-reverse",
+                site="US",
+                row_count=2,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={
+                    "row_count": 2,
+                    "export": {
+                        "filename": "seller-source-job.xlsx",
+                        "format": "xlsx",
+                        "url": "https://files.example.com/seller-source-job.xlsx",
+                    },
+                },
+                datasets=(),
+            )
+
+    class CacheScheduler:
+        async def enqueue(self, request, **kwargs):
+            raise AssertionError("缓存命中不得进入普通队列")
+
+        async def enqueue_cached_owned_mcp_run(self, request, **kwargs):
+            assert kwargs["mcp_user_email"] == "mcp-user@example.com"
+            assert kwargs["source_job_id"] == "seller-source-job"
+            return {
+                "job_id": request.job_id,
+                "state": "succeeded",
+                "stage": "finished",
+                "position": None,
+                "row_count": kwargs["row_count"],
+                "export": kwargs["export_payload"],
+            }
+
+    monkeypatch.setattr(seller_sprite_tools, "_get_task_scheduler", lambda: CacheScheduler())
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_build_mcp_job_id",
+        lambda request, site, period: "current-user-cache-job",
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "get_result_cache_context",
+        lambda: (CacheRepository(), "production"),
+    )
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="keyword-reverse",
+            site="US",
+            params={"asin": "B0TEST"},
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "current-user-cache-job"
+    assert result["data"]["state"] == "succeeded"
+    assert result["data"]["row_count"] == 2
+
+
+def test_seller_sprite_cache_task_failure_is_not_settled_as_cache_hit(monkeypatch):
+    from opscli.seller_sprite import mcp_bundle
+
+    class CacheRepository:
+        def find_cached_result(self, **_kwargs):
+            return CachedCollectionResult(
+                source_job_id="seller-source-job",
+                scenario="keyword-reverse",
+                site="US",
+                row_count=2,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={"row_count": 2, "export": None},
+                datasets=(),
+            )
+
+    class FailingCacheScheduler:
+        async def enqueue_cached_owned_mcp_run(self, request, **kwargs):
+            raise RuntimeError("cache task insert failed")
+
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda: FailingCacheScheduler(),
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "get_result_cache_context",
+        lambda: (CacheRepository(), "production"),
+    )
+
+    token = reset_cache_hit_state()
+    try:
+        result = _run(
+            seller_sprite_tools.seller_sprite_run(
+                scenario="keyword-reverse",
+                site="US",
+                params={"asin": "B0TEST"},
+            )
+        )
+        assert result["success"] is False
+        assert was_cache_hit() is False
+    finally:
+        restore_cache_hit_state(token)
+
+
 def test_seller_sprite_run_returns_complete_queued_status_without_polling(monkeypatch, tmp_path):
     store = _make_store(tmp_path)
     scheduler = EnqueueOnlyScheduler()
@@ -1644,6 +1777,42 @@ def test_seller_sprite_remote_export_rejects_local_file_url(monkeypatch):
     assert result["success"] is False
     assert "HTTPS" in result["error"]["message"]
     assert "/tmp/job-1.xlsx" not in str(result)
+
+
+def test_seller_sprite_remote_export_returns_json_fallback_after_upload_failure(monkeypatch):
+    from opscli.mcp.context import mcp_request_ctx
+
+    class UploadFailedScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "data": [{"asin": "B0TEST123", "keyword": "charger"}],
+                "export": {
+                    "path": "/srv/private/job-1.xlsx",
+                    "filename": "job-1.xlsx",
+                    "url": "file:///srv/private/job-1.xlsx",
+                },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
+            }
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: UploadFailedScheduler(),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["url"] is None
+    assert result["data"]["json_data"] == [
+        {"asin": "B0TEST123", "keyword": "charger"}
+    ]
+    assert "path" not in result["data"]
 
 
 def test_seller_sprite_export_does_not_mutate_scheduler_export_mapping(monkeypatch):

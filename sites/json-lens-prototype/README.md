@@ -31,4 +31,20 @@ npm install
 npm test
 ```
 
-测试分层：Node 原生测试验证请求头归一化；Playwright 验证浏览器请求合同、场景切换 E2E 和桌面/移动端视觉快照。更新视觉基线使用 `npm run test:update-snapshots`。
+测试分层：
+
+- Node 原生测试验证请求头归一化、表格筛选/排序和 CSV 导出。
+- Playwright 场景矩阵覆盖全部 11 个 Keepa 查询场景，校验页面提交的请求体和响应渲染。
+- 页面交互测试覆盖必填/筛选校验、复杂参数转换、API 错误、结果视图、布局切换、站点兼容和历史查询。
+- 视觉回归测试覆盖桌面端、移动端、暗色主题和历史查询展开状态。
+
+常用入口：
+
+```powershell
+npm run test:e2e          # 无头模式运行全部页面测试
+npm run test:e2e:headed   # 打开浏览器运行，便于观察交互
+npm run test:e2e:ui       # 使用 Playwright UI 逐条运行和回放
+npm run test:e2e:report   # 打开最近一次测试的 HTML 报告
+```
+
+更新视觉基线使用 `npm run test:update-snapshots`。测试使用浏览器内的 API mock，不依赖真实后端或 API Key。

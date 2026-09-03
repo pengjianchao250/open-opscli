@@ -60,6 +60,14 @@ class DummyHttpTransport:
         return False
 
 
+class TwoItemHttpTransport(DummyHttpTransport):
+    """模拟 MCP SDK v2 仅返回读写流的 transport。"""
+
+    async def __aenter__(self):
+        self.calls["transport_entered"] = True
+        return ("read-stream", "write-stream")
+
+
 class TaskGroupHttpTransport(DummyHttpTransport):
     """模拟真实 MCP transport 在上下文内持有 AnyIO TaskGroup。"""
 
@@ -174,6 +182,24 @@ def test_call_tool_wraps_json_array_as_success_data(monkeypatch):
         "success": True,
         "data": [{"name": "market_size"}, {"name": "category_index"}],
     }
+
+
+def test_call_tool_accepts_two_item_transport_result(monkeypatch):
+    """客户端必须兼容 MCP SDK v2 的二元 transport 返回契约。"""
+    calls = {}
+    result = DummyResult([DummyTextContent(json.dumps({"success": True}))])
+    install_remote_client_mocks(monkeypatch, calls, result)
+    monkeypatch.setattr(
+        "opscli.mcp_client.remote_client.streamable_http_client",
+        lambda url, *, http_client: TwoItemHttpTransport(calls),
+    )
+
+    client = RemoteMcpClient(url="https://collector.example.com/mcp")
+
+    assert asyncio.run(client.call_tool("collector_modules_health", {})) == {
+        "success": True
+    }
+    assert calls["transport_exited"] is True
 
 
 def test_call_tool_passes_http_headers(monkeypatch):

@@ -76,6 +76,7 @@ def test_xiyou_run(monkeypatch):
     assert result["data"]["row_count"] == 1
     assert result["data"]["export"]["url"] == "file:///C:/tmp/job-1.xlsx"
     assert result["data"]["export"]["filename"] == "job-1.xlsx"
+    assert result["data"]["export"]["json_data"] == [{"asin": "B00TEST123"}]
     assert result["data"]["warnings"][0]["stage"] == "file_upload"
     assert result["data"]["data"][0]["asin"] == "B00TEST123"
     assert "export_path" not in result["data"]
@@ -242,6 +243,27 @@ def test_xiyou_export_adds_file_url(monkeypatch):
 
     assert result["success"] is True
     assert result["data"]["url"].startswith("file:")
+
+
+def test_xiyou_export_returns_json_fallback_after_upload_failure(monkeypatch):
+    class UploadFailedManager(DummyManager):
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "data": [{"asin": "B00TEST123"}],
+                "export": {
+                    "path": str(Path("output.json").resolve()),
+                    "filename": "output.json",
+                },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
+            }
+
+    monkeypatch.setattr("opscli.xiyou.services.XiyouApiManager", UploadFailedManager)
+
+    result = _run(xiyou_tools.xiyou_export("job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["json_data"] == [{"asin": "B00TEST123"}]
 
 
 def test_xiyou_export_prefers_download_url(monkeypatch):

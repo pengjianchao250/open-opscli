@@ -6,7 +6,8 @@
 
 | 用户表达 | `scenario` |
 | --- | --- |
-| 查竞品 / 查产品 / 选竞品 / competitor lookup | `competitor-lookup` |
+| 按关键词、品牌、卖家或指定 ASIN 筛选商品 / competitor lookup | `competitor-lookup` |
+| 从一个 ASIN 找竞品 | 组合案例：`ops-commerce-playbooks` 的“如何找竞品” |
 | 选产品 / product research | `product-research` |
 | 关键词挖掘 / keyword mining | `keyword-miner` |
 | 关键词选品 / 关键词研究 / keyword research | `keyword-research` |
@@ -55,6 +56,7 @@
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
 - `competitor-lookup` 收到 Amazon 商品链接时，应先提取 ASIN，再传 `params.asins`。
 - `competitor-lookup` 如果用户只给了单个 `asin`，也应先归一化成 `params.asins` 再执行。
+- `competitor-lookup` 的 `asins` 是指定商品筛选，结果可能包含父子体或变体，不是“从 ASIN 自动发现竞品”。从 ASIN 找竞品应使用共同关键词、流量词、关联关系和 StyleSnap 建立候选并验证。
 - `listing-analysis` 结果通常 3 分钟以上才生成，推荐使用 `listing-analysis-submit/status/result` 三段式；提交在 `ai-history?module=LA` 页面显式选择“全景分析”（单次消耗卖家精灵 10 次额度）并保存真实 `taskId`，续查优先用 `task/original/summary/<taskId>`，缺失 ID 时才用 `usage-log` 恢复，取结果再进入 `ai-history?module=LA&taskId=<taskId>` 捕获 `competing-lookup`；不要让 `seller_sprite_run` 同步阻塞等待完整结果。
 
 ## 缺参澄清规则
@@ -87,7 +89,7 @@
 
 | `scenario` | 必填 | 常用可选参数 | 默认重点 |
 | --- | --- | --- | --- |
-| `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | `page=1`，按销量倒序，`lowPrice=N` |
+| `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | 指定商品筛选或关键词候选；`asins` 不代表竞品发现；`page=1`，按销量倒序，`lowPrice=N` |
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |

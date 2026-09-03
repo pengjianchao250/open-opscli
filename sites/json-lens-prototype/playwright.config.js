@@ -6,7 +6,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
-  reporter: "line",
+  reporter: [
+    ["line"],
+    ["html", { open: "never", outputFolder: "playwright-report" }],
+  ],
   expect: {
     toHaveScreenshot: {
       animations: "disabled",

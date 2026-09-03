@@ -16,6 +16,83 @@ from opscli.shared.collection_storage.models import (
     DataEnvironment,
     ReconciliationBatch,
 )
+from opscli.shared.collection_storage.result_cache import (
+    build_cache_key,
+    safe_result_metadata,
+)
+
+GOOGLE_TRENDS_CACHE_SCOPE = "shared"
+
+
+def build_google_trends_cache_identity(
+    request: GoogleTrendsScenarioRequest,
+) -> tuple[str, str]:
+    """返回实际地域和包含 SerpApi 补充参数的稳定缓存键。"""
+    from opscli.google_trends.api.scenarios import get_scenario
+
+    geo = str(request.geo or "US").strip().upper()
+    normalized_params = get_scenario(request.scenario).build_params(
+        params=request.params,
+        geo=geo,
+    )
+    effective_geo = str(normalized_params.get("geo") or geo)
+    if request.hl and request.scenario in {"trends", "autocomplete", "trending-now"}:
+        normalized_params.setdefault("hl", request.hl.split("-", 1)[0])
+    if request.tz is not None and request.scenario == "trends":
+        normalized_params.setdefault("tz", str(request.tz))
+    cache_key = build_google_trends_cache_key_from_normalized(
+        scenario=request.scenario,
+        effective_geo=effective_geo,
+        normalized_params=normalized_params,
+        export_format=request.export_format,
+    )
+    return effective_geo, cache_key
+
+
+def build_google_trends_cache_key_from_normalized(
+    *,
+    scenario: str,
+    effective_geo: str,
+    normalized_params: dict[str, Any],
+    export_format: str,
+) -> str:
+    """用已落盘的实际上游参数重建与在线请求一致的缓存键。"""
+    return build_cache_key(
+        "google_trends",
+        {
+            "scenario": scenario,
+            "geo": effective_geo,
+            "params": normalized_params,
+            "export_format": export_format,
+        },
+    )
+
+
+def google_trends_cache_identity_from_params(
+    payload: dict[str, Any],
+    *,
+    scenario: str,
+    geo: str,
+) -> tuple[str | None, str | None]:
+    """从 params.json 恢复缓存身份，兼容升级前的 Outbox 载荷。"""
+    normalized_params = payload.get("normalized_params")
+    if not isinstance(normalized_params, dict):
+        return None, None
+    request = payload.get("request")
+    request = request if isinstance(request, dict) else {}
+    resolved_scenario = str(request.get("scenario") or scenario).strip()
+    resolved_geo = str(
+        normalized_params.get("geo") or request.get("geo") or geo
+    ).strip()
+    if not resolved_scenario or not resolved_geo:
+        return None, None
+    cache_key = build_google_trends_cache_key_from_normalized(
+        scenario=resolved_scenario,
+        effective_geo=resolved_geo,
+        normalized_params=normalized_params,
+        export_format=str(request.get("export_format") or "xls"),
+    )
+    return cache_key, GOOGLE_TRENDS_CACHE_SCOPE
 
 
 class _StorageRuntime(Protocol):
@@ -69,6 +146,7 @@ class GoogleTrendsCollectionSubmitter:
             RuntimeError: 共享存储 Runtime 尚未启动。
         """
         environment = str(self.runtime.settings.data_environment or "").strip()
+        _effective_geo, cache_key = build_google_trends_cache_identity(request)
         submission = CollectionSubmission(
             source_system="google_trends",
             source_job_id=result.job_id,
@@ -78,6 +156,9 @@ class GoogleTrendsCollectionSubmitter:
             data_environment=cast(DataEnvironment, environment),
             ingestion_mode="live",
             result_path=result.result_path,
+            cache_key=cache_key,
+            cache_scope=GOOGLE_TRENDS_CACHE_SCOPE,
+            result_metadata=safe_result_metadata(result.to_dict()),
         )
         return self.runtime.submit(submission)
 
@@ -155,6 +236,12 @@ class GoogleTrendsCollectionReconciler:
                 data_environment=self.data_environment,
             ):
                 continue
+            cache_key, cache_scope = _reconciled_cache_identity(
+                result_path,
+                payload,
+                scenario=scenario,
+                geo=geo,
+            )
             submissions.append(
                 CollectionSubmission(
                     source_system=self.source_system,
@@ -169,6 +256,9 @@ class GoogleTrendsCollectionReconciler:
                     ingestion_mode="live",
                     result_path=result_path,
                     completed_at=completed_at.isoformat(timespec="seconds"),
+                    cache_key=cache_key,
+                    cache_scope=cache_scope,
+                    result_metadata=safe_result_metadata(payload),
                 )
             )
         return ReconciliationBatch(tuple(submissions), next_cursor)
@@ -211,3 +301,34 @@ def _read_success_result(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _reconciled_cache_identity(
+    result_path: Path,
+    result: dict[str, Any],
+    *,
+    scenario: str,
+    geo: str,
+) -> tuple[str | None, str | None]:
+    root_dir = result_path.parent.resolve()
+    params_path = Path(
+        str(result.get("params_path") or root_dir / "params.json")
+    ).expanduser()
+    if not params_path.is_absolute():
+        params_path = root_dir / params_path
+    params_path = params_path.resolve()
+    try:
+        params_path.relative_to(root_dir)
+    except ValueError:
+        return None, None
+    try:
+        payload = json.loads(params_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    return google_trends_cache_identity_from_params(
+        payload,
+        scenario=scenario,
+        geo=geo,
+    )

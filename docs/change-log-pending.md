@@ -1,5 +1,74 @@
 # 待归档变更记录
 
+## 2026-09-03 MCP采集 - 增加手动预取计划任务
+
+**变更原因**：高频采集请求需要在业务使用前主动刷新共享结果缓存，现有系统只有即时调用和结果沉淀，缺少可由用户手动维护的每日计划任务。
+**改动点**：共享采集 Schema 升级到 v3，新增预取计划定义表和独立运行队列表；增加可重跑的 v1/v2→v3 MySQL 迁移 SQL，幂等补齐缓存身份字段和索引、回填已有 JSON 指纹，并在完整性检查通过后最后发布 v3 版本号；通用 MCP 新增创建、列表、更新、批量启用、批量禁用、删除、立即运行和执行历史八个管理 Tool，并按已验证用户邮箱隔离所有权；批量启停会在一个事务内校验全部计划所有权，启用时重算下一次执行时间，避免日常审核直接修改数据库；每日时间使用 IANA 时区计算并统一保存 UTC `next_run_at`，到期和手动运行均复制来源、场景及请求快照；通用 MCP 只领取 Keepa/Google Trends，Collector MCP 只领取 SellerSprite，使用 `FOR UPDATE SKIP LOCKED`、执行租约、心跳续租和确定性来源任务 ID 防止多实例重复执行；计划请求递归拒绝凭证字段，SellerSprite 仅允许服务 CredentialStore 作用域下共享账号池的可重放场景，排除 `listing-analysis`；普通成功任务仍只沉淀结果和缓存指纹，不会自动升级为计划任务；基于历史调用、生产 MySQL 精确参数补导和本地只读任务队列增加默认禁用的 06:00 SellerSprite 灰度名单及候选分析报告，生产名单保持历史 `xls` 格式以匹配缓存指纹。
+**验证结果**：预取计划、试点名单、共享 Schema/Runtime、MCP 注册、Keepa 存储和 Collector 接线目标回归 `54 passed`；本次追加的迁移 SQL、共享 Schema 和 MCP 目标回归 `30 passed`；扩展共享存储相关回归 `155 passed, 1 failed`，唯一失败为仓库既有 Windows `file_lock` 不创建父目录问题，与本次改动无关；试点 JSON 格式校验、目标模块 `compileall`、Ruff E9/F63/F7/F82/I 和 `git diff --check` 均通过。直接执行 `uv run pytest` 仍会触发仓库既有 editable-build/Cython 编译错误，本次验证使用现有 `.venv` 的 `uv run --no-sync` 执行。
+**影响范围**：共享采集 MySQL Schema、通用 MCP 和 Collector MCP 的后台生命周期及六个新增管理 Tool；生产需先使用迁移账号完成 v2→v3 升级，并显式启用调度器和配置服务凭证作用域。计划定义不保存 JWT、Session、API Key、Cookie、账号密码或其他 Token。
+**回滚方式**：回退预取计划模块和宿主接线；两张新增表在确认没有新版进程使用后可保留或由 DBA 单独清理。
+
+---
+
+## 2026-09-03 MCP采集 - 修复缓存指纹沉淀和对账恢复
+
+**变更原因**：共享结果缓存最初仅将缓存键写入 `request_params._cache`，MySQL 查询依赖 JSON 路径且缺少专用索引；Keepa 和 Google Trends 的宕机对账提交也没有携带缓存身份，导致恢复任务继续以空指纹入库，无法稳定统计重复请求或复用结果。
+**改动点**：将采集 Schema 升级到 v2，为 `collection_runs` 增加显式 `request_fingerprint`、`cache_scope` 和复合查询索引；初始化逻辑支持从 v1 幂等升级并回填已有 JSON 缓存身份；入库和缓存读取改用显式列，同时保留 JSON 结果摘要；Keepa 与 Google Trends Parser/对账器可从任务目录内的 `params.json` 恢复规范化请求指纹和结果摘要，兼容升级前已进入 Outbox 的任务，并拒绝读取任务目录外的参数路径。
+**验证结果**：共享 MySQL 与缓存合同专项测试 13 项通过，Keepa/Google Trends 存储与 Parser 专项测试 10 项通过，扩展存储链路 34 项通过；目标模块 `compileall` 以及 Ruff E9/F63/F7/F82/I 检查通过。扩展 MCP 缓存回归 128 项中 127 项通过，唯一失败为仓库既有 SellerSprite Skill 版本断言仍期望 `v0.0.20`，当前模板已是 `v0.0.21`，与本次改动无关。
+**影响范围**：共享采集 MySQL Schema、Keepa/Google Trends 成功结果对账和缓存读取；公开 MCP Tool 参数与响应合同不变。生产共享数据库必须先按运维文档由迁移账号执行一次 v1→v2 升级，再启动新版运行进程。
+**回滚方式**：代码可回退到 v1 JSON 查询实现；数据库新增列和索引可保留，不影响旧版读取。若必须回退版本标记，应先确认所有运行进程均已回退，避免新版进程因 Schema 版本不匹配进入降级状态。
+
+---
+
+## 2026-09-03 文档 - 完善卖家精灵运营案例研究资料
+
+**变更原因**：官网场景记录、行业方法调研和教程设计草案具有后续案例扩展价值，但部分表述仍混淆官网功能名称与实际数据语义，设计草案也保留了已回退的结构化配方引擎方向；同时本地反馈和 REST E2E 文件属于执行产物，不应进入版本库。
+**改动点**：为官网调研补充代码快照、`competitor-lookup` ASIN 查询与变体边界，以及 Listing Analysis 默认单模块和全景分析额度口径；将行业调研和设计草案统一到轻量 `ops-commerce-playbooks` Skill、Markdown 案例和现有数据能力直接执行的第一版方案；在 `.gitignore` 忽略 `output/feedback/` 与日期化 SellerSprite REST E2E 目录，并移除已跟踪的历史反馈 JSON。
+**验证结果**：官网调研中的 16 个场景与当前 `SellerSpriteScenario` 注册表逐项一致；三份文档的本地 Markdown 引用均有效，未发现尾随空白或超过 240 字符的普通段落；`output/feedback/` 与日期化 SellerSprite REST E2E 忽略规则已通过 `git check-ignore` 验证，目标执行产物已清空；`git diff --check` 通过。
+**影响范围**：卖家精灵调研资料、第一版功能边界和本地执行产物管理；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的运行逻辑。
+**回滚方式**：回退三份调研文档、`.gitignore`、历史反馈 JSON 和本条记录即可；被清理的未跟踪执行产物需从原执行流程重新生成。
+
+---
+
+## 2026-09-02 SellerSprite - 增加通用 FastAPI 异步任务网关
+
+**变更原因**：Keepa 已有产品化 FastAPI 场景入口，但 SellerSprite 独立部署在 Collector MCP，网站和内部系统无法使用普通 HTTP 合同提交和查询任务；同时不能为了 REST 直接在通用 MCP 进程启动第二套 SellerSprite 队列、账号池和浏览器 Runtime。
+**改动点**：新增 `/api/v1/seller-sprite` REST 路由，提供场景、额度、普通任务提交/单批状态/结果/导出及 Listing Analysis 提交/状态/结果接口；请求模型拒绝 `session_id`、`jwt`、`output_dir`、执行模式和调度参数；普通任务与 Listing Analysis 提交成功返回 `202`，Collector 配置或可用性故障映射为 `503`；`export_format=json` 的成功任务通过 API 专用 `/result` 或兼容 `/export` 直接返回内联业务 JSON，状态响应不再暴露 JSON 下载链接，只有 `xls/xlsx` 保留 HTTPS 文件下载信息；该转换仅位于 FastAPI REST 适配层，现有 SellerSprite MCP Tool、Collector Scheduler、队列和 MCP 返回合同不变；REST 复用现有 SellerSprite Collector 代理并透传当前用户 API Key，只补网关遥测且不重复扣额度，实际权限、任务所有权、账号池、队列和浏览器生命周期继续由 Collector 负责；同步场景 API 产品化规划和合同测试。
+**验证结果**：产品化 API 组合测试 `31 passed`；SellerSprite 代理与 Collector Bundle 历史回归 `15 passed, 1 deselected`，排除项为仓库既有 `dimension_resolver=None` 断言差异；新增模块与组合入口 `compileall`、行长度检查及 `git diff --check` 通过，并确认 SellerSprite MCP Tool、Collector Scheduler 和对应 MCP 测试文件零代码差异。2026-09-02 以真实用户 API Key 在隔离端口启动当前通用 MCP 与 Collector，验证 OpenAPI 暴露 10 个 SellerSprite 路由，场景与额度接口均返回 HTTP 200，`keyword-reverse` 提交返回 HTTP 202，任务约 11 秒后到达 `succeeded/finished`，browser-route 登录、查询按钮和上游 HTTP 200 均成功；随后复用该成功任务验证 API-only JSON 合同，普通任务 `/result` 与兼容 `/export` 均直接返回内联 `result`，响应不含 `export`、`url` 或 `download_url`，且未再次消耗查询额度。本次样例 ASIN 在 `US/30d` 返回 0 行有效空结果。原 `10.6.53.56:8765` 运行进程的 OpenAPI 仍只有旧 Keepa 路由，需重启加载新代码后才会对外提供 SellerSprite REST。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+**影响范围**：通用 MCP 的 FastAPI 路由和网站调用合同；Collector MCP 部署地址、Tool 合同、Scheduler、SQLite 队列、账号配置与额度执行位置不变。
+**回滚方式**：移除 SellerSprite REST 路由模块及 `create_api_app()` 注册，回退对应测试、规划文档和本条记录即可；无需处理 Collector 任务或数据库。
+
+---
+
+## 2026-09-03 Skill - 以运营案例替代 Commerce Playbooks 规划器
+
+**变更原因**：代码规划器只把大模型能够直接执行的运营案例重复建模为 Python、JSON 和 CLI，当前没有非 Agent 调用方、状态恢复或确定性执行需求；同时运营反馈表明 `competitor-lookup` 按 ASIN 查询主要是指定商品及变体，不应解释为竞品发现。
+**改动点**：回退 `commerce_playbooks` Python 模块、`commerce-playbook` CLI、JSON 配方、package-data 和对应代码测试；保留轻量 `ops-commerce-playbooks` Skill，按渐进披露拆分“如何找竞品”“Listing 关键词差距”“多竞品关键词库”三个案例；从 ASIN 找竞品改为商品基线、流量词反查、关键词候选、关联关系和 `ops-amazon-stylesnap` 视觉搜索组合，并要求父子变体归并和候选证据分层；同步修正 `ops-seller-sprite` 的场景映射与 ASIN 筛选语义，版本提升至 `v0.0.21`。
+**验证结果**：`ops-commerce-playbooks` 与修改后的 `ops-seller-sprite` 均通过 Skill Creator `quick_validate.py`；轻量 Skill、三份案例路由、ASIN 筛选语义、模板安装和发版清单定向测试共 13 项通过，叠加普通 SellerSprite CLI 回归共 19 项通过；发版 manifest 检查确认新 Skill 进入 source、wheel、binary 和 binary_full；顶级 Typer 帮助冒烟退出码为 0，确认 `seller-sprite` 仍存在且已回退的 `commerce-playbook` 不再注册；`git diff --check` 通过。扩展执行 `test_cli_split.py` 时仍有 2 个仓库既有 `seller-sprite-debug` 根命令未注册失败，其余 24 项通过，与本次 Skill 修改无关。
+**影响范围**：Agent 对卖家精灵数据的运营案例引导，以及 `competitor-lookup` 按 ASIN 查询的解释；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的执行实现、参数、额度与鉴权。
+**回滚方式**：删除 `ops-commerce-playbooks` 模板和对应测试，移除 manifest 条目，并回退 `ops-seller-sprite` 的 ASIN 竞品语义说明与版本号。
+---
+
+## 2026-09-01 MCP采集 - 增加共享 MySQL 结果缓存基础合同
+
+**变更原因**：Keepa、Google Trends 和 SellerSprite 的成功结果已经沉淀到共享 MySQL，相同业务请求仍会重复调用上游并消耗额度，需要提供默认一天的新鲜结果复用能力。
+**改动点**：新增稳定请求缓存键、内部缓存模式、环境开关、默认 86400 秒新鲜度、缓存命中上下文和安全结果摘要；扩展 CollectionSubmission 以携带缓存键、作用域及结果摘要；MySQL Repository 按来源、数据环境、场景、站点、精确缓存键、作用域和 persistence_completed_at 新鲜窗口读取完整 Dataset，并允许 SellerSprite 只读取命中元数据；Keepa 与 Google Trends 提交器按实际上游规范化参数生成共享作用域缓存索引并在认证前读缓存；Collector 生命周期向 SellerSprite Tool 注入缓存仓储，SellerSprite 按共享池或专属账号散列隔离缓存作用域，成功提交和对账均写入缓存索引，缓存命中时在队列与 MCP 所有权表中原子创建当前用户的新 succeeded 任务且不发布 Worker 成功事件；统一 quota 切面仅在缓存响应成功构造后退回预占次数且不增加失败数；三类私有执行入口支持 live 模式绕过缓存，公开 Tool 与 Skill 参数不变，不新增 MySQL Schema。
+**验证结果**：目标模块 compileall 与 git diff --check 已通过；缓存、公开 Tool 和 quota 专项 172 passed，SellerSprite 队列/调度/Parser 96 passed，Google Trends 完整目录 85 passed，Collector MCP 完整目录 13 passed，Keepa 存储链路 9 passed。测试覆盖缓存键、JSON 信封、默认 TTL、live 绕过、MySQL 故障回退、精确新鲜结果查询、Keepa/Google Trends 认证前命中、SellerSprite 当前用户合成任务不产生沉淀事件、专属账号作用域散列隔离、合成任务失败不误标缓存命中、公开 Tool 不暴露 cache_mode，以及缓存配额退款不增加失败数；Ruff 已修正本次新增 import 块，并对新增缓存代码通过 E9/F63/F7/F82 高置信检查，全量旧文件规则仍存在历史 lint 存量。
+**影响范围**：共享采集 Outbox 提交合同和内部缓存辅助模块；公开 MCP Tool 参数与 Skill 不变。
+**回滚方式**：回退共享缓存模块、CollectionSubmission 扩展及本条记录即可；当前不涉及数据库结构迁移。
+
+---
+
+## 2026-08-31 Keepa - 支持从共享 MySQL 查询历史任务和明细
+
+**变更原因**：Keepa 成功结果已经沉淀到共享 MySQL，但公共 MCP 只能从服务端本地任务目录按 `job_id` 读取，无法复用数据库中的历史任务，也无法按原查询条件检索。
+**改动点**：新增只读 `keepa_history` MCP Tool，支持按任务 ID、场景、站点、请求参数和完成时间组合查询；复用 Keepa 场景参数归一化并兼容 GB/UK/数字 domain；返回任务分页元数据，支持轻量任务列表及按 Dataset 的记录分页；共享 MySQL Repository 增加历史总数、任务、Dataset 和记录读取合同；同步 Keepa Skill 说明与回归测试。
+**验证结果**：Keepa MCP 与共享 MySQL 专项测试 `26 passed`；Keepa 和存储相关回归排除仓库既有 `keepa-debug` 根命令注册失败后 `139 passed, 1 deselected`；`compileall` 与 `git diff --check` 通过。通过本地 MCP 和真实 MySQL 验证 3 个历史任务均成功命中，条件反查命中 6 个同 ASIN 任务，Dataset `record_offset=2, record_limit=2` 正确返回第 3、4 行。
+**影响范围**：仅新增 Keepa 历史数据的只读 MCP 查询和共享采集 Repository 读路径；不改变 `keepa_run`、现有任务写入、数据库表结构或 Keepa 调用额度。
+**回滚方式**：回退 Keepa MCP Tool、Runtime 注册、共享 MySQL 历史读方法、对应 Skill 文档、测试和本条记录即可；已沉淀历史数据无需处理。
+
+---
+
 ## 2026-08-28 SellerSprite - 防止无效场景导致 Worker 退出并循环租约
 
 **变更原因**：任务执行异常处理阶段再次解析未知场景时会抛出第二个 `SellerSpriteConfigError`，原任务无法落为 `failed`，账号 Worker 退出；租约到期后任务被反复放回队列，表现为 `queued -> claimed -> resolving -> queued`。同时，入队边界此前未校验场景，旧 Review 场景可以持续写入新队列。
@@ -8866,6 +8935,89 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅新增内部 Skill 模板和测试，不修改鹰眼 MCP Tool、上游配置、鉴权、SQL 校验或现有发行范围。
 **回滚方式**：删除 `ops-yingyan` 模板与对应测试，移除 manifest 条目，并回退本条记录。
 ---
+## 2026-08-28 JSON Lens - 切换 DaisyUI 设计系统
+
+**变更原因**：运营站点需要使用更统一、常见的组件库样式，并减少项目内对按钮、表单、表格等基础组件的自定义 CSS。
+**改动点**：静态页面移除 Bootstrap，改为固定版本的 DaisyUI 5 与 Tailwind CSS 4 浏览器构建；查询表单、按钮、状态提示、结果视图切换、统计区、分页和数据表格统一使用 DaisyUI 组件类，折叠设置沿用原生 details 并使用 DaisyUI 设计变量；保留原生 Web Components、左右工作区和全部查询行为，并将自定义样式收敛到布局、JSON 树和长文本等站点特有规则。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 7 个 Playwright 集成、E2E、下载及视觉回归测试；重新生成并人工检查桌面、移动端和 Top Sellers 10 万条数据视觉基线，无内容遮挡或异常溢出；Node 语法、Bootstrap 残留扫描与 `git diff --check` 通过。
+**影响范围**：JSON Lens 原型的视觉设计与组件标记；API 请求合同、场景参数、表格数据处理和 CSV 下载逻辑保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype/index.html`、`app.js`、`styles.css`、视觉快照及本条记录。
+---
+## 2026-08-28 JSON Lens - 增加明暗主题切换
+
+**变更原因**：运营人员在不同光照环境下需要可切换的明暗界面，并以更适合日常办公的明亮主题作为首次访问默认值。
+**改动点**：默认 DaisyUI 主题改为明亮的 corporate，页头增加明亮/暗色开关，暗色使用 business 主题；主题选择写入浏览器本地存储并在刷新后恢复；补充明亮默认值、暗色持久化和暗色视觉基线测试。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 9 个 Playwright 集成、E2E、下载及视觉回归测试；明亮主题桌面/移动端、暗色主题桌面和 Top Sellers 10 万条数据视觉基线均已更新并人工检查，无内容遮挡或异常溢出；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 页面配色和页头布局；查询、结果展示、API 请求及下载行为不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中主题状态、开关、样式、测试快照及本条记录。
+---
+## 2026-08-28 JSON Lens - 增加本地查询历史
+
+**变更原因**：运营人员需要快速复用近期查询条件，同时必须避免把大体量 Keepa 返回数据和鉴权信息长期留存在浏览器中。
+**改动点**：查询侧栏增加默认收起、桌面端悬停展开且可点击固定展开的历史区；使用 localStorage 保存最近 20 条场景、站点、查询条件、等待策略和执行时间，明确排除 API Key、接口地址及响应数据；历史项支持重新载入表单条件，并提供清空操作和移动端点击展开交互。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 11 个 Playwright 集成、E2E、下载及视觉回归测试；测试确认历史记录不含 API Key、接口地址和响应数据，条件重新载入、清空、默认收起及悬停展开均正常；明亮/暗色桌面、明亮移动端、历史展开态和 Top Sellers 10 万条数据视觉基线均通过人工检查；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 查询表单侧栏和浏览器本地偏好数据；API 请求、服务端数据及结果渲染逻辑不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中历史状态、侧栏交互、样式、测试快照及本条记录。
+---
+## 2026-08-28 JSON Lens - 修复场景标识文字溢出
+
+**变更原因**：侧栏中的 `product-search` 场景标识被 flex 布局压缩后换成两行，文字超出 DaisyUI 小徽标的固定高度。
+**改动点**：增加窄侧栏场景徽标的单行与高度溢出回归测试；允许左侧场景说明收缩，禁止右侧徽标被 flex 压缩，并以单行省略作为极端长键名兜底。
+**验证结果**：新增定向测试先稳定复现 `white-space: normal` 导致的换行溢出，修复后转为通过；`npm test` 通过 10 个 Node 单元测试和 12 个 Playwright 集成、E2E、下载及视觉回归测试；明亮与暗色桌面视觉基线人工检查确认 `product-search` 保持单行且没有挤压相邻说明；`git diff --check` 通过。
+**影响范围**：JSON Lens 查询侧栏的场景介绍区域，不影响场景值、查询参数或请求行为。
+**回滚方式**：回退 `sites/json-lens-prototype` 中场景徽标布局、对应测试及本条记录。
+---
+## 2026-08-28 JSON Lens - 统一结果工具栏布局
+
+**变更原因**：桌面端结果页头空间不足时，下载按钮换到第二行，导致筛选框、视图切换与按钮不等高且页头高度异常增大。
+**改动点**：增加桌面结果工具栏单行、等高和页头高度上限回归测试；结果页头改为标题弹性列与工具栏内容列，桌面工具栏禁止换行并将筛选框、视图切换和下载按钮统一为 32px，页头按 64px 基准收紧；窄屏先将标题独占一行，手机端继续纵向排列控件并保留触控间距。
+**验证结果**：新增测试先稳定复现桌面工具栏控件纵向相差 50px；首次布局修复后对齐与等高断言通过，但页头为 71px，进一步收紧间距后页头高度上限断言通过。最终 `npm test` 通过 10 个 Node 单元测试和 13 个 Playwright 集成、E2E、下载及视觉回归测试；桌面明亮/暗色、移动端、Top Sellers 与历史展开视觉基线均已更新并人工检查。
+**影响范围**：JSON Lens 结果面板页头的桌面与响应式布局，不影响筛选、视图切换或下载行为。
+**回滚方式**：回退 `sites/json-lens-prototype` 中结果工具栏布局、对应测试及本条记录。
+---
+## 2026-08-28 JSON Lens - 修复视图切换选项下溢
+
+**变更原因**：结果工具栏将 DaisyUI `tabs-box` 外层固定为 32px，但组件仍保留 4px 底部内边距，导致内部 32px 的选项比容器底边多出 4px。
+**改动点**：增加视图切换选项底边不得超过 Tab 容器底边的回归测试；仅在结果工具栏实例上清除 DaisyUI `tabs-box` 的内部 padding，使选项与 32px 外层严格等高。
+**验证结果**：新增回归测试先稳定失败，Tab 容器底边为 153.5px、选项底边为 157.5px，准确复现 4px 下溢；修复后定向测试转绿。最终 `npm test` 通过 10 个 Node 单元测试和 14 个 Playwright 集成、E2E、下载及视觉回归测试；实际页面刷新后确认容器和三个选项均为 32px 且底边同为 153.5px。
+**影响范围**：JSON Lens 结果面板的视图切换组件，不影响查询、视图状态或结果数据。
+**回滚方式**：回退 `sites/json-lens-prototype` 中对应响应式样式、测试及本条记录。
+---
+
+## 2026-09-01 SellerSprite MCP - 限制 Listing Analysis 自动触发
+
+**变更原因**：Listing Analysis 属于早期试验功能，不应被普通 Listing、ASIN 分析或通用数据采集请求默认触发。
+**改动点**：在通用 MCP 代理和 Collector 实际 Tool 描述中把 Listing Analysis submit 标记为仅显式触发，只有用户明确要求使用卖家精灵 Listing Analysis、AI 全景分析或全景分析时才允许提交；status/result 仅续查已有任务。同步更新 `ops-seller-sprite` Skill、正式 MCP 接入说明和行为契约测试，并将 Skill 版本提升为 `v0.0.20`。
+**验证结果**：SellerSprite MCP Tool 注册、Skill 规范和显式触发契约定向测试 11 项通过；Skill Creator `quick_validate.py`、目标模块 `compileall` 和 `git diff --check` 通过。`uv run` 会触发仓库现有 Cython 构建并因 Google Trends、ASIN Data、Scrape.do 的既有编译错误失败，因此测试使用现有 `.venv` 执行。
+**影响范围**：仅影响 Agent 对 Listing Analysis 的工具选择和触发判断，不修改提交接口、任务队列、额度计费或已有 `job_id` 的续查行为。
+**回滚方式**：回退 Listing Analysis Tool 描述、Skill/接入说明、版本号、对应测试及本条记录。
+---
+
+## 2026-09-01 MCP - 修复远端 SDK 解包兼容与鹰眼会话头透传
+
+**变更原因**：macOS 用户环境解析到 `mcp 2.1.1` 后，`streamable_http_client` 仅返回读写流，现有三元解包会抛出 `ValueError: not enough values to unpack`；同时鹰眼代理建立远端 MCP 连接时没有传递当前用户的 OPS Session，导致需要业务身份的上游请求缺少 `X-Session-Id`。
+**改动点**：`RemoteMcpClient.call_tool()` 改为只消费 transport 返回值的前两个稳定成员，同时兼容 MCP SDK v1 的三元返回和 v2 的二元返回；鹰眼代理从当前 MCP API Key 隔离凭证中读取 session_id，并向远端客户端传递 `X-Session-Id` 与 `X-Opscli-Version`，不修改远端配置结构，也不转发未定义的任意 headers；新增二元 transport 和鹰眼会话头回归测试，保留现有三元 transport 测试作为旧 SDK 兼容保障。
+**验证结果**：新增两项测试先分别稳定复现 `expected 3, got 2` 和会话头注入点缺失，修复后转绿；远端客户端、鹰眼代理、配置客户端、凭证缓存、session 共用和共享远程适配器共 55 项通过；Keepa、SellerSprite、Canopy、Google Trends 等远程适配器共 28 项通过；`tests/mcp` 排除既有 `test_shopify_tools.py` 收集错误后 420 项通过、1 项既有 SellerSprite 遥测参数断言失败；独立临时环境使用真实 `mcp 2.1.1` 执行二元 transport 调用通过；目标模块 Cython C 代码生成成功并确认使用 `transport_streams[:2]`。完整 wheel 构建仍被 ASIN Data、Google Trends、Scrape.do 的既有 Cython 错误阻断，本机目标扩展链接还因缺少 MSVC 14+ 无法完成，未声称 wheel 构建通过。
+**影响范围**：所有通过 `RemoteMcpClient` 调用远端 Streamable HTTP MCP 的模块获得 SDK v1/v2 返回契约兼容；鹰眼中央代理额外携带当前隔离用户的 OPS Session。远端配置选择、API Key URL、工具参数、重试和超时策略保持不变。
+**回滚方式**：回退 `opscli/mcp_client/remote_client.py`、`opscli/mcp/tools/yingyan_proxy.py`、对应两份测试及本条记录；回滚后 `mcp 2.x` 环境会再次发生三元解包失败，鹰眼远端请求也会再次缺少业务会话头。
+---
+
+## 2026-09-02 MCP - 导出上传失败返回 JSON 数据兜底
+
+**变更原因**：Keepa、卖家精灵等 MCP 采集服务已成功获取并生成导出文件时，OSS 上传失败会只返回无效的服务端本地路径，远端调用方既拿不到下载链接，也无法继续消费已经获取的数据。
+**改动点**：新增 MCP 公共导出兜底逻辑，仅在存在 `file_upload` warning、导出没有 HTTP(S) 地址且任务结果包含业务数据时，将完整脱敏数据写入 `export.json_data` 并在原响应缺少 URL 时显式返回 `url: null`；接入 Keepa、卖家精灵、Google Trends、Amazon 商品数据、beta Canopy、西柚和 Sif 的运行结果、任务状态及独立导出读取入口；Sif 从落盘结果提取业务 JSON，并按 `export_key` 仅挂到对应失败导出项。正常 OSS 链接和非上传类缺链错误保持原行为。
+**验证结果**：新增或调整 10 个上传失败回归用例，旧实现下稳定复现缺少 `json_data` 或独立导出接口报错；执行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\mcp\test_google_trends_tools.py tests\mcp\test_scrape_do_tools.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_beta_tools.py tests\mcp\test_sif_tools.py tests\xiyou\test_mcp_tools.py -q` 通过，结果 `178 passed`；目标 MCP 模块 `compileall` 和 `git diff --check` 通过。
+**影响范围**：上述 MCP 服务在 OSS 上传失败后的返回合同；上传成功时响应结构不变，CLI 本地导出和服务端文件生成逻辑不变。
+**回滚方式**：回退 `opscli/mcp/tools/export_fallback.py`、各 MCP 工具接入、对应测试及本条记录。
+---
+
+## 2026-09-03 JSON Lens - 对齐 Keepa MCP 场景默认参数
+
+**变更原因**：JSON Lens 的部分 Keepa 场景默认值与 MCP 实际参数合同不一致，且 Finder 的分页参数被提交在 `selection` 外层，后端不会按预期使用。
+**改动点**：商品详情默认开启 `history`；类目详情和卖家详情显式带入 `parents=false`、`storefront=false`；Product Finder 与 Seller Finder 默认使用 `page=0`、`perPage=50`，并把分页参数按 Keepa 合同放入 `selection`，同时保留至少一项业务筛选条件的页面校验；同步更新场景矩阵、请求合同和默认值展示测试。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 36 个 Playwright 场景、交互及视觉回归测试；`node --check app.js` 通过。
+**影响范围**：JSON Lens 原型的 Keepa 场景初始表单值和请求参数结构；结果展示、鉴权、API 地址、历史记录和下载逻辑不变。
+**回滚方式**：回退 `sites/json-lens-prototype/app.js`、相关 Playwright 测试及本条记录。
 
 ## 2026-08-28 打包构建 - 修复 v0.0.126 GitHub Actions Cython 编译失败
 

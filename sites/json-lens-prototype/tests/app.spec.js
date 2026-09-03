@@ -49,7 +49,7 @@ test("商品查询发送正确的 Authorization 与请求体", async ({ page }) 
     site: "US",
     params: {
       asin: "B0CQM9WB7R",
-      history: false,
+      history: true,
       stats: 30,
     },
     export_format: "json",
@@ -67,6 +67,49 @@ test("切换场景会同步更新查询表单和结果数据", async ({ page }) 
   await expect(page.locator("table thead")).toContainText("sellerId");
   await expect(page.locator("table tbody tr")).toHaveCount(2);
   expect(await page.evaluate(() => window.scrollY)).toBe(initialScroll);
+});
+
+test("场景标识在窄侧栏中保持单行且不溢出", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?variant=a");
+
+  const badge = page.locator(".scenario-intro > .badge");
+  const dimensions = await badge.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    whiteSpace: getComputedStyle(element).whiteSpace,
+  }));
+  expect(dimensions.whiteSpace).toBe("nowrap");
+  expect(dimensions.scrollHeight).toBeLessThanOrEqual(dimensions.clientHeight);
+});
+
+test("桌面结果工具栏保持单行且控件等高", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?variant=a");
+
+  const boxes = await Promise.all([
+    page.locator(".result-toolbar > input").boundingBox(),
+    page.locator(".result-toolbar > .tabs").boundingBox(),
+    page.locator(".result-toolbar > .btn").boundingBox(),
+  ]);
+  expect(boxes.every(Boolean)).toBe(true);
+  const yPositions = boxes.map((box) => box.y);
+  const heights = boxes.map((box) => box.height);
+  expect(Math.max(...yPositions) - Math.min(...yPositions)).toBeLessThanOrEqual(1);
+  expect(Math.max(...heights) - Math.min(...heights)).toBeLessThanOrEqual(1);
+  const header = await page.locator(".result-panel > .panel-header").boundingBox();
+  expect(header.height).toBeLessThanOrEqual(70);
+});
+
+test("视图切换选项不会溢出 Tab 容器", async ({ page }) => {
+  await page.goto("/?variant=a");
+
+  const tabs = await page.locator(".result-toolbar > .tabs").boundingBox();
+  const items = await page.locator(".result-toolbar .tab").all();
+  const boxes = await Promise.all(items.map((item) => item.boundingBox()));
+  expect(tabs).not.toBeNull();
+  expect(boxes.every(Boolean)).toBe(true);
+  expect(Math.max(...boxes.map((box) => box.y + box.height))).toBeLessThanOrEqual(tabs.y + tabs.height);
 });
 
 test("长文本缩略显示并保留完整悬停内容", async ({ page }) => {
@@ -132,6 +175,55 @@ test("Top Sellers 字符串数组显示 Seller ID 并限制单页行数", async 
   expect(csv).toContain('"SELLER-100000"');
 });
 
+test("默认使用明亮主题并记住暗色选择", async ({ page }) => {
+  await page.goto("/?variant=a");
+
+  const themeToggle = page.getByRole("switch", { name: "切换明暗主题" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "corporate");
+  await expect(themeToggle).not.toBeChecked();
+
+  await themeToggle.check();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "business");
+  expect(await page.evaluate(() => localStorage.getItem("json-lens-theme"))).toBe("business");
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "business");
+  await expect(page.getByRole("switch", { name: "切换明暗主题" })).toBeChecked();
+});
+
+test("历史查询只保存查询条件并可重新载入", async ({ page }) => {
+  await mockKeepaApi(page);
+  await page.goto("/?variant=a");
+  await page.locator("details.connection-options summary").click();
+  await page.locator('[data-field="apiKey"]').fill("opscli-mcp-history-test-key");
+  await page.getByRole("button", { name: "运行商品关键词搜索" }).click();
+  await expect(page.locator(".status-line")).toContainText("请求成功");
+
+  const records = await page.evaluate(() => JSON.parse(localStorage.getItem("json-lens-query-history")));
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({ scenario: "product-search", site: "US", wait: true, params: { keyword: "flashlight" } });
+  const serialized = JSON.stringify(records);
+  expect(serialized).not.toContain("history-test-key");
+  expect(serialized).not.toContain("Integration fixture");
+  expect(serialized).not.toContain(API_URL);
+
+  const historyPanel = page.locator("[data-history-panel]");
+  const historyContent = page.locator("[data-history-content]");
+  await expect(historyContent).toHaveCSS("max-height", "0px");
+  await historyPanel.hover();
+  await expect(historyContent).toHaveCSS("max-height", "340px");
+
+  await page.locator('[data-field="scenario"]').selectOption("seller-finder");
+  await historyPanel.hover();
+  await page.getByRole("button", { name: "重新载入 商品关键词搜索 US" }).click();
+  await expect(page.locator('[data-field="scenario"]')).toHaveValue("product-search");
+  await expect(page.locator('[data-param="keyword"]')).toHaveValue("flashlight");
+
+  await page.getByRole("button", { name: "清空历史" }).click();
+  expect(await page.evaluate(() => localStorage.getItem("json-lens-query-history"))).toBeNull();
+  await expect(page.locator("[data-history-panel] .badge")).toHaveText("0");
+});
+
 test("桌面端布局视觉基线", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/?variant=a");
@@ -147,4 +239,27 @@ test("移动端布局视觉基线", async ({ page }) => {
   expect(switcherBox).toBeTruthy();
   expect(switcherBox.y).toBeGreaterThanOrEqual(runButtonBox.y + runButtonBox.height);
   await expect(page).toHaveScreenshot("variant-a-mobile.png", { fullPage: true });
+});
+
+test("暗色主题视觉基线", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?variant=a");
+  await page.getByRole("switch", { name: "切换明暗主题" }).check();
+  await expect(page).toHaveScreenshot("variant-a-dark-desktop.png", { fullPage: true });
+});
+
+test("历史查询展开视觉基线", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/?variant=a");
+  await page.locator("json-lens-app").evaluate((app) => {
+    app.state.history = [
+      { id: "history-product", createdAt: "2026-08-28T04:20:00.000Z", scenario: "product-search", site: "US", wait: true, params: { keyword: "flashlight", stats: 30 } },
+      { id: "history-seller", createdAt: "2026-08-28T03:45:00.000Z", scenario: "seller-finder", site: "DE", wait: true, params: { search: "AUKEY", currentRating_gte: 95 } },
+      { id: "history-deals", createdAt: "2026-08-27T09:10:00.000Z", scenario: "deals", site: "GB", wait: false, params: { priceTypes: "0", isDrop: true } },
+    ];
+    app.render();
+  });
+  await page.locator("[data-history-panel]").hover();
+  await expect(page.locator("[data-history-content]")).toHaveCSS("max-height", "340px");
+  await expect(page).toHaveScreenshot("history-expanded-desktop.png", { fullPage: true });
 });

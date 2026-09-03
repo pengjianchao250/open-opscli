@@ -1,6 +1,6 @@
 ---
 name: ops-seller-sprite
-description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、关键词转化率、实时查竞价、ABA 数据选品、全球商标库、关联流量、流量词对比、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。
+description: SellerSprite/卖家精灵查询与导出 Skill。用于把中文自然语言需求映射为 seller_sprite_* 场景，处理关键词选品、关键词转化率、实时查竞价、ABA 数据选品、全球商标库、关联流量、流量词对比、ABA 出单词反查、缺参澄清、类目确认、任务续查和 Excel 导出。Listing Analysis 仅在用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交。
 metadata:
   mcp-version: v1.0.0
 ---
@@ -43,6 +43,8 @@ metadata:
 12. 专属账号的绑定、改绑和解绑只能由部署管理员在服务端本机执行 `opscli seller-sprite account-binding ...`，MCP 不提供管理工具；Agent 不得向用户索取或输出卖家精灵密码。
 13. 专属账号登录失效时任务直接失败，不会回退公共账号池；不要通过重新提交任务尝试绕过账号异常。
 14. Skill 文档出现新场景不等于当前 MCP 已部署；执行 `keyword-research`、`aba-research`、`association-traffic`、`traffic-extend`、`keyword-comparison`、`keyword-conversion-rate`、`real-time-bidding` 或 `aba-reverse` 前先确认 `seller_sprite_scenarios` 已返回该场景，未暴露时如实说明，不能改投其他场景冒充结果。
+15. 只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才允许调用 submit；普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发。status/result 只续查已有 `job_id`，不受本条触发限制。
+16. `competitor-lookup` 的 `asins` 只用于查询指定商品，结果可能展开父子体或变体，不代表从 ASIN 发现了竞品。用户要求“从 ASIN 找竞品”时，转入 `ops-commerce-playbooks` 的“如何找竞品”案例，使用流量词、关键词搜索、关联关系和 StyleSnap 建立候选。
 
 ## 链路区分
 
@@ -115,6 +117,8 @@ opscli auth login
 
 Listing Analysis 结果通常 3 分钟以上才生成，正式 CLI 推荐拆成三步：
 
+只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才提交。用户提供已有 `job_id` 或对已提交任务说“继续/查结果”时，可以直接使用 status/result，不能重新 submit。
+
 ```bash
 opscli seller-sprite listing-analysis-submit --asin B0XXXX --station GLOBAL --site US
 opscli seller-sprite listing-analysis-status <job_id>
@@ -142,6 +146,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 - `看市场/类目` 这类表达可能对应 `market-research` 或 `product-research`，先让用户确认。
 - `competitor-lookup` 不能无条件直接跑，至少要有 `keyword`、`brand`、`sellerName`、`asins` 或 Amazon 商品链接中的一种。
 - `competitor-lookup` 如果用户给的是单个 ASIN，也要先归一化成 `params.asins`；不要把单个 ASIN 直接留在 `params.asin` 后就发请求。
+- 上一条只说明指定商品查询的参数格式；`params.asins` 返回的是目标商品及可能的父子体/变体，不得把结果命名为“ASIN 竞品”。从 ASIN 发现竞品应读取 `ops-commerce-playbooks` 的“如何找竞品”案例。
 - `competitor-lookup` 缺少主筛选条件时，应直接报参数错误或继续澄清，不要等成 30 秒 MCP 超时。
 - `keyword-reverse` 必须有 ASIN。
 - `traffic-source` 必须有关键词或 ASIN。
@@ -156,7 +161,7 @@ opscli seller-sprite listing-analysis-result <job_id> --export-format json
 可直接复用的话术：
 
 - `你想做关键词选品、从种子词扩词、按 ASIN 反查，还是查流量来源？`
-- `查竞品需要 keyword、brand、sellerName、asins 或 Amazon 产品链接中的一种，请补充。`
+- `如果要筛选商品，请提供 keyword、brand、sellerName 或明确的商品 ASIN；如果要从一个 ASIN 发现竞品，我会先反查流量词，再结合关键词搜索、关联关系和视觉相似商品建立候选。`
 - `关键词反查需要 ASIN，请提供 ASIN 或 Amazon 产品链接。`
 - `查流量来源需要关键词或 ASIN，请补充。`
 

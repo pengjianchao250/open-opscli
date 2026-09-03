@@ -214,6 +214,35 @@ def test_beta_canopy_export_fails_without_remote_upload_url(monkeypatch):
     assert "没有可下载地址" in result["error"]["message"]
 
 
+def test_beta_canopy_export_returns_json_fallback_after_upload_failure(monkeypatch):
+    class FakeManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "data": [{"asin": "B0B3JBVDYP", "title": "Fallback Product"}],
+                "export": {
+                    "path": "D:/tmp/private/canopy-job-1.xlsx",
+                    "filename": "canopy-job-1.xlsx",
+                    "url": None,
+                },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
+            }
+
+    monkeypatch.setattr(beta_tools, "CanopyApiManager", FakeManager)
+
+    result = _run(beta_tools.beta_canopy_export("job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["url"] is None
+    assert result["data"]["json_data"] == [
+        {"asin": "B0B3JBVDYP", "title": "Fallback Product"}
+    ]
+    assert "path" not in result["data"]
+
+
 def test_beta_canopy_export_returns_remote_url_only(monkeypatch):
     class FakeManager:
         def __init__(self, *args, **kwargs):

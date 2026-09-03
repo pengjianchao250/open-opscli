@@ -9,6 +9,7 @@ from typing import Any
 
 from opscli.shared.collection_storage.config import MySqlSettings
 from opscli.shared.collection_storage.models import ParsedCollection
+from opscli.shared.collection_storage.result_cache import CachedCollectionResult
 from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
 
 
@@ -31,7 +32,7 @@ class MySqlCollectionRepository:
         self._connect_factory = connect_factory or self._connect
 
     def create_schema(self) -> None:
-        """创建 v1 表结构；仅应使用具备 DDL 权限的迁移账号执行。"""
+        """创建或升级表结构；仅应使用具备 DDL 权限的迁移账号执行。"""
         connection = self._connect_factory()
         try:
             with connection.cursor() as cursor:
@@ -39,9 +40,23 @@ class MySqlCollectionRepository:
                     cursor.execute(statement)
                 cursor.execute(
                     """
+                    SELECT schema_version FROM collection_schema_versions
+                    WHERE module_name = %s
+                    """,
+                    ("collector_storage",),
+                )
+                previous_version = _schema_version(cursor.fetchone())
+                if previous_version is not None and previous_version > SCHEMA_VERSION:
+                    raise CollectionSchemaError(
+                        "采集数据 MySQL Schema 版本高于当前客户端："
+                        f"需要 {SCHEMA_VERSION}，实际 {previous_version}"
+                    )
+                self._ensure_cache_identity_schema(cursor)
+                cursor.execute(
+                    """
                     INSERT INTO collection_schema_versions (module_name, schema_version)
                     VALUES (%s, %s)
-                    ON DUPLICATE KEY UPDATE schema_version = schema_version
+                    ON DUPLICATE KEY UPDATE schema_version = VALUES(schema_version)
                     """,
                     ("collector_storage", SCHEMA_VERSION),
                 )
@@ -77,6 +92,8 @@ class MySqlCollectionRepository:
                     ("collector_storage",),
                 )
                 row = cursor.fetchone()
+                self._check_cache_identity_schema(cursor)
+                self._check_prefetch_schema(cursor)
             version = _schema_version(row)
             if version != SCHEMA_VERSION:
                 raise CollectionSchemaError(
@@ -121,15 +138,391 @@ class MySqlCollectionRepository:
         finally:
             connection.close()
 
+    def query_history(
+        self,
+        *,
+        source_system: str,
+        source_job_id: str | None = None,
+        scenario: str | None = None,
+        site: str | None = None,
+        site_aliases: list[str] | tuple[str, ...] | None = None,
+        request_params: dict[str, Any] | None = None,
+        original_request_params: dict[str, Any] | None = None,
+        completed_after: str | None = None,
+        completed_before: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        dataset_code: str | None = None,
+        record_limit: int = 100,
+        record_offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """兼容入口：按任务标识或请求条件读取历史任务列表。"""
+        return self.query_history_page(
+            source_system=source_system,
+            source_job_id=source_job_id,
+            scenario=scenario,
+            site=site,
+            site_aliases=site_aliases,
+            request_params=request_params,
+            original_request_params=original_request_params,
+            completed_after=completed_after,
+            completed_before=completed_before,
+            limit=limit,
+            offset=offset,
+            dataset_code=dataset_code,
+            record_limit=record_limit,
+            record_offset=record_offset,
+        )["runs"]
+
+    def find_cached_result(
+        self,
+        *,
+        source_system: str,
+        data_environment: str,
+        scenario: str,
+        site: str,
+        cache_key: str,
+        cache_scope: str,
+        ttl_seconds: int,
+        include_datasets: bool = True,
+    ) -> CachedCollectionResult | None:
+        """精确读取仍在新鲜窗口内的最近成功采集结果。"""
+        connection = self._connect_factory()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, source_job_id, scenario, site, request_params,
+                           source_row_count, completed_at, persistence_completed_at
+                    FROM collection_runs
+                    WHERE source_system = %s
+                      AND data_environment = %s
+                      AND scenario = %s
+                      AND site = %s
+                      AND collection_status = 'succeeded'
+                      AND persistence_completed_at IS NOT NULL
+                      AND persistence_completed_at >= TIMESTAMPADD(
+                          SECOND, -%s, UTC_TIMESTAMP(6)
+                      )
+                      AND request_fingerprint = %s
+                      AND cache_scope = %s
+                    ORDER BY persistence_completed_at DESC, id DESC
+                    LIMIT 1
+                    """,
+                    (
+                        source_system,
+                        data_environment,
+                        scenario,
+                        site,
+                        max(1, int(ttl_seconds)),
+                        cache_key,
+                        cache_scope,
+                    ),
+                )
+                run = cursor.fetchone()
+                if not run:
+                    return None
+                request_params = _json_load_value(run.get("request_params"))
+                cache_payload = (
+                    request_params.get("_cache")
+                    if isinstance(request_params, dict)
+                    else None
+                )
+                result_metadata = (
+                    cache_payload.get("result")
+                    if isinstance(cache_payload, dict)
+                    else None
+                )
+                datasets = (
+                    self._cached_datasets(
+                        cursor,
+                        run_id=int(run.get("id") or 0),
+                    )
+                    if include_datasets
+                    else []
+                )
+                return CachedCollectionResult(
+                    source_job_id=str(run.get("source_job_id") or ""),
+                    scenario=str(run.get("scenario") or ""),
+                    site=str(run.get("site") or ""),
+                    row_count=int(run.get("source_row_count") or 0),
+                    completed_at=_db_datetime_value(run.get("completed_at")),
+                    persistence_completed_at=_db_datetime_value(
+                        run.get("persistence_completed_at")
+                    ),
+                    result_metadata=(
+                        dict(result_metadata)
+                        if isinstance(result_metadata, dict)
+                        else {}
+                    ),
+                    datasets=tuple(datasets),
+                )
+        finally:
+            connection.close()
+
+    def query_history_page(
+        self,
+        *,
+        source_system: str,
+        source_job_id: str | None = None,
+        scenario: str | None = None,
+        site: str | None = None,
+        site_aliases: list[str] | tuple[str, ...] | None = None,
+        request_params: dict[str, Any] | None = None,
+        original_request_params: dict[str, Any] | None = None,
+        completed_after: str | None = None,
+        completed_before: str | None = None,
+        limit: int = 20,
+        offset: int = 0,
+        dataset_code: str | None = None,
+        record_limit: int = 100,
+        record_offset: int = 0,
+        include_records: bool = True,
+    ) -> dict[str, Any]:
+        """分页读取已沉淀的历史采集结果和总数。
+
+        ``request_params`` 匹配任务 params.json 中的 ``normalized_params`` 子集，
+        因此可以只提供 asin、term 等关键条件。记录读取有独立上限，避免
+        单个大型任务把 MCP 响应撑爆。
+        """
+        source = str(source_system or "").strip()
+        if not source:
+            raise ValueError("source_system 不能为空")
+        limit = _bounded_int(limit, default=20, maximum=100)
+        offset = max(0, int(offset))
+        normalized_dataset_code = str(dataset_code or "").strip() or None
+        record_limit = _bounded_int(record_limit, default=100, maximum=1000)
+        record_offset = max(0, int(record_offset))
+
+        clauses = ["source_system = %s"]
+        values: list[Any] = [source]
+        for column, value in (
+            ("source_job_id", source_job_id),
+            ("scenario", scenario),
+        ):
+            text = str(value or "").strip()
+            if text:
+                clauses.append(f"{column} = %s")
+                values.append(text)
+        sites = tuple(
+            dict.fromkeys(
+                text
+                for value in (site, *(site_aliases or ()))
+                if (text := str(value or "").strip())
+            )
+        )
+        if len(sites) == 1:
+            clauses.append("site = %s")
+            values.append(sites[0])
+        elif sites:
+            clauses.append(f"site IN ({', '.join(['%s'] * len(sites))})")
+            values.extend(sites)
+        if request_params or original_request_params:
+            normalized_json = _json_dump(request_params or original_request_params)
+            original_json = _json_dump(original_request_params or request_params)
+            clauses.append(
+                "(JSON_CONTAINS(request_params, %s, '$.normalized_params') "
+                "OR JSON_CONTAINS(request_params, %s, '$.request.params'))"
+            )
+            values.extend((normalized_json, original_json))
+        if completed_after:
+            clauses.append("completed_at >= %s")
+            values.append(_mysql_datetime(completed_after))
+        if completed_before:
+            clauses.append("completed_at <= %s")
+            values.append(_mysql_datetime(completed_before))
+
+        connection = self._connect_factory()
+        try:
+            with connection.cursor() as cursor:
+                where_sql = " AND ".join(clauses)
+                cursor.execute(
+                    f"""
+                    SELECT COUNT(*) AS total
+                    FROM collection_runs
+                    WHERE {where_sql}
+                    """,
+                    tuple(values),
+                )
+                total = _count_value(cursor.fetchone())
+                cursor.execute(
+                    f"""
+                    SELECT id, source_job_id, scenario, site, data_environment,
+                           ingestion_mode, collection_status, request_params,
+                           request_fingerprint, cache_scope, source_row_count,
+                           started_at, completed_at, created_at
+                    FROM collection_runs
+                    WHERE {where_sql}
+                    ORDER BY completed_at DESC, id DESC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (*values, limit, offset),
+                )
+                runs = list(cursor.fetchall() or [])
+                result: list[dict[str, Any]] = []
+                for run in runs:
+                    run_id = int(run.get("id") or 0)
+                    datasets = self._history_datasets(
+                        cursor,
+                        run_id=run_id,
+                        dataset_code=normalized_dataset_code,
+                        record_limit=record_limit,
+                        record_offset=record_offset,
+                        include_records=include_records,
+                    )
+                    result.append(
+                        {
+                            "job_id": str(run.get("source_job_id") or ""),
+                            "scenario": run.get("scenario"),
+                            "site": run.get("site"),
+                            "data_environment": run.get("data_environment"),
+                            "ingestion_mode": run.get("ingestion_mode"),
+                            "collection_status": run.get("collection_status"),
+                            "request_params": _json_load_value(run.get("request_params")),
+                            "request_fingerprint": run.get("request_fingerprint"),
+                            "cache_scope": run.get("cache_scope"),
+                            "row_count": int(run.get("source_row_count") or 0),
+                            "started_at": _db_datetime_value(run.get("started_at")),
+                            "completed_at": _db_datetime_value(run.get("completed_at")),
+                            "created_at": _db_datetime_value(run.get("created_at")),
+                            "datasets": datasets,
+                        }
+                    )
+            return {
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(result) < total,
+                "runs": result,
+            }
+        finally:
+            connection.close()
+
+    @staticmethod
+    def _history_datasets(
+        cursor: Any,
+        *,
+        run_id: int,
+        dataset_code: str | None,
+        record_limit: int,
+        record_offset: int,
+        include_records: bool,
+    ) -> list[dict[str, Any]]:
+        dataset_filter = ""
+        dataset_values: tuple[Any, ...] = (run_id,)
+        if dataset_code:
+            dataset_filter = " AND dataset_code = %s"
+            dataset_values = (run_id, dataset_code)
+        cursor.execute(
+            f"""
+            SELECT id, dataset_code, dataset_name, source_sheet, columns_json, row_count
+            FROM collection_datasets
+            WHERE run_id = %s{dataset_filter}
+            ORDER BY id
+            """,
+            dataset_values,
+        )
+        datasets: list[dict[str, Any]] = []
+        for dataset in cursor.fetchall() or []:
+            dataset_id = int(dataset.get("id") or 0)
+            records: list[dict[str, Any]] = []
+            if include_records:
+                cursor.execute(
+                    """
+                    SELECT source_row_number, business_key, payload
+                    FROM collection_records
+                    WHERE dataset_id = %s
+                    ORDER BY source_row_number
+                    LIMIT %s OFFSET %s
+                    """,
+                    (dataset_id, record_limit, record_offset),
+                )
+                records = [
+                    {
+                        "row_number": int(row.get("source_row_number") or 0),
+                        "business_key": row.get("business_key"),
+                        "payload": _json_load_value(row.get("payload")),
+                    }
+                    for row in (cursor.fetchall() or [])
+                ]
+            total = int(dataset.get("row_count") or 0)
+            datasets.append(
+                {
+                    "dataset_code": dataset.get("dataset_code"),
+                    "dataset_name": dataset.get("dataset_name"),
+                    "source_sheet": dataset.get("source_sheet"),
+                    "columns": _json_load_value(dataset.get("columns_json")) or [],
+                    "row_count": total,
+                    "records_offset": record_offset,
+                    "records_returned": len(records),
+                    "records": records,
+                    "records_omitted": max(0, total - len(records)),
+                    "records_omitted_before": min(record_offset, total),
+                    "records_omitted_after": max(
+                        0,
+                        total - record_offset - len(records),
+                    ),
+                }
+            )
+        return datasets
+
+    @staticmethod
+    def _cached_datasets(cursor: Any, *, run_id: int) -> list[dict[str, Any]]:
+        """读取缓存命中任务的全部 Dataset 和记录。"""
+        cursor.execute(
+            """
+            SELECT id, dataset_code, dataset_name, source_sheet, columns_json, row_count
+            FROM collection_datasets
+            WHERE run_id = %s
+            ORDER BY id
+            """,
+            (run_id,),
+        )
+        datasets: list[dict[str, Any]] = []
+        for dataset in cursor.fetchall() or []:
+            cursor.execute(
+                """
+                SELECT source_row_number, business_key, payload
+                FROM collection_records
+                WHERE dataset_id = %s
+                ORDER BY source_row_number
+                """,
+                (int(dataset.get("id") or 0),),
+            )
+            records = [
+                {
+                    "row_number": int(row.get("source_row_number") or 0),
+                    "business_key": row.get("business_key"),
+                    "payload": _json_load_value(row.get("payload")),
+                }
+                for row in (cursor.fetchall() or [])
+            ]
+            datasets.append(
+                {
+                    "dataset_code": dataset.get("dataset_code"),
+                    "dataset_name": dataset.get("dataset_name"),
+                    "source_sheet": dataset.get("source_sheet"),
+                    "columns": _json_load_value(dataset.get("columns_json")) or [],
+                    "row_count": int(dataset.get("row_count") or 0),
+                    "records": records,
+                }
+            )
+        return datasets
+
     def _upsert_run(self, cursor: Any, document: ParsedCollection) -> int:
         submission = document.submission
+        request_fingerprint, cache_scope = _cache_identity(document)
         cursor.execute(
             """
             INSERT INTO collection_runs (
                 data_environment, source_system, source_job_id, producer_service,
                 scenario, site, ingestion_mode, collection_status, request_params,
-                parser_version, source_row_count, started_at, completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'succeeded', %s, %s, %s, %s, %s)
+                request_fingerprint, cache_scope, parser_version, source_row_count,
+                started_at, completed_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, 'succeeded', %s, %s, %s,
+                %s, %s, %s, %s
+            )
             ON DUPLICATE KEY UPDATE
                 id = LAST_INSERT_ID(id),
                 producer_service = VALUES(producer_service),
@@ -138,6 +531,8 @@ class MySqlCollectionRepository:
                 ingestion_mode = VALUES(ingestion_mode),
                 collection_status = 'succeeded',
                 request_params = VALUES(request_params),
+                request_fingerprint = VALUES(request_fingerprint),
+                cache_scope = VALUES(cache_scope),
                 parser_version = VALUES(parser_version),
                 source_row_count = VALUES(source_row_count),
                 started_at = VALUES(started_at),
@@ -153,6 +548,8 @@ class MySqlCollectionRepository:
                 submission.site,
                 submission.ingestion_mode,
                 _json_dump(document.request_params),
+                request_fingerprint,
+                cache_scope,
                 document.parser_version,
                 0,
                 _mysql_datetime(submission.started_at),
@@ -163,6 +560,70 @@ class MySqlCollectionRepository:
         if run_id <= 0:
             raise RuntimeError("MySQL 未返回 collection_runs ID")
         return run_id
+
+    @staticmethod
+    def _ensure_cache_identity_schema(cursor: Any) -> None:
+        """幂等升级 v1 数据库，并回填已经存在于 JSON 中的缓存身份。"""
+        if not _schema_column_exists(cursor, "request_fingerprint"):
+            cursor.execute(
+                "ALTER TABLE collection_runs "
+                "ADD COLUMN request_fingerprint CHAR(64) NULL AFTER request_params"
+            )
+        if not _schema_column_exists(cursor, "cache_scope"):
+            cursor.execute(
+                "ALTER TABLE collection_runs "
+                "ADD COLUMN cache_scope VARCHAR(128) NULL AFTER request_fingerprint"
+            )
+        cursor.execute(
+            """
+            UPDATE collection_runs
+            SET request_fingerprint = COALESCE(
+                    request_fingerprint,
+                    JSON_UNQUOTE(JSON_EXTRACT(request_params, '$._cache.cache_key'))
+                ),
+                cache_scope = COALESCE(
+                    cache_scope,
+                    JSON_UNQUOTE(JSON_EXTRACT(request_params, '$._cache.cache_scope'))
+                )
+            WHERE request_params IS NOT NULL
+              AND (request_fingerprint IS NULL OR cache_scope IS NULL)
+            """
+        )
+        if not _schema_index_exists(cursor, "ix_collection_runs_cache_lookup"):
+            cursor.execute(
+                "CREATE INDEX ix_collection_runs_cache_lookup ON collection_runs ("
+                "source_system, data_environment, scenario, site, "
+                "request_fingerprint, cache_scope, persistence_completed_at)"
+            )
+
+    @staticmethod
+    def _check_cache_identity_schema(cursor: Any) -> None:
+        missing = [
+            name
+            for name in ("request_fingerprint", "cache_scope")
+            if not _schema_column_exists(cursor, name)
+        ]
+        if missing or not _schema_index_exists(
+            cursor, "ix_collection_runs_cache_lookup"
+        ):
+            detail = ", ".join(missing) if missing else "缓存查询索引"
+            raise CollectionSchemaError(f"采集数据 MySQL Schema v2 不完整：缺少 {detail}")
+
+    @staticmethod
+    def _check_prefetch_schema(cursor: Any) -> None:
+        """确认 v3 预取计划和运行队列表均已创建。"""
+        missing = [
+            name
+            for name in (
+                "collection_prefetch_schedules",
+                "collection_prefetch_runs",
+            )
+            if not _schema_table_exists(cursor, name)
+        ]
+        if missing:
+            raise CollectionSchemaError(
+                "采集数据 MySQL Schema v3 不完整：缺少 " + ", ".join(missing)
+            )
 
     def _insert_artifacts(
         self, cursor: Any, run_id: int, document: ParsedCollection
@@ -279,6 +740,76 @@ def _schema_version(row: Any) -> int | None:
     return int(value) if value is not None else None
 
 
+def _schema_column_exists(cursor: Any, column_name: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1 AS found
+        FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND COLUMN_NAME = %s
+        LIMIT 1
+        """,
+        ("collection_runs", column_name),
+    )
+    return cursor.fetchone() is not None
+
+
+def _schema_index_exists(cursor: Any, index_name: str) -> bool:
+    cursor.execute(
+        """
+        SELECT 1 AS found
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+          AND INDEX_NAME = %s
+        LIMIT 1
+        """,
+        ("collection_runs", index_name),
+    )
+    return cursor.fetchone() is not None
+
+
+def _schema_table_exists(cursor: Any, table_name: str) -> bool:
+    """检查当前数据库是否存在指定采集表。"""
+    cursor.execute(
+        """
+        SELECT 1 AS found
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+        LIMIT 1
+        """,
+        (table_name,),
+    )
+    return cursor.fetchone() is not None
+
+
+def _cache_identity(document: ParsedCollection) -> tuple[str | None, str | None]:
+    submission = document.submission
+    cache_key = submission.cache_key
+    cache_scope = submission.cache_scope
+    cache_payload = document.request_params.get("_cache")
+    if not cache_key and isinstance(cache_payload, dict):
+        cache_key = cache_payload.get("cache_key")
+        cache_scope = cache_payload.get("cache_scope")
+    normalized_key = str(cache_key).strip() if cache_key else None
+    normalized_scope = str(cache_scope).strip() if cache_scope else None
+    if bool(normalized_key) != bool(normalized_scope):
+        raise ValueError("request_fingerprint 与 cache_scope 必须同时提供")
+    return normalized_key, normalized_scope
+
+
+def _count_value(row: Any) -> int:
+    if isinstance(row, dict):
+        value = row.get("total")
+    elif isinstance(row, (tuple, list)) and row:
+        value = row[0]
+    else:
+        value = 0
+    return int(value or 0)
+
+
 def _json_dump(payload: Any) -> str:
     return json.dumps(
         payload,
@@ -287,6 +818,34 @@ def _json_dump(payload: Any) -> str:
         separators=(",", ":"),
         allow_nan=False,
     )
+
+
+def _json_load_value(value: Any) -> Any:
+    """兼容 PyMySQL 返回的 JSON 字符串和已解码对象。"""
+    if isinstance(value, (bytes, bytearray)):
+        value = value.decode("utf-8")
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def _db_datetime_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+    return str(value)
+
+
+def _bounded_int(value: Any, *, default: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return min(max(1, parsed), maximum)
 
 
 def _mysql_datetime(value: str | None) -> datetime | None:

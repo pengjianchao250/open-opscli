@@ -41,6 +41,14 @@ def test_mcp_exposes_expected_tools():
     assert "query_chart" in names
     assert "dashboard_data_analysis_spec_must_read" in names
     assert "dashboard_ai_bridge_spec_must_read" in names
+    assert "prefetch_schedule_create" in names
+    assert "prefetch_schedule_list" in names
+    assert "prefetch_schedule_update" in names
+    assert "prefetch_schedule_enable" in names
+    assert "prefetch_schedule_disable" in names
+    assert "prefetch_schedule_delete" in names
+    assert "prefetch_schedule_run_now" in names
+    assert "prefetch_schedule_runs" in names
     assert "mcp_user_list" not in names
 
 
@@ -69,6 +77,15 @@ def test_seller_sprite_internal_controls_are_not_exposed():
     tools = _run(scenario())
     names = [tool.name for tool in tools]
     run_tool = next(tool for tool in tools if tool.name == "seller_sprite_run")
+    listing_submit_tool = next(
+        tool for tool in tools if tool.name == "seller_sprite_listing_analysis_submit"
+    )
+    listing_status_tool = next(
+        tool for tool in tools if tool.name == "seller_sprite_listing_analysis_status"
+    )
+    listing_result_tool = next(
+        tool for tool in tools if tool.name == "seller_sprite_listing_analysis_result"
+    )
     job_status_tool = next(tool for tool in tools if tool.name == "seller_sprite_job_status")
     jobs_status_tool = next(tool for tool in tools if tool.name == "seller_sprite_jobs_status")
     run_properties = (run_tool.inputSchema or {}).get("properties", {})
@@ -84,6 +101,10 @@ def test_seller_sprite_internal_controls_are_not_exposed():
     assert "seller_sprite_job_status" in names
     assert "seller_sprite_jobs_status" in names
     assert "seller_sprite_start" not in names
+    assert "仅当用户明确要求使用" in listing_submit_tool.description
+    assert "禁止自动触发" in listing_submit_tool.description
+    assert "仅续查用户已明确提交" in listing_status_tool.description
+    assert "仅读取用户已明确提交" in listing_result_tool.description
     assert "mode" not in run_properties
     assert "async_mode" not in run_properties
     assert "wait" not in run_properties

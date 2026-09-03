@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import AsyncExitStack, asynccontextmanager
 
 from opscli.collector_mcp.health import CollectorHealthTools
+from opscli.collector_mcp.prefetch import CollectorPrefetchRuntime
 from opscli.collector_mcp.profile import load_profile
 from opscli.collector_mcp.registry import resolve_bundles, validate_bundle_tools
 from opscli.mcp.app_factory import create_mcp_app, run_mcp_app
@@ -36,6 +37,12 @@ def _build_server():
     profile = load_profile()
     bundles = resolve_bundles(profile)
     storage_runtime = build_collection_storage_runtime("collector")
+    prefetch_runtime = CollectorPrefetchRuntime(
+        storage_runtime,
+        seller_sprite_enabled=any(
+            bundle.bundle_id == "seller_sprite" for bundle in bundles
+        ),
+    )
     health_tools = CollectorHealthTools(profile, bundles, storage_runtime)
 
     @asynccontextmanager
@@ -47,6 +54,7 @@ def _build_server():
             )
             for bundle in bundles:
                 await stack.enter_async_context(bundle.lifespan(storage_runtime))
+            await stack.enter_async_context(prefetch_runtime.lifespan())
             yield {}
 
     catalog = ToolCatalog()

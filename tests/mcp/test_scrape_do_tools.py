@@ -37,6 +37,7 @@ class DummyManager:
         result.data = [{"asin": "B0C7BKZ883", "title": "Laptop Stand", "local_path": "/tmp/hidden", "html": "<html>x</html>"}]
         result.request = {"params": {"token": "secret-token", "asin": "B0C7BKZ883"}}
         result.billing = {"request_cost": 1, "remaining_credits": 99}
+        result.warnings = [{"stage": "file_upload", "message": "upload failed"}]
         return result
 
     def job_status(self, job_id):
@@ -51,6 +52,8 @@ class DummyManager:
             "response": {"asin": "B0C7BKZ883"},
             "artifact": {"local_path": f"/tmp/{job_id}/private.json", "url": "file:///tmp/private.json"},
             "export": {"path": f"/tmp/{job_id}.xlsx", "filename": f"{job_id}.xlsx", "url": None},
+            "data": [{"asin": "B0C7BKZ883", "title": "Laptop Stand"}],
+            "warnings": [{"stage": "file_upload", "message": "upload failed"}],
         }
 
 
@@ -147,7 +150,8 @@ def test_scrape_do_job_status_hides_internal_paths_and_response(monkeypatch):
     assert "secret-token" not in str(data)
     assert "/tmp" not in str(data)
     assert "file://" not in str(data)
-    assert any(item["stage"] == "export_url_unavailable" for item in data["warnings"])
+    assert data["export"]["json_data"] == [{"asin": "B0C7BKZ883", "title": "Laptop Stand"}]
+    assert not any(item["stage"] == "export_url_unavailable" for item in data["warnings"])
 
 
 def test_scrape_do_run_sanitizes_forbidden_strings_inside_success_payload(monkeypatch):

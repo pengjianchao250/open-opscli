@@ -7,10 +7,12 @@
 - keepa_run            — 执行 Keepa 场景并保存请求/响应/导出
 - keepa_job_status     — 读取任务结果
 - keepa_export         — 读取导出文件信息
+- keepa_history        — 按历史任务 ID 或条件读取数据库沉淀
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from contextvars import ContextVar
 from pathlib import Path
@@ -21,8 +23,15 @@ from opscli.keepa.api.scenarios import (
 )
 from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
 from opscli.mcp.quota import get_quota_limiter
+from opscli.shared.collection_storage.result_cache import (
+    CacheMode,
+    dataset_records,
+    find_cached_result,
+    mark_cache_hit,
+)
 from opscli.skills.packaging import get_builtin_templates_dir
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 _KEEPA_API_MODE: ContextVar[bool] = ContextVar("keepa_api_mode", default=False)
@@ -164,6 +173,9 @@ async def _keepa_run_impl(
     session_id: str | None = None,
     jwt: str | None = None,
     collection_submitter=None,
+    cache_repository=None,
+    cache_environment: str | None = None,
+    cache_mode: CacheMode = "prefer_cache",
 ) -> dict:
     """执行 Keepa，并允许 MCP Runtime 注入内部沉淀提交器。"""
     api_mode = _KEEPA_API_MODE.get()
@@ -179,18 +191,10 @@ async def _keepa_run_impl(
     try:
         export_format = _normalize_mcp_export_format(export_format)
         call_params["export_format"] = export_format
-        sid, jw = _get_auth_pair("ops", session_id, jwt)
-        keepa_settings = _load_keepa_settings()
-        if not sid and not keepa_settings.api_key:
-            login_result = await _try_auto_mcp_login()
-            if login_result.get("success"):
-                sid, jw = _get_auth_pair("ops", session_id, jwt)
-            if not sid:
-                login_error = (login_result.get("error") or {}).get("message")
-                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
-                if login_error:
-                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
-                raise ValueError(message)
+        from opscli.keepa.collection_storage_integration import (
+            KEEPA_CACHE_SCOPE,
+            build_keepa_cache_key,
+        )
         from opscli.keepa.domain.models import KeepaScenarioRequest
         from opscli.keepa.services import KeepaApiManager
 
@@ -207,6 +211,41 @@ async def _keepa_run_impl(
             wait=wait,
             upload_export=not api_mode,
         )
+        cached = None
+        if cache_repository is not None and cache_environment:
+            cached = await find_cached_result(
+                cache_repository,
+                source_system="keepa",
+                data_environment=cache_environment,
+                scenario=request.scenario,
+                site=(request.site or "US").upper(),
+                cache_key=build_keepa_cache_key(request),
+                cache_scope=KEEPA_CACHE_SCOPE,
+                cache_mode=cache_mode,
+            )
+        if cached is not None:
+            cached_payload = _cached_result_payload(cached, source_site_key="site")
+            public_result = (
+                _public_api_result(cached_payload)
+                if api_mode
+                else _public_result(cached_payload)
+            )
+            response = _ok(public_result)
+            mark_cache_hit()
+            return response
+
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
+        keepa_settings = _load_keepa_settings()
+        if not sid and not keepa_settings.api_key:
+            login_result = await _try_auto_mcp_login()
+            if login_result.get("success"):
+                sid, jw = _get_auth_pair("ops", session_id, jwt)
+            if not sid:
+                login_error = (login_result.get("error") or {}).get("message")
+                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
+                if login_error:
+                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
+                raise ValueError(message)
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
@@ -235,12 +274,109 @@ async def keepa_export(job_id: str) -> dict:
         from opscli.keepa.services import KeepaApiManager
 
         status = KeepaApiManager().job_status(job_id)
-        export = _public_export_payload(status.get("export"))
-        if not export.get("url"):
+        public_status = _strip_sensitive(status)
+        if not isinstance(public_status, dict):
+            raise ValueError("任务导出结构不合法")
+        export = _public_export_payload(build_export_payload_with_fallback(public_status))
+        if not export.get("url") and "json_data" not in export:
             raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
         return _err(exc, tool="MCP → keepa_export(...)", call_params={"job_id": job_id})
+
+
+async def keepa_history(
+    job_id: str | None = None,
+    scenario: str | None = None,
+    site: str | None = None,
+    params: dict[str, Any] | str | None = None,
+    completed_after: str | None = None,
+    completed_before: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    dataset_code: str | None = None,
+    record_limit: int = 100,
+    record_offset: int = 0,
+    include_records: bool = True,
+) -> dict:
+    """读取已沉淀的 Keepa 历史任务和数据明细。
+
+    可传 ``job_id`` 精确读取任务，也可按 ``scenario``、``site`` 和 params
+    条件匹配历史任务。params 支持与 keepa_run 相同的参数别名，例如
+    ``{"asin": "B0088PUEPK"}`` 或 ``{"keyword": "flashlight"}``。
+    ``include_records=false`` 时只返回任务与 Dataset 摘要，适合历史列表；
+    大任务可用 ``dataset_code``、``record_offset`` 和 ``record_limit`` 分页。
+    """
+    call_params = {
+        "job_id": job_id,
+        "scenario": scenario,
+        "site": site,
+        "params": params,
+        "completed_after": completed_after,
+        "completed_before": completed_before,
+        "limit": limit,
+        "offset": offset,
+        "dataset_code": dataset_code,
+        "record_limit": record_limit,
+        "record_offset": record_offset,
+        "include_records": include_records,
+    }
+    try:
+        parsed_params = _parse_json_arg(params, dict) if params is not None else None
+        normalized_scenario = str(scenario or "").strip().lower() or None
+        normalized_site = str(site or "").strip().upper() or None
+        if not any(
+            str(value or "").strip()
+            for value in (
+                job_id,
+                normalized_scenario,
+                normalized_site,
+                completed_after,
+                completed_before,
+            )
+        ) and not parsed_params:
+            raise ValueError("至少提供 job_id、scenario/site、params 或时间范围之一")
+        normalized_params = _normalize_history_params(
+            scenario=normalized_scenario,
+            site=normalized_site,
+            params=parsed_params,
+        )
+        call_params["scenario"] = normalized_scenario
+        call_params["site"] = normalized_site
+        call_params["normalized_params"] = normalized_params
+        site_aliases = _history_site_aliases(normalized_site)
+        from opscli.shared.collection_storage.config import load_storage_settings
+        from opscli.shared.collection_storage.mysql_repository import (
+            MySqlCollectionRepository,
+        )
+
+        settings = load_storage_settings("mcp")
+        if not settings.enabled:
+            raise ValueError("共享采集数据沉淀未启用，无法读取 Keepa 历史数据")
+        repository = MySqlCollectionRepository(settings=settings.mysql)
+        page = await asyncio.to_thread(
+            repository.query_history_page,
+            source_system="keepa",
+            source_job_id=job_id,
+            scenario=normalized_scenario,
+            site=normalized_site,
+            site_aliases=site_aliases,
+            request_params=normalized_params,
+            original_request_params=parsed_params,
+            completed_after=completed_after,
+            completed_before=completed_before,
+            limit=limit,
+            offset=offset,
+            dataset_code=dataset_code,
+            record_limit=record_limit,
+            record_offset=record_offset,
+            include_records=include_records,
+        )
+        return _ok(_public_history_result(page, call_params=call_params))
+    except ValueError as exc:
+        return _err(exc, tool="MCP → keepa_history(...)", call_params=call_params, auto_feedback=False)
+    except Exception as exc:
+        return _err(exc, tool="MCP → keepa_history(...)", call_params=call_params)
 
 
 _ALL_TOOLS = [
@@ -250,7 +386,74 @@ _ALL_TOOLS = [
     keepa_run,
     keepa_job_status,
     keepa_export,
+    keepa_history,
 ]
+
+
+def _public_history_result(
+    page: dict[str, Any],
+    *,
+    call_params: dict[str, Any],
+) -> dict[str, Any]:
+    """构造历史查询的稳定公开合同，不暴露账户、路径和内部 token。"""
+    runs = page.get("runs")
+    if not isinstance(runs, list):
+        runs = []
+    public_runs: list[dict[str, Any]] = []
+    for run in runs:
+        item = _strip_sensitive(run)
+        if not isinstance(item, dict):
+            continue
+        request_payload = item.get("request_params")
+        if isinstance(request_payload, dict):
+            # 只返回用于匹配的 Keepa 参数，隐藏 params.json 中的请求/账户信息。
+            item["request_params"] = request_payload.get("normalized_params") or {}
+        public_runs.append(item)
+    return {
+        "query": _strip_sensitive(call_params),
+        "found": bool(public_runs),
+        "total": int(page.get("total") or 0),
+        "run_count": len(public_runs),
+        "limit": int(page.get("limit") or 0),
+        "offset": int(page.get("offset") or 0),
+        "has_more": bool(page.get("has_more")),
+        "runs": public_runs,
+    }
+
+
+def _normalize_history_params(
+    *,
+    scenario: str | None,
+    site: str | None,
+    params: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """复用 Keepa 场景合同归一化历史查询条件。"""
+    if not params:
+        return None
+    if not scenario:
+        return params
+    from opscli.keepa.api.scenarios import get_scenario
+
+    normalized = get_scenario(scenario).build_params(
+        params=params,
+        site=site or "US",
+    )
+    if site is None:
+        # 未限定站点时，不让默认 US domain 缩窄历史查询范围。
+        normalized.pop("domain", None)
+    return normalized
+
+
+def _history_site_aliases(site: str | None) -> tuple[str, ...]:
+    """返回同一 Keepa domain 的站点别名，兼容 GB/UK 和数字站点。"""
+    if not site:
+        return ()
+    from opscli.keepa.api.scenarios import DOMAIN_CODES, normalize_domain
+
+    domain = int(normalize_domain(site))
+    aliases = [code for code, value in DOMAIN_CODES.items() if value == domain]
+    aliases.append(str(domain))
+    return tuple(dict.fromkeys(alias for alias in aliases if alias != site))
 
 
 def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -263,10 +466,25 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("params_path", None)
         public.pop("raw_path", None)
         public.pop("result_path", None)
+        attach_json_data_fallback(public)
         _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
     return public
+
+
+def _cached_result_payload(cached, *, source_site_key: str) -> dict[str, Any]:
+    """把共享 Dataset 重建为 Keepa 既有结果合同。"""
+    metadata = dict(cached.result_metadata)
+    return {
+        "job_id": cached.source_job_id,
+        "scenario": cached.scenario,
+        source_site_key: cached.site,
+        "row_count": int(metadata.get("row_count") or cached.row_count),
+        "export": metadata.get("export"),
+        "data": dataset_records(cached),
+        "warnings": metadata.get("warnings") or [],
+    }
 
 
 def _public_api_result(payload: dict[str, Any]) -> dict[str, Any]:
@@ -306,7 +524,7 @@ def _sanitize_public_export(public: dict[str, Any]) -> None:
     if isinstance(url, str) and url.startswith("file://"):
         export["url"] = None
         url = None
-    if url:
+    if url or "json_data" in export:
         return
 
     warnings = public.get("warnings")

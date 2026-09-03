@@ -37,7 +37,14 @@ KeepaApiManager 完成 result.json 和 XLSX
 
 两个服务器上的独立 Outbox / Worker
   -> 各自的 MySQL Repository 实例
-  -> 同一个 MySQL schema 和五表合同
+  -> 同一个 MySQL schema 和结果表合同
+
+用户手动创建每日预取计划
+  -> collection_prefetch_schedules
+  -> 到期时写入 collection_prefetch_runs
+  -> 通用 MCP 只领取 Keepa / Google Trends
+  -> Collector MCP 只领取 SellerSprite
+  -> 强制 live 采集并进入原有结果沉淀链路
 ```
 
 采集状态和沉淀状态相互独立。MySQL 故障只重试沉淀，不允许重新调用 SellerSprite 或 Keepa。Keepa 原始响应仍只登记文件 URI、大小和 SHA-256，格式化 XLSX 每个工作表作为独立 Dataset 入库。
@@ -61,6 +68,8 @@ KeepaApiManager 完成 result.json 和 XLSX
 ```text
 collection_schema_versions
 collection_runs
+collection_prefetch_schedules
+collection_prefetch_runs
 collection_artifacts
 collection_datasets
 collection_records
@@ -73,6 +82,18 @@ collection_records
 ```
 
 同一个任务重放时，在一个 MySQL 事务中保留 `collection_runs` ID，并替换其文件、Dataset 和记录，覆盖 Worker 在提交确认间隙重启的情况。
+
+`collection_runs.request_fingerprint` 保存规范化业务请求的 SHA-256 摘要，
+`cache_scope` 保存共享池或专属账号隔离范围。两者均不保存 ASIN、关键词等原始值，
+并通过 `ix_collection_runs_cache_lookup` 支撑精确的新鲜结果查询；
+`request_params._cache` 继续保留结果重建所需的版本和低敏摘要。
+
+预取计划只支持每日固定时间，`next_run_at` 统一保存 UTC，`run_time` 与 `timezone`
+保留用户口径。到期计划先生成独立运行记录，再由所属宿主通过
+`FOR UPDATE SKIP LOCKED` 和执行租约领取；长任务周期续租，进程中断后复用同一运行 ID
+和确定性来源 `job_id` 重试。计划参数禁止出现 JWT、Session、API Key、Cookie、密码或
+其他 Token；执行时只读取部署环境显式配置的服务凭证作用域。SellerSprite 仅允许共享
+账号池的可重放场景，用户专属账号和 `listing-analysis` 不进入自动计划。
 
 ## 6. 环境和历史边界
 

@@ -264,6 +264,48 @@ def test_mcp_server_allows_local_prototype_cors_preflight():
     assert "POST" in response.headers["access-control-allow-methods"]
 
 
+def test_mcp_server_allows_private_lan_prototype_cors_preflight():
+    """局域网设备打开的 HTML 原型也应能跨端口调用本机 API。"""
+    from opscli.mcp.server import _build_dual_endpoint_app
+
+    app = _build_dual_endpoint_app(api_key="test-api-key")
+    response = TestClient(app).options(
+        "/api/v1/keepa/run",
+        headers={
+            "Origin": "http://10.6.53.56:4173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://10.6.53.56:4173"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_mcp_server_adds_cors_header_to_private_lan_auth_failure():
+    """鉴权层返回 401 时也必须允许局域网页面读取错误详情。"""
+    from opscli.mcp.server import _build_dual_endpoint_app
+
+    app = _build_dual_endpoint_app(api_key="test-api-key")
+    response = TestClient(app).post(
+        "/api/v1/keepa/run",
+        headers={
+            "Origin": "http://10.6.53.56:4173",
+            "Authorization": "Bearer invalid-api-key",
+        },
+        json={
+            "scenario": "product-search",
+            "site": "US",
+            "params": {"keyword": "flashlight"},
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.headers["access-control-allow-origin"] == "http://10.6.53.56:4173"
+    assert response.json()["reason"] == "invalid_api_key"
+
+
 def test_mcp_server_exposes_api_route_behind_api_key():
     """真实 MCP 入口应同时提供 API，并沿用现有 API Key 鉴权。"""
     from opscli.mcp.server import _build_dual_endpoint_app

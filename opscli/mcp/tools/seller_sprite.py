@@ -27,7 +27,13 @@ from opscli.seller_sprite.services.api_manager import (
     AI_TASK_DONE_STATUSES,
     AI_TASK_FAILED_STATUSES,
 )
+from opscli.shared.collection_storage.result_cache import (
+    CacheMode,
+    find_cached_result,
+    mark_cache_hit,
+)
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _ok, _parse_json_arg
 
 # 状态接口单次等待最多 30 秒，避免 MCP 请求长期占用连接。
@@ -75,6 +81,20 @@ async def _enqueue_task_with_auth(
     binding: OpsCredentialBinding,
 ) -> dict[str, Any]:
     """按可信凭证和额度切面确认的账号路由提交任务。"""
+    route_kwargs = _seller_sprite_route_kwargs(binding)
+    kwargs: dict[str, Any] = {
+        "credential_scope": binding.credential_scope,
+        "expected_user_email": binding.user_email,
+        "mcp_user_email": binding.user_email,
+        **route_kwargs,
+    }
+    if binding.runtime_auth is not None:
+        kwargs["session_id"], kwargs["jwt"] = binding.runtime_auth
+    return await scheduler.enqueue(request, **kwargs)
+
+
+def _seller_sprite_route_kwargs(binding: OpsCredentialBinding) -> dict[str, Any]:
+    """读取额度切面确认的账号路由并校验当前用户。"""
     from opscli.mcp.quota import get_quota_access_context
     from opscli.seller_sprite.services.task_queue_store import (
         ACCOUNT_ROUTE_USER_BINDING,
@@ -88,11 +108,7 @@ async def _enqueue_task_with_auth(
         or not access_context.account_key
     ):
         raise ValueError("卖家精灵专属账号访问上下文与当前用户不一致")
-    kwargs: dict[str, Any] = {
-        "credential_scope": binding.credential_scope,
-        "expected_user_email": binding.user_email,
-        "mcp_user_email": binding.user_email,
-    }
+    kwargs: dict[str, Any] = {}
     if dedicated:
         kwargs.update(
             {
@@ -101,9 +117,7 @@ async def _enqueue_task_with_auth(
                 "requested_account_key": access_context.account_key,
             }
         )
-    if binding.runtime_auth is not None:
-        kwargs["session_id"], kwargs["jwt"] = binding.runtime_auth
-    return await scheduler.enqueue(request, **kwargs)
+    return kwargs
 
 
 
@@ -128,7 +142,12 @@ def _validate_output_dir(output_dir: str | None) -> None:
         raise ValueError("HTTP/SSE 模式不接受 output_dir，导出目录由数据采集服务统一管理")
 
 
-def _sanitize_export(export: dict[str, Any]) -> dict[str, Any]:
+def _sanitize_export(
+    export: dict[str, Any],
+    *,
+    data: Any = None,
+    warnings: Any = None,
+) -> dict[str, Any]:
     """远端仅返回 HTTPS 导出地址，stdio 保留本地文件兼容行为。"""
     normalized = dict(export)
     if not _is_remote_mcp_request():
@@ -136,11 +155,16 @@ def _sanitize_export(export: dict[str, Any]) -> dict[str, Any]:
             normalized["url"] = Path(normalized["path"]).expanduser().resolve().as_uri()
         return normalized
 
+    fallback_payload = {"export": normalized, "warnings": warnings}
+    if data is not None:
+        fallback_payload["data"] = data
+    attach_json_data_fallback(fallback_payload)
+
     url = str(normalized.get("url") or "").strip()
-    if not url.lower().startswith("https://"):
+    if not url.lower().startswith("https://") and "json_data" not in normalized:
         raise ValueError("导出文件尚未上传到 HTTPS 地址，请稍后重试")
     normalized.pop("path", None)
-    normalized["url"] = url
+    normalized["url"] = url if url.lower().startswith("https://") else None
     return normalized
 
 
@@ -151,7 +175,11 @@ def _sanitize_status(status: dict[str, Any]) -> dict[str, Any]:
         return normalized
     export = normalized.get("export")
     if isinstance(export, dict):
-        normalized["export"] = _sanitize_export(export)
+        normalized["export"] = _sanitize_export(
+            export,
+            data=normalized.get("data"),
+            warnings=normalized.get("warnings"),
+        )
     for key in (
         "root_dir",
         "params_path",
@@ -902,6 +930,40 @@ async def seller_sprite_run(
     HTTP/SSE 模式按 X-MCP-API-Key 自动确保隔离 OPS 凭证；旧客户端传入的
     session_id / jwt 仅保留参数兼容并会被忽略。stdio 模式继续兼容本机凭证。
     """
+    return await _seller_sprite_run_impl(
+        scenario=scenario,
+        params=params,
+        site=site,
+        period=period,
+        page_size=page_size,
+        export_format=export_format,
+        page_prepare=page_prepare,
+        task_interval_seconds=task_interval_seconds,
+        cooldown_seconds=cooldown_seconds,
+        output_dir=output_dir,
+        job_id=job_id,
+        session_id=session_id,
+        jwt=jwt,
+    )
+
+
+async def _seller_sprite_run_impl(
+    scenario: str,
+    params: dict[str, Any] | str | None = None,
+    site: str = "US",
+    period: str = "30d",
+    page_size: int = 100,
+    export_format: str = "xls",
+    page_prepare: bool | None = None,
+    task_interval_seconds: float | None = None,
+    cooldown_seconds: float | None = None,
+    output_dir: str | None = None,
+    job_id: str | None = None,
+    session_id: str | None = None,
+    jwt: str | None = None,
+    cache_mode: CacheMode = "prefer_cache",
+) -> dict:
+    """执行 SellerSprite，并允许内部调用强制绕过共享结果缓存。"""
     try:
         _validate_output_dir(output_dir)
     except Exception as exc:
@@ -960,6 +1022,50 @@ async def seller_sprite_run(
         )
         request = _prepare_request_for_enqueue(raw_request)
         scheduler = _get_task_scheduler()
+        route_kwargs = _seller_sprite_route_kwargs(binding)
+        from opscli.seller_sprite.collection_storage_integration import (
+            build_seller_sprite_cache_identity,
+        )
+        from opscli.seller_sprite.mcp_bundle import get_result_cache_context
+
+        account_route = route_kwargs.get("account_route")
+        requested_account_key = route_kwargs.get("requested_account_key")
+        cache_key, cache_scope = build_seller_sprite_cache_identity(
+            request,
+            account_route=account_route,
+            requested_account_key=requested_account_key,
+        )
+        cache_repository, cache_environment = get_result_cache_context()
+        cached = None
+        if cache_repository is not None and cache_environment:
+            cached = await find_cached_result(
+                cache_repository,
+                source_system="seller_sprite",
+                data_environment=cache_environment,
+                scenario=request.scenario,
+                site=request.site,
+                cache_key=cache_key,
+                cache_scope=cache_scope,
+                cache_mode=cache_mode,
+                include_datasets=False,
+            )
+        if cached is not None:
+            metadata = dict(cached.result_metadata)
+            cached_status = await scheduler.enqueue_cached_owned_mcp_run(
+                request,
+                mcp_user_email=binding.user_email,
+                source_job_id=cached.source_job_id,
+                row_count=int(metadata.get("row_count") or cached.row_count),
+                export_payload=(
+                    dict(metadata["export"])
+                    if isinstance(metadata.get("export"), dict)
+                    else None
+                ),
+                **route_kwargs,
+            )
+            response = _ok(_sanitize_status(cached_status))
+            mark_cache_hit()
+            return response
         queued_status = await _enqueue_task_with_auth(
             scheduler,
             request,
@@ -1069,7 +1175,7 @@ async def seller_sprite_listing_analysis_submit(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """提交 Listing Analysis AI 任务并立即返回本地 job_id。"""
+    """仅当用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交，禁止自动触发。"""
     try:
         _validate_output_dir(output_dir)
     except Exception as exc:
@@ -1135,7 +1241,7 @@ async def seller_sprite_listing_analysis_status(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """读取 Listing Analysis 本地提交状态，并在可用时续查远端任务状态。"""
+    """仅续查用户已明确提交的 Listing Analysis job_id，不创建或自动触发新任务。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
         binding = await ensure_ops_credentials(
@@ -1188,7 +1294,7 @@ async def seller_sprite_listing_analysis_result(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """读取 Listing Analysis 远端任务结果；未完成时返回 ready=false。"""
+    """仅读取用户已明确提交的 Listing Analysis job_id 结果，不创建或自动触发新任务。"""
     try:
         owner_record = _ensure_listing_analysis_job_owner(job_id)
         binding = await ensure_ops_credentials(
@@ -1372,7 +1478,14 @@ async def seller_sprite_export(job_id: str) -> dict:
         export = status.get("export")
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
-        return _ok(_sanitize_export(dict(export)))
+        export_payload = build_export_payload_with_fallback(status)
+        return _ok(
+            _sanitize_export(
+                export_payload,
+                data=status.get("data"),
+                warnings=status.get("warnings"),
+            )
+        )
     except Exception as exc:
         return _err(exc, tool="MCP → seller_sprite_export(...)", call_params={"job_id": job_id})
 
