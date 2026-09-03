@@ -10,15 +10,12 @@ if (!configPath || !templatePath || !outputPath) {
   );
 }
 
-// 生产 Nginx 配置不接受空应用 ID。
+// 生产构建仍需校验应用身份，但 Nginx 不消费公开路径。
 const config = loadOpsAppConfig(configPath, { requireAppId: true });
-const template = readFileSync(resolve(templatePath), "utf8");
-const rendered = template
-  .replaceAll("${OPS_APP_ID}", config.appId)
-  .replaceAll("${OPS_APP_NAME}", config.appName);
+const rendered = readFileSync(resolve(templatePath), "utf8");
 
 if (/\$\{OPS_[A-Z_]+\}/.test(rendered)) {
-  throw new Error("Nginx 模板包含未解析的 OPS 变量");
+  throw new Error("根路径 Nginx 模板不得包含 OPS 变量");
 }
 
 const absoluteOutput = resolve(outputPath);

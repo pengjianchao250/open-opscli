@@ -1,151 +1,114 @@
-# 部署规范
+# 发布规范
 
-部署目标为一个 Docker Compose 项目，包含前端和后端全部运行服务。初始化只生成部署文件；是否构建、启动或发布服从当前环境授权。
+当前 AppHub 发布目标是一个 FastAPI 应用。Vite 只生成静态产物，FastAPI 同时承载页面、API、WebSocket 和平台健康检查。
 
-## 固定产物
-
-```text
-deployment/
-├── Dockerfile
-├── compose.yaml
-├── nginx.conf.template
-├── ops-app-config.mjs
-├── ops-app-config.d.mts
-└── render-nginx-config.mjs
-```
-
-根目录还必须有 `.dockerignore`。Docker 构建上下文固定为仓库根目录，Compose 中使用 `context: ..`；不得使用依赖宿主机绝对路径的上下文。
-
-进入生产部署阶段的项目必须同时提供实际前端和后端；空项目初始化或后端尚未交付时只完成前端，不得用空容器满足文件检查。后端交付完成后才生成可发布的双服务 Compose。
-
-`Dockerfile` 使用多阶段 target 同时描述前端和后端镜像，至少提供 `frontend-runtime`、`backend-runtime`。Compose 的两个服务分别选择对应 target，避免维护两份入口文件。
-
-项目主 Dockerfile 固定为 `deployment/Dockerfile`。Linux 服务器使用标准 Compose 路径和相对构建上下文；不得额外生成根目录兼容 Dockerfile，也不得为本地宿主机 provider 缺陷改变生产文件结构。
-
-### 分层与缓存
-
-禁止无边界的 `COPY . .`，不是禁止复制文件。Dockerfile 必须按依赖和源码拆分复制：
+## 固定根级产物
 
 ```text
-frontend-deps -> frontend-build -> frontend-runtime
-backend-deps  -> backend-build  -> backend-runtime
+app.yaml
+requirements.txt
+nixpacks.toml
+Dockerfile
+.dockerignore
+frontend/
+backend/
+migrations/
 ```
 
-- 前端先复制实际使用的 `package.json` 和唯一锁文件，再执行冻结安装，之后才复制 `frontend/` 源码、共享配置和 Nginx 模板。
-- 后端先复制 `pyproject.toml`、`uv.lock`，执行 `uv sync --locked --no-install-project`，之后才复制 `backend/` 源码并完成项目安装。
-- 前端 stage 不得复制 `backend/`；后端 stage 不得复制 `frontend/`。
-- `ops-app.config` 在依赖安装后复制，使应用 ID 或应用名变化只触发构建层，不重装依赖。
-- 使用 BuildKit cache mount；前端缓存使用包管理器原生缓存目录，后端缓存 `/root/.cache/uv`。缓存 ID 不得把密钥写入缓存内容。
-- CI 可通过 Compose `build.cache_from`、`build.cache_to` 使用 registry 或本地外部缓存；本地基线不依赖外部缓存。
+`app.yaml` 是唯一发布声明。入口固定为 `backend/app.py`，运行时固定为 `fastapi`。发布目录必须是独立 Git 仓库根目录，当前分支必须为 `main`。
 
-Docker 的缓存命中取决于指令和被复制文件的内容。精确 `COPY`、锁文件优先和小构建上下文是必须项。[Docker 构建缓存规范](https://docs.docker.com/build/cache/optimize/)
+## Nixpacks 主路径
 
-### `.dockerignore` 最低规则
+AppHub 首次创建应用和后续发布均使用 Nixpacks。根目录 `nixpacks.toml` 必须：
 
-必须排除 `.git`、编辑器目录、`node_modules`、前端构建产物、Python 虚拟环境和缓存、SQLite 本地数据库、日志、`.env`、私钥及包管理器认证文件；必须保留源码、锁文件、`ops-app.config`、`deployment/` 和测试所需文件。`.dockerignore` 不得通过通配规则误排除 `package.json`、`pyproject.toml`、`uv.lock` 或 `nginx.conf.template`。
-
-## 前端镜像
-
-- 使用多阶段构建：Node 阶段安装锁定依赖并执行 `vite build`，Nginx 阶段只复制构建产物和配置。
-- 使用与锁文件一致的包管理器及冻结安装模式。
-- 构建前读取 `ops-app.config`；`appId` 为空时失败。
-- 将 Skill 的 `assets/nginx.conf.template` 原样复制为项目的 `deployment/nginx.conf.template`。项目内 Nginx 必须使用该模板；只允许替换模板变量，不得删除或放宽路径、SPA 回退和缓存规则。
-- 将 Skill 的 `ops-app-config.mjs`、`ops-app-config.d.mts`、`render-nginx-config.mjs` 原样复制到项目 `deployment/`。
-- Node 构建阶段复制根目录 `ops-app.config`，执行 `node deployment/render-nginx-config.mjs ops-app.config deployment/nginx.conf.template /tmp/default.conf`。脚本只替换 OPS 模板变量，保留 `$uri`、`$host` 等 Nginx 变量。
-- Nginx 运行阶段从 Node 构建阶段复制 `/tmp/default.conf` 到 `/etc/nginx/conf.d/default.conf`，镜像构建阶段必须执行 `nginx -t`。
-- 构建阶段执行 `nginx -t` 时，Compose 服务名尚不存在；允许只在检查副本中把 `backend:8000` 临时替换为 `127.0.0.1:8000`，检查完成后必须恢复原始上游地址，运行时仍通过 Compose DNS 访问 `backend:8000`。
-- Nginx runtime 必须创建并赋予非 root 用户权限给 `/tmp`、`/var/cache/nginx`、`/var/run`；主配置中的 pid 必须改为 `/tmp/nginx.pid`，启动参数不得再次声明 pid，避免重复 directive，也不得依赖 `/var/run/nginx.pid` 的 root 写权限。访问日志和错误日志写入 stdout/stderr。
-- Compose 和 Dockerfile 不得声明 `OPS_APP_ID`、`OPS_APP_NAME` 或另一套部署路径 build args；这些值只来自 `ops-app.config`。
-- 不使用 `vite preview` 作为生产服务器。
-
-## Vite 产物路径合同
-
-- Vite 构建 `base` 固定为 `/ops-app/{appId}/{appName}/`，因此生成的 HTML 会从该前缀请求 JS、CSS、图片和其他资源。
-- 前端镜像把 `dist` 目录中的内容直接复制到 `/usr/share/nginx/html/`，不额外创建 `/ops-app/{appId}/{appName}/` 文件夹。
-- Nginx 模板将 `/ops-app/${OPS_APP_ID}/${OPS_APP_NAME}/...` 重写为根目录下的 `/...`，再执行 `try_files`；例如浏览器请求 `/ops-app/123/demo/assets/app.js` 时读取 `/usr/share/nginx/html/assets/app.js`。
-- 应用 ID、应用名、Vite `base`、Docker 构建参数和 Nginx 模板变量必须来自同一份 `ops-app.config`。任一值不一致时发布检查失败。
-- 禁止删除前缀重写、同时复制带前缀目录，或在 Nginx 中硬编码另一套路径；这些做法会导致资源 404 或重复路径。
-
-## Nginx 缓存合同
-
-模板固定以下行为：
-
-- `/index.html` 及 SPA 路由回退：`Cache-Control: no-store, no-cache, must-revalidate, max-age=0`，关闭 ETag 和修改时间协商，确保每次返回完整新内容。
-- `/index.html` 同时返回 `X-Accel-Expires: 0`，要求最外层 Nginx 不保存该上游响应。外层不得用 `proxy_ignore_headers` 忽略 `X-Accel-Expires`、`Cache-Control` 或 `Expires`。
-- JS、CSS、图片和其他静态文件：`Cache-Control: public, no-cache`，启用 ETag 和精确 Last-Modified 协商；内容未变化时允许返回 `304`。
-- 禁止为静态文件增加 `immutable` 或长期正数 `max-age`，避免绕过协商验证。
-
-最外层 Nginx 是最终响应出口。发布验收必须从外层公开地址检查最终响应头，项目内配置文件存在不能单独证明缓存策略生效。
-
-## 后端镜像
-
-- 使用官方 Python 基础镜像和非 root 用户。
-- 依赖层与源码层分开复制，启动命令使用 exec 形式。
-- 监听 `0.0.0.0`，提供 `/health`。
-- SQLite 默认路径为 `/data/app.db`，镜像内不包含数据库文件。
-
-## Compose
-
-`deployment/compose.yaml` 使用最新 Compose Specification，不写旧版 `version` 字段。至少声明：
-
-- `frontend`：构建前端镜像、暴露 Web 端口、依赖后端健康状态。
-- `backend`：构建后端镜像、声明健康检查、挂载 SQLite 数据卷。
-- 一个命名数据卷，用于 `/data`。
-- 前后端服务都必须声明 `image`。镜像仓库名按服务区分：`<appId>-<appName>-frontend` 和 `<appId>-<appName>-backend`；每个仓库同时发布 `:sha-<git-sha>` 与 `:latest` 两个 tag。示例：`1234-orders-web-frontend:sha-3f8a2c1`、`1234-orders-web-frontend:latest`。
-
-服务间使用 Compose 服务名通信。只有浏览器需要访问的端口才映射到宿主机；后端只使用 `expose: 8000`，由 Nginx 通过 Docker Compose 内置 resolver 动态解析的 `http://backend:8000` 访问。Nginx 必须配置 `resolver 127.0.0.11 valid=30s ipv6=off;`，并通过变量形式 `proxy_pass`，避免后端容器重启换 IP 后继续访问旧地址。
-
-Compose 基线：
-
-- 两个服务的 `build.context` 为 `..`，`dockerfile` 为 `deployment/Dockerfile`，分别选择 `frontend-runtime`、`backend-runtime`。
-- `image` 字段由 Skill 调用共享配置模块的 `getOpsAppImageName(config, service, tag)` 渲染，不允许人工维护另一份 ID 或应用名。仓库名部分统一转为小写；校验时必须验证前后端镜像名中的 ID、应用名、服务后缀与配置一致。
-- `frontend` 映射 `0.0.0.0:${OPS_APP_PORT:-8080}:8080`，保证局域网可访问；外层 Nginx 在容器网络内时改为 external network，不发布宿主端口。
-- `frontend` 使用 `depends_on.backend.condition: service_healthy`；后端 `/health` 必须配置 `healthcheck`。仅写短格式 `depends_on` 不代表服务已经就绪。
-- Linux 服务器和 CI 按标准 Compose provider 执行构建；不把本地宿主机 provider 的并行或路径参数写入生产 Compose。
-- 线上 Compose 的 `image` 固定引用 `:latest`，并设置 `pull_policy: always`；CI 构建必须同时推送 `:sha-<git-sha>` 和 `:latest`。hash tag 不得复用，digest 必须写入发布记录。
-- 生产 Compose 禁止源码 bind mount、`container_name`、`privileged` 和 `network_mode: host`。
-- `read_only: true` 为默认运行策略；前端至少把 `/tmp`、`/var/cache/nginx`、`/var/run` 声明为 `tmpfs`，并显式设置非 root Nginx 用户可写的 mode，后端把 `/tmp` 声明为 `tmpfs`。镜像中的静态文件和 Python 代码不可写。
-- 服务设置 `restart: unless-stopped`、`init: true`、停止宽限期和日志轮转；日志写 stdout/stderr。
-- Dockerfile 不声明 `VOLUME`。持久化只由 Compose 顶层 named volume 声明，后端挂载 `/data`，前端不挂持久卷。
-- SQLite 服务固定单副本，禁止通过 Compose 横向扩展写入实例；发布前必须定义卷备份和恢复步骤。
-- 不在 Compose、Dockerfile `ARG/ENV` 或镜像层写入密钥。非敏感运行配置可用环境变量；敏感值使用 Compose secrets 或部署平台 secret。
-- 镜像使用明确版本的官方基础镜像；业务镜像按约定使用可变标签 `latest` 和不可复用的 `sha-<git-sha>`。每次发布必须在发布记录中保存实际镜像 digest，回滚使用 hash tag 或 digest，不依赖 `latest` 的历史状态。
-
-Compose 官方生产建议包括移除源码卷绑定、设置重启策略并为生产单独覆盖配置；服务健康依赖、只读文件系统、日志和命名卷均由 Compose Specification 提供。[Compose 生产规范](https://docs.docker.com/compose/how-tos/production/)、[服务规范](https://docs.docker.com/reference/compose-file/services/)、[卷规范](https://docs.docker.com/reference/compose-file/volumes/)
-
-## 路径合同
+- 同时准备 Node 与 Python 构建环境。
+- 使用前端锁文件执行冻结安装。
+- 在 `install` 与 `python:install` 分别使用 `...` 保留 Node/Python provider 的安装命令。
+- 将 `python -c "import opscli.app"` 追加到 `python:install`，前端冻结安装追加到 `install`；Vite 构建同时依赖两个阶段。
+- 执行 Vite 生产构建，产物输出到 `frontend/dist`。
+- 使用平台同款命令启动 FastAPI：
 
 ```text
-开发静态根路径: /
-部署静态根路径: /ops-app/{appId}/{appName}/
-后端 API 路径: /api
-健康检查路径: /health
+python -m opscli.app.migrate && uvicorn backend.app:app --host 0.0.0.0 --port 8000
 ```
 
-`appName` 与 `appId` 必须来自根目录 `ops-app.config`。Vite、Nginx 渲染和 Compose 镜像名必须复用同一配置；禁止在 `.env`、Compose、Dockerfile 或其他文件维护互相独立的硬编码 ID。Compose 中允许出现由 Skill 渲染得到的镜像名，但它必须视为派生产物，每次配置变更都重新生成并校验。
+当前 Coolify 环境中 Node 与 Python setup 必须使用同一个已验证的 nixpkgs archive，避免运行库版本漂移。项目切换前端包管理器时，只调整冻结安装和构建命令，不改变 Python 安装、启动模块、端口或健康路径。
+
+## Python 依赖
+
+根目录 `requirements.txt` 是发布构建读取的唯一 Python 依赖清单：
+
+- 普通第三方依赖使用 `package==version`。
+- 必须包含真实包 `aukeys-opscli>=0.0.129`，并把最低版本更新到首个包含 `opscli.app` 的正式版本。
+- 不允许本地 `opscli/` 包、同名模块、`-e`、相对路径或未固定版本的 Git 依赖。
+- `app.yaml` 声明的入口所需依赖必须全部在该文件中。
+
+## Dockerfile 次级路径
+
+根目录 `Dockerfile` 只用于本地、CI 和可复现构建，不改变 AppHub 的 Nixpacks 发布方式。
+
+- Node 构建阶段先复制 `frontend/package.json` 和锁文件，再冻结安装；随后复制前端源码并构建。
+- Python 运行阶段先复制 `requirements.txt`、安装并验证 `opscli.app`，再复制 `backend/`、`migrations/`、`app.yaml` 和 Vite 产物。
+- 禁止无边界 `COPY . .`。
+- 使用明确版本的官方 Node 与 Python 基础镜像。
+- 运行阶段使用非 root 用户，监听 `0.0.0.0:8000`。
+- 应用源码保持 root 只读所有权，只把 `/data` 授权给运行用户。
+- 不把 SQLite 文件、环境文件、密钥、前端依赖目录或测试缓存复制到镜像。
+- 启动命令与 Nixpacks 保持一致。
+
+## `.dockerignore`
+
+必须排除 `.git`、编辑器目录、前端依赖和构建缓存、Python 虚拟环境和缓存、SQLite 文件、日志、环境文件、私钥和包管理器认证文件。不得排除：
+
+- `app.yaml`
+- `requirements.txt`
+- `nixpacks.toml`
+- `frontend/package.json` 与锁文件
+- `frontend/src/`、`frontend/public/`
+- `backend/`
+- `migrations/`
+
+## `root-v1` 路由
+
+平台完成鉴权后移除公开前缀，应用只处理根路径：
+
+```text
+页面与 SPA: /
+静态资源: /assets/*
+业务 API: /api/*
+WebSocket: /ws
+平台健康: /__apphub_healthz
+```
+
+- Vite `base` 固定为 `./`。
+- Axios 和 WebSocket 使用相对 URL。
+- FastAPI 不读取公开前缀，不设置框架子路径参数。
+- API、WebSocket 和健康路由必须先于静态挂载与 SPA fallback 注册。
+- `/__apphub_healthz` 不访问业务数据或外部系统。
+
+## SQLite 持久化
+
+`app.yaml` 声明 `services.sqlite: true` 时，平台注入 `APP_DB_PATH=/data/app.db` 并在启动前运行迁移。应用不得硬编码线上数据库路径，也不得提交数据库文件。
+
+本地开发默认将 `APP_DB_PATH` 指向仓库内已忽略的 `.data/app.db`；本地测试必须指向临时目录。`.data/` 必须同时从 Git 和构建上下文排除。
 
 ## 发布检查
 
 按顺序检查：
 
-1. 读取 `.opscli/app.json` 和 `ops-app.config`，校验 `appId/appName` 分别等于 binding 的 `app_id/slug`；不在首次发布阶段重新注册应用。
-2. 确认 Dockerfile、两个运行 target、Compose、Nginx 模板、共享配置模块和渲染脚本存在且被前端镜像引用。
-3. 检查 `.dockerignore` 没有排除构建必需文件，Dockerfile 没有无边界 `COPY . .`、`VOLUME` 或明文 secrets；Compose 前后端镜像名符合服务后缀和双 tag 约定。
-4. 执行前后端测试和生产构建。
-5. 执行 `docker compose -f deployment/compose.yaml config`，再执行 `docker compose -f deployment/compose.yaml build --check`（环境支持时）。
-6. 获得许可后再构建并启动容器。
-7. 从外层公开地址检查健康状态、部署前缀、嵌套路由刷新、API、缓存响应头和数据持久化。
-
-发布检查通过后使用 `opscli app push <root> --message <summary>`；不得猜测其他项目注册或发布命令。
+1. 确认目标目录是独立 Git 根，当前分支为 `main`。
+2. 校验 `app.yaml`，确认 `runtime: fastapi`、`entrypoint: backend/app.py` 和实际入口一致。
+3. 检查普通依赖全部精确锁定，真实 `aukeys-opscli` 已发布兼容版本且通过模块导入检查。
+4. 执行前端测试与生产构建。
+5. 执行后端测试，覆盖健康、API、静态资源、SPA fallback 和 SQLite 临时路径。
+6. 静态核对 Nixpacks 与 Dockerfile 的构建产物、启动命令、端口和健康路径一致。
+7. 获得许可后再执行镜像构建、启动或真实发布。
 
 ## 完成标准
 
-- Compose 配置有效，且包含实际前后端服务。
-- 前端 HTML、JS、CSS 和图片均从部署前缀加载。
-- 带部署前缀的静态资源能映射到 Nginx 根目录中的 Vite 产物，不出现重复 `/ops-app/.../ops-app/...` 路径。
-- 浏览器访问嵌套路由和刷新均成功。
-- `index.html` 和 SPA 回退响应包含 `no-store`，且外层未返回缓存命中或陈旧内容。
-- 其他静态文件包含 ETag 或 Last-Modified，条件请求在内容未变化时返回 `304`。
-- API 请求不携带静态资源前缀。
-- 后端健康检查成功，容器重启后数据仍存在。
-- 回滚说明包含镜像版本和 SQLite 数据备份/恢复边界。
+- Nixpacks 是 AppHub 发布主路径，Dockerfile 只承担本地和 CI 验证。
+- 单个 FastAPI 进程可返回页面、静态资源、API、WebSocket 和健康响应。
+- Vite 产物只包含相对 URL，在完整公开地址下正常加载。
+- `/__apphub_healthz` 返回 200，应用侧路径不含平台公开前缀。
+- SQLite 只通过 `APP_DB_PATH` 使用平台数据盘，迁移可重复执行。
+- Git 根、`main` 分支、依赖锁定和发布声明均通过检查。

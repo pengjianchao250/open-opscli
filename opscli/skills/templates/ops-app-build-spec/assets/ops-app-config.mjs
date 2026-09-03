@@ -29,10 +29,10 @@ export function loadOpsAppConfig(configPath, options = {}) {
   return Object.freeze({ schemaVersion: 1, appId, appName: config.appName });
 }
 
-/** 从已校验配置派生唯一部署前缀。 */
+/** 从已校验配置派生唯一公开 URL 前缀。 */
 export function getOpsAppDeployBase(config) {
   if (!config.appId) {
-    throw new Error("生产构建前必须取得 appId");
+    throw new Error("生成公开 URL 前必须取得 appId");
   }
   return `/ops-app/${config.appId}/${config.appName}/`;
 }

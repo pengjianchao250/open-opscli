@@ -6,60 +6,78 @@
 
 ```text
 backend/
-├── app/
-│   ├── api/
-│   ├── core/
-│   ├── db/
-│   ├── models/
-│   ├── schemas/
-│   ├── services/
-│   └── main.py
-├── tests/
-├── pyproject.toml
-├── uv.lock
-└── .env.example
+├── __init__.py
+├── app.py
+├── api/
+├── db/
+├── models/
+├── schemas/
+└── services/
+migrations/
+tests/
+requirements.txt
 ```
 
-只创建有实际职责的模块。简单项目可以合并空层，避免为了目录结构拆分一次性函数。
+只创建有实际职责的模块。简单项目可以合并空层，避免为了目录结构拆分一次性函数。Python 依赖清单固定在仓库根目录 `requirements.txt`。
 
-## API
+## FastAPI 入口
 
-- 业务接口统一放在 `/api` 下，健康检查使用 `/health`。
-- 路由只处理协议转换、参数校验和响应；业务逻辑放在 service，持久化放在 db/repository 边界。
-- 请求和响应使用 Pydantic schema，不直接返回数据库对象。
-- 错误响应保持稳定结构和合适 HTTP 状态码，不向客户端暴露堆栈、SQL、文件路径或密钥。
-- OpenAPI 文档可在开发环境启用；生产是否开放服从平台要求。
+`app.yaml` 的 `entrypoint` 固定指向 `backend/app.py`。模块必须导出 `app = FastAPI(...)`，并按以下顺序注册：
+
+1. `/__apphub_healthz`。
+2. `/api/*` 业务路由。
+3. WebSocket 路由。
+4. `/assets` 静态目录。
+5. SPA fallback。
+
+健康检查必须快速返回 200，不执行迁移、外部请求或业务查询。业务路由只处理协议转换、参数校验和响应；业务逻辑放在 service，持久化放在 db/repository 边界。
+
+FastAPI 直接处理根路径，不读取平台公开前缀，不设置框架子路径参数。错误响应保持稳定结构和合适 HTTP 状态码，不向客户端暴露堆栈、SQL、文件路径或密钥。
+
+## Vite 产物托管
+
+- 构建目录固定为 `frontend/dist`。
+- 使用 `StaticFiles` 托管 `frontend/dist/assets`。
+- 根页面和 SPA fallback 使用 `FileResponse` 返回 `frontend/dist/index.html`。
+- fallback 不得吞掉 `/api/*`、`/__apphub_healthz` 或 WebSocket。
+- 生产只运行当前 FastAPI 进程，不再启动额外 Web 服务。
 
 ## SQLite
 
-- 数据库路径从环境变量读取，容器默认使用 `/data/app.db`。
-- 启用外键约束；并发写入场景可启用 WAL，但不得把 SQLite 描述为高并发数据库。
-- Compose 只运行一个写入实例。需要多副本、高写入并发、跨服务共享数据库时停止并联系 IT 评估数据库迁移。
-- 数据文件不得写入镜像层或源码目录，必须挂载持久卷。
-- 已有数据的表结构变化必须使用可审查迁移；不得通过删除数据库重新初始化。
+- 数据库路径只从 `APP_DB_PATH` 读取；本地开发默认指向仓库内已忽略的 `.data/app.db`，平台在启用 SQLite 时注入 `/data/app.db`。
+- 测试必须指向 `tmp_path` 或其他临时目录，不复用本地开发数据库。
+- 优先复用 `opscli.app.get_engine()`；启用外键约束和合理的 busy timeout。
+- `.data/` 和数据库文件不得提交、复制到镜像或写入前端目录。
+- 已有数据的表结构变化放在 `migrations/*.sql`，启动前由 `python -m opscli.app.migrate` 顺序执行。
+- 需要多副本、高写入并发、跨服务共享数据库时停止并联系 IT 评估数据库迁移。
 
-## 配置与安全
+## 依赖与安全
 
-- 配置来自环境变量，仓库仅提交 `.env.example`。
-- 密钥、Token、真实账号和生产地址不得进入源码、镜像、Compose 或文档。
-- CORS 只允许实际前端来源；本地开发来源与部署来源分开配置。
-- 文件上传限制大小和类型，文件名不得直接作为服务器路径。
-- 所有外部输入在信任边界校验，SQL 使用参数化查询或 ORM 表达式。
+根目录 `requirements.txt` 中的普通第三方依赖使用 `==` 精确锁定，平台 SDK 使用最低兼容版本，至少包含：
 
-## 容器运行
+```text
+fastapi==0.141.1
+uvicorn==0.46.0
+aukeys-opscli>=0.0.129
+```
 
-- 基于官方 Python 镜像构建，锁定明确的 Python 主次版本。
-- 依赖管理统一使用 `uv`、`pyproject.toml` 和 `uv.lock`；已有 `requirements.txt` 的受支持项目迁移时转换为该结构。
-- 先精确复制 `pyproject.toml`、`uv.lock` 等依赖清单，再安装依赖；随后精确复制 `backend/` 源码。禁止用无边界的 `COPY . .` 让无关文件破坏依赖缓存。
-- 使用 BuildKit cache mount 缓存 `/root/.cache/uv`，并使用 `uv sync --locked`。
-- 使用 exec 形式启动命令，绑定 `0.0.0.0`，容器内端口保持固定。
-- 以非 root 用户运行；镜像中不包含开发缓存、测试产物、数据库文件或 `.env`。
-- 容器健康检查调用 `/health`，只有依赖就绪后才返回成功。
+`aukeys-opscli` 必须从正式包源安装，构建阶段执行 `python -c "import opscli.app"`。若当前最低版本尚未包含该模块，先发布兼容正式版本并更新最低版本，再发布应用。禁止在项目中创建本地 `opscli/` 包、同名模块或可编辑路径依赖。
 
-## 验收
+密钥、Token、真实账号和生产地址不得进入源码、镜像或文档。文件上传限制大小和类型；所有外部输入在信任边界校验，SQL 使用参数化查询或 ORM 表达式。
+
+## 启动与验收
+
+平台启动命令固定为：
+
+```text
+python -m opscli.app.migrate && uvicorn backend.app:app --host 0.0.0.0 --port 8000
+```
+
+验收项：
 
 - 依赖安装、静态检查和测试通过。
-- `/health`、核心 API、校验错误和异常响应通过测试。
-- 容器重启后 SQLite 数据仍存在。
-- 前端经 Compose 网络可以访问 API，浏览器请求不受错误 CORS 配置阻断。
+- `/__apphub_healthz`、核心 API、校验错误和异常响应通过测试。
+- 根页面、静态资源和 SPA fallback 由 FastAPI 返回。
+- API 与 WebSocket 路由不被 fallback 吞掉。
+- `APP_DB_PATH` 指向临时文件时，迁移和 SQLite 读写通过。
 - 日志中不出现密钥、完整鉴权头或敏感请求体。
