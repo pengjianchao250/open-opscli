@@ -62,6 +62,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 | 数据对比 | `dataComparison` | `data_comparison` | 环比/同比 | 否 |
 | 排序规则 | `orderBy` | `order_by` | 排序 | 否 |
 | 分页 | `limit` / `offset` | `limit` / `offset` | 分页 | 否（默认 limit=20） |
+| 全局币种 | `globalCurrency` | （`query_simple` 暂无该参数） | 按指定币种换算金额指标，仅 USD/GBP/CAD/EUR/JPY/CNY；识别到币种意图时才传，见下文 | 否 |
 
 > 不需要理解的概念（服务端自动处理）：`translate`、`from`、`field_name` vs `bc.` 前缀、`cacl_type`、`params.dim/date`
 
@@ -87,6 +88,43 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
   }
 }
 ```
+
+---
+
+## 全局币种 globalCurrency（请求侧）
+
+- **作用**：按指定币种换算展示金额类指标。取值**仅支持** `USD / GBP / CAD / EUR / JPY / CNY`（大写 ISO 4217）。
+- **来源**：由 Agent 从用户请求文本识别币种意图（如"用美元显示""按 USD 口径""分别使用加拿大元和人民币""同时用加拿大元对比显示"），CLI 显式传 `--global-currency <代码>`（或简化 payload 顶层 `globalCurrency`）。只在识别到明确币种意图时传入；**未识别到时不传**，由后端回退当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
+- **多币种 = 多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"都必须执行 CNY 与 CAD **两次**服务端查询，每次只传一个 `globalCurrency`，其余表、字段、时间、筛选、排序和行数完全一致。最后一种表达即使省略"人民币"，也表示保留人民币主口径并增加 CAD 对照。
+- **非白名单币种**（如 HKD/AUD）不要传，后端会拒绝，请勿伪造。
+- **禁止用字段名替代币种参数**：不得用"选 `_cny` 字段"或"选原币字段"来代替 `globalCurrency`；数据集同时存在原币与 CNY 字段时，字段口径歧义按 `references/rules.md` 第四章澄清，币种换算仍由服务端按 `globalCurrency` 完成。
+
+## 返回币种 meta.currency（结果侧）
+
+`globalCurrency` 是**请求侧**参数，`meta.currency` 是**返回侧**事实，两者必须分开看待。
+
+- **位置**：服务端写在返回的 `meta.currency`（视返回形状位于顶层 `meta.currency`、`data.meta.currency` 或 `data.result.meta.currency`），值为本次实际生效的币种代码（ISO 4217）。
+
+```json
+{
+  "success": true,
+  "data": [],
+  "meta": {
+    "dataSource": "doris_analytics",
+    "rowCount": 0,
+    "totalCount": 0,
+    "queryId": "54e0bc13-4bab-45c4-a291-ba194fa54aac",
+    "currency": "CNY"
+  },
+  "error": null
+}
+```
+
+- **必须声明**：结果含金额类指标且 `meta.currency` 有值时，结论首句、结果表表头和 Excel 口径页都要写明币种（上例 `"currency": "CNY"` 即"本次金额均为人民币（CNY）计价"）；未声明币种的金额结论视为不合规。
+- **缺失时不推断**：该键缺失或为 `null` 时只能说明"本次返回未声明币种"，禁止按字段名后缀、数据集习惯或历史会话断定货币。
+- **冲突以返回为准**：请求传了 `globalCurrency=USD` 但 `meta.currency` 返回 `CNY` 时，以 `CNY` 陈述并披露该差异，不得按请求值描述。
+- **禁止外部汇率**：不得引用 Bank of Canada Valet `FXCNYCAD`、模型记忆、公开/内部行情或本地计算做换算、跨币种相加或折算比较；需要其他币种时重新发起带 `globalCurrency` 的查询，由服务端换算。
+- **多币种对比前校验**：分别读取每次返回的 `meta.currency` 和全量结果。只有返回币种与请求一致、各查询均未截断、共同维度键集合一致且非金额指标一致时，才按共同维度关联金额列；否则停止对比并披露差异。
 
 ---
 
@@ -290,6 +328,20 @@ opscli query simple --table-id 1 \
 opscli query simple --table-id 1 \
   --json '{"dimensions":[...],"metrics":[...]}' \
   --run --pretty
+
+# 用户明确要求币种口径（如"用美元显示"）时显式传全局币种；多币种按币种各执行一次
+opscli query simple --table-id 1 \
+  --payload /tmp/simple.json \
+  --global-currency USD \
+  --run --pretty
+
+# 经 opscli query intent 命中候选后执行，透传意图归因参数（见 references/cli.md）
+opscli query simple --table-id <selected.table_id> \
+  --payload /tmp/simple.json \
+  --intent-code <selected.intent_code> \
+  --selection-source intent_route \
+  --match-record-id <match_record_id> \
+  --run --pretty
 ```
 
 ## MCP 调用方式
@@ -309,6 +361,10 @@ query_simple(
     session_id="xxx"
 )
 ```
+
+> **币种（MCP）**：`query_simple` 目前**没有** `global_currency` 参数。用户明确要求币种口径时，改用 `query_run(payload_path=...)`，在 payload 顶层写入 `"globalCurrency": "USD"`（白名单同上）；多币种同样逐币种各调用一次，并以每次返回的 `meta.currency` 为准声明币种。禁止查一次后用外部汇率换算。
+
+> **意图目录（MCP）**：用户未指定数据集时，先调 `query_intent_match(query="<用户原文>")`（远端实时意图目录；`query_catalog()` 可读取完整目录）。返回 `matched=true` 且 `ask_user_question_required=false` 时取 `selected.table_id` / `selected.dataset_alias`；`ask_user_question_required=true` 时用 AskUserQuestion 让用户在 `candidates` 里选；`fallback_required=true`、报错或工具不可用时回退 `query_metadata()` 关键词筛选。命中后执行 `query_simple` / `query_run` / `query_build_and_run` 时一并透传 `intent_code`、`selection_source="intent_route"`、`match_record_id`（取自返回值）。候选里的 `intent_constraints`（`hard_constraints` / `avoid_when` / `clarify_when` 等）必须先向用户复述确认再套用，不得静默应用。
 
 ---
 

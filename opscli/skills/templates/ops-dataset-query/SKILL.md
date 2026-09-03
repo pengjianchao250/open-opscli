@@ -113,11 +113,18 @@ version: 1.0.2
 
 所有远端查询动作必须统一走选定模式下的正式查询入口，**禁止直接调用后端 HTTP 接口**。
 
-### 铁律三：本地意图路由 → 确定数据集
+### 铁律三：意图路由 → 确定数据集（远端优先，本地兜底）
 
 当用户只给出自然语言需求、没有指定 dataset 时，按以下顺序确定数据集：
 
 ```
+0. 远端实时意图目录（不依赖本地快照）：
+   CLI 模式：opscli query intent -q "<用户原文>" --pretty
+   MCP 模式：query_intent_match(query="<用户原文>")
+     → matched=true 且 ask_user_question_required=false → 直接采用 selected.table_id / selected.dataset_alias
+     → ask_user_question_required=true → 用 AskUserQuestion 让用户在 candidates 里选，不得默认取第一个
+     → routing_status=embedded_intent → 实际查询落在 table_id 指向的父表，向用户说明口径映射
+   ↓ 命令不可用 / 报错 / matched=false / fallback_required=true
 1. 本地 intent_taxonomy.yml 意图匹配：
    CLI 模式：python scripts/route_intent.py "<用户问题>"
      → 命中 direct_intent     → 正常路由到 table_id / dataset_alias
@@ -130,9 +137,11 @@ version: 1.0.2
    → 匹配到 0 个 → 提示用户无匹配，询问是否查看全量数据集列表（opscli query metadata）
 ```
 
+**意图归因透传**：经 `opscli query intent` / `query_intent_match` 命中候选后执行查询时，必须一并透传 `--intent-code <selected.intent_code> --selection-source intent_route --match-record-id <match_record_id>`（MCP 为同名 snake_case 参数），便于服务端闭环统计；走本地 `route_intent.py` 命中时 `--selection-source local_fallback`，用户点名数据集时 `user_specified`。候选里的 `intent_constraints.hard_constraints` / `avoid_when` / `clarify_when` 是尚未经人工复核的业务约束提示：**必须先向用户复述并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得忽略。
+
 **embedded_intent 执行说明**：若 `routing_status=embedded_intent`，使用 `execution_alias` 和 `table_id` 构造查询，并向用户说明实际使用的数据集及其口径差异（如"即时销售意图实际使用即时综合数据集中的 order_sale_trend_set 销售口径，以订单下单时间统计"）。
 
-MCP 模式下无法运行本地脚本时，使用 `query_metadata()` 获取数据集列表后按关键词筛选，匹配规则与上述工作流一致。
+MCP 模式下无法运行本地脚本时，`query_intent_match` 未命中后使用 `query_metadata()` 获取数据集列表按关键词筛选，匹配规则与上述工作流一致。
 
 ### 铁律四：字段存在性校验
 
@@ -246,6 +255,14 @@ MCP 模式下无法运行本地脚本时，使用 `query_metadata()` 获取数�
 - 分页查询（`offset`）可用于获取完整数据
 - 任何截断都必须在回答中写明：排序字段、截断数量、总行数
 
+### 铁律十五：币种由服务端换算，多币种即多次取数
+
+- 用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，CLI 显式传 `opscli query simple --global-currency <代码>`（MCP 走 `query_run` payload 顶层 `globalCurrency`），由服务端换算；未识别到币种意图时不传，由后端回退用户默认币种配置。禁止用"选 `_cny` 字段/原币字段"代替币种参数。
+- **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求 CNY 和 CAD 各执行一次相同范围的服务端查询，每次只传一个币种。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一币种结果。
+- **返回币种以 `meta.currency` 为准**（ISO 4217，如 `CNY`/`USD`）：有值时结论首句、结果表表头和 Excel 口径页必须显式写明币种，不得只写"金额/销售额"了事；为 `null` 或缺失只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断；与请求的 `globalCurrency` 不一致时以 `meta.currency` 为准并如实披露差异。
+- 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。
+- 详细口径见 `references/simple-query-guide.md`「全局币种 globalCurrency」「返回币种 meta.currency」两节。
+
 ---
 
 ## 各模式详细文档
@@ -272,9 +289,9 @@ MCP 模式下无法运行本地脚本时，使用 `query_metadata()` 获取数�
 ```
 1. 意图澄清（读 references/rules.md）
 2. 认证检查
-3. 未指定 dataset/table_id 时执行本地意图路由（route_intent.py → search.py）
+3. 未指定 dataset/table_id 时执行意图路由（opscli query intent → route_intent.py → search.py）
 4. query_metadata / 本地索引校验数据集和字段
-5. 执行查询（query_simple / opscli query simple 等）
+5. 执行查询（query_simple / opscli query simple 等；含币种意图时传 --global-currency，多币种逐币种执行；意图命中时透传归因参数）
 6. 输出结果给用户
 7. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
 ```

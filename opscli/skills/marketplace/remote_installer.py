@@ -102,6 +102,12 @@ def install_remote_skill(
 
     share_code 不为 None 时，在步骤 1/2/6 中透传给服务端，
     用于绕过 personal/department 技能的权限校验。
+
+    skills_dir 的语义（隔离安装）：
+        显式传入时只把技能装到这一个目录，不做任何运行时探测，
+        也不写入 ~/.claude、~/.codex 等用户自己的运行时目录；
+        此时 runtime 参数被忽略（skills_dir 优先级更高）。
+        不传时保持既有行为：按 runtime 或自动探测，链接到全部检测到的 AI 工具目录。
     """
     command = f"skills install {identifier}"
 
@@ -179,6 +185,16 @@ def install_remote_skill(
     # 若 template_dir == central_dir 则自我引用必然失败，所以先复制到临时目录再传入。
     from opscli.skills.services.manager import SkillsManager
     manager = SkillsManager()
+
+    # 显式传入 skills_dir 时把安装目标锁死为这一个目录：
+    # link_targets 一旦给出，_install_central 就跳过 runtime 解析与运行时探测，
+    # 因此不会再写入 ~/.claude、~/.codex 等用户自己的运行时目录。
+    # 这是下游「自带独立 CODEX_HOME 的本地 Agent」赖以隔离的语义——
+    # 一旦回退成探测，用户本机 codex 可见的技能集合与版本就会被本命令改掉。
+    # runtime 与 skills_dir 同传时以 skills_dir 为准（CLI 层会额外给出提示）。
+    resolved_skills_dir = Path(skills_dir).expanduser() if skills_dir else None
+    link_targets = [("custom", resolved_skills_dir)] if resolved_skills_dir else None
+
     try:
         with tempfile.TemporaryDirectory() as _tmp:
             tmp_template = Path(_tmp) / skill_name
@@ -186,7 +202,7 @@ def install_remote_skill(
             batch_result = manager._install_central(
                 skill_name,
                 template_dir=tmp_template,
-                link_targets=None,
+                link_targets=link_targets,
                 cwd=Path.home(),   # 从家目录探测全局 AI 工具，不受调用时的工作目录影响
                 runtime=runtime,
                 force=force,
@@ -219,6 +235,9 @@ def install_remote_skill(
             "version":      target_version,
             "replaced":     replaced,
             "central_dir":  str(central_dir),
+            # 显式指定的隔离安装目录；未指定时为 None（走运行时探测的默认行为）。
+            # 下游调用方据此确认本次安装确实被限制在自己的目录里。
+            "skills_dir":   str(resolved_skills_dir) if resolved_skills_dir else None,
             "installs":     [i.to_dict() for i in batch_result.installs],
         },
         "error": None,

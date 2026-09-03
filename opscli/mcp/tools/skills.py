@@ -63,8 +63,9 @@ async def skills_install(
 
     Args:
         name:       Skill 名称或广场标识符（username@skill_name）
-        skills_dir: 可选，安装到指定目录（不传则使用默认路径）
-        runtime:    可选，指定运行时环境
+        skills_dir: 可选，只安装到该目录：跳过运行时探测，不写入 ~/.claude、~/.codex
+                    等其他任何目录（隔离安装场景专用，优先级高于 runtime）
+        runtime:    可选，只安装到指定运行时；与 skills_dir 同传时被忽略
         force:      是否强制覆盖已有安装（默认 False）
         version:    可选，指定安装版本（仅远程安装有效）
     """

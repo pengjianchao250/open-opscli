@@ -70,9 +70,13 @@ SKILL.md frontmatter: "1.7.2"（无 v）
 
 ## 使用原则
 
+- **安装目标优先级**（三选一，从高到低）：
+  1. `--skills-dir DIR`：**只**装到 `DIR` 这一个目录，跳过运行时探测，不写入 `~/.claude`、`~/.codex` 等任何其他目录（隔离安装场景）；同传 `--runtime` 时 `--runtime` 被忽略
+  2. `--runtime NAME`：只装到指定运行时的全局 skills 目录（`all` 表示全部运行时）
+  3. 都不传：探测本机已安装的 AI 工具，安装到全部检测到的运行时目录
 - **安装模式**：
-  - 默认（模式 B）：先复制到中央存储 `~/.opscli/skills/<name>/`，再软链到各工具目录
-  - 显式 `--skills-dir`（模式 A）：直接复制到指定目录，不使用中央存储
+  - 广场远程安装：实体始终落中央存储 `~/.opscli/skills/<name>/`，目标目录只放软链接（`--skills-dir` 场景同理）
+  - 内置模板安装：不传 `--skills-dir` 时同样走中央存储 + 软链；传 `--skills-dir` 时直接复制到该目录，不经过中央存储
 - **支持运行时**：`claude` / `openclaw` / `codex` / `opencode` / `workbuddy` / `trae-cn` / `agents`
 - **幂等安装**：已存在时默认跳过，`--force` 强制覆盖
 - **升级范围**：仅 `ops-dataset-query` 支持远端数据升级；`ops-auth` / `ops-skills` 为本地静态 Skill

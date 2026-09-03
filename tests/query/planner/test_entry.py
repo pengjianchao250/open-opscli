@@ -4,6 +4,7 @@
 经 QueryManager.run_query_template 执行一次），以及枚举值提取与模板 null 清理。
 """
 
+import json
 from pathlib import Path
 
 import httpx
@@ -103,7 +104,78 @@ def test_run_flow_executes_template_when_planned(monkeypatch):
     assert "execution_notes" not in out
 
 
-def _planned_with_template():
+def test_run_flow_executes_every_currency_template(monkeypatch, tmp_path):
+    """内核 flow 只规划一次，但必须逐币种执行并校验服务端实际返回币种。"""
+    from opscli.query.services.planner import plan_integrity
+
+    base = {
+        "tableId": 1,
+        "dimensions": [],
+        "metrics": [{"field": "sales_amount", "alias": "sales_amount"}],
+        "filters": [],
+        "orderBy": None,
+        "limit": None,
+    }
+    cny = {**base, "globalCurrency": "CNY"}
+    cad = {**base, "globalCurrency": "CAD"}
+    planned = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "planned",
+        "model_view": {"dataset_name_zh": "即时综合数据集"},
+        "execution_ref": {
+            "query_template": cny,
+            "query_templates": [cny, cad],
+            "requested_global_currencies": ["CNY", "CAD"],
+        },
+    }
+    plan_integrity.attach(planned)
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: planned)
+    calls = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            template = execution_ref["query_template"]
+            calls.append(dict(template))
+            currency = template["globalCurrency"]
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"sales_amount": currency}],
+                        "meta": {"totalCount": 1, "currency": currency},
+                    }
+                }
+            }
+
+    out = entry.run_flow(
+        "分别使用人民币和加拿大元查询近7天销售额",
+        user_email="u@x.com",
+        result_dir=tmp_path,
+        query_manager=_QM(),
+    )
+
+    assert [item["globalCurrency"] for item in calls] == ["CNY", "CAD"]
+    assert out["multi_currency"] is True
+    assert out["requested_global_currencies"] == ["CNY", "CAD"]
+    assert out["comparison_contract"]["service_queries_complete"] is True
+    assert out["comparison_contract"]["currency_validation_passed"] is True
+    assert [item["returned_currency"] for item in out["currency_results"]] == [
+        "CNY",
+        "CAD",
+    ]
+    assert all(item["currency_matches_request"] for item in out["currency_results"])
+    assert all(
+        item["result"]["result_disclosures"]["full_result_file"]
+        for item in out["currency_results"]
+    )
+
+
+def _planned_with_template(limit: int | None = None):
+    """构造 status=planned 的规划合同桩数据。
+
+    limit 参数用于模拟规划器 NL 解析（如"前3名"）已经把行数限制写入
+    query_template 的场景；默认 None 保持原有「模板未下发 limit」用例不变。
+    """
     return {
         "contract": "query_plan_model_contract_v2",
         "query_mode": "dataset_query",
@@ -115,7 +187,7 @@ def _planned_with_template():
                 "metrics": [],
                 "filters": [],
                 "orderBy": None,
-                "limit": None,
+                "limit": limit,
             }
         },
     }
@@ -142,25 +214,175 @@ def test_run_flow_fills_limit_order_offset(monkeypatch):
     assert t["limit"] == 200
     assert t["offset"] == 5
     assert t["orderBy"] == [{"field": "x", "desc": True}]
-    # 改写模板后重挂完整性：合同层（去掉 run_flow 追加的 result/execution_notes）自洽
+    # 改写模板后重挂完整性：剥离 run_flow 追加的运行时结果/披露/证据合同后，规划合同仍自洽
+    # （evidence_contract/evidence_contract_error 是 K3 新增的运行时附加键，与
+    # result/result_disclosures/execution_notes 同属"非规划合同本体"，需一并剔除）
     assert "plan_integrity" in out["execution_ref"]
-    sealed = {k: v for k, v in out.items() if k not in ("result", "execution_notes")}
+    sealed = {
+        k: v
+        for k, v in out.items()
+        if k
+        not in (
+            "result",
+            "result_disclosures",
+            "execution_notes",
+            "evidence_contract",
+            "evidence_contract_error",
+        )
+    }
     assert plan_integrity.verify(sealed) is True
-    # 传了 order_by → 仅出 orderBy 一条披露（未传 result_dir 不出落盘那条）
-    assert out["execution_notes"] == [entry._NOTE_ORDER_BY]
+    # order_by 已内核化：本例服务端返回空行（rows=[]），排序校验按源实现语义直接跳过
+    # 兜底重查（源 run_query.py 的 guard 是 `... and rows`），仅出「排序已生效」披露，
+    # 不再落回 _NOTE_ORDER_BY 延后项（该常量已随 K1 完成标志删除）
+    assert "execution_notes" not in out
+    assert out["result_disclosures"]["order_disclosure_zh"] == "排序已生效：按 x DESC"
+    assert "order_fallback" not in out["result_disclosures"]
+    # 用户显式传 limit=200：未触发 auto-complete，披露必须原样透传该值
+    assert out["result_disclosures"]["limit"] == 200
 
 
-def test_run_flow_result_dir_note_only_when_passed(monkeypatch):
-    """传 result_dir（未传 order_by）→ 仅出落盘一条披露。"""
+def test_run_flow_discloses_currency_from_meta(monkeypatch):
+    """meta.currency 有值时必须原样声明，文案与 skill run_query.py:685-690 逐字一致。
+
+    与 skill _extract_currency（:374-390）等价迁入：三层形状兜底取
+    `data.result.meta.currency`，转大写后写入 result_disclosures。
+    """
     monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
 
     class _QM:
         def run_query_template(self, execution_ref):
-            return {"data": []}
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"x": 1}],
+                        "meta": {"totalCount": 1, "currency": "cny"},
+                    }
+                }
+            }
 
-    from pathlib import Path
-    out = entry.run_flow("查询", user_email="u@x.com", result_dir=Path("/tmp/x"), query_manager=_QM())
-    assert out["execution_notes"] == [entry._NOTE_RESULT_DIR]
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    assert out["result_disclosures"]["currency"] == "CNY"
+    assert out["result_disclosures"]["currency_disclosure_zh"] == (
+        "本次金额币种为 CNY：结论首句、结果表头和导出口径页必须写明该币种；"
+        "禁止参考外部汇率折算或跨币种相加，需要其他币种时重新发起带币种意图的查询"
+    )
+
+
+def test_run_flow_result_dir_writes_full_result_and_limits_preview(monkeypatch, tmp_path: Path):
+    """传 result_dir：全量结果落盘（含 rows_after_auto_complete）+ 合同 result 只保留
+    预览行（默认 20 行）+ result_disclosures 出 full_result_file；与 skill
+    run_query.py 的落盘/预览限幅（:734-747/531-541）等价迁入（K2）。行数 30 超过
+    预览上限，验证限幅确实生效而不是巧合地全量恰好 <=20。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+
+    # 合同 result 只保留预览行（默认 20 行），全量 30 行不直接回传，避免撑爆上下文
+    preview_rows = out["result"]["data"]["result"]["data"]
+    assert len(preview_rows) == 20
+    assert [row["x"] for row in preview_rows] == list(range(20))
+    # 披露：完整行数口径不受预览限幅影响（与 skill 版 disclosures 语义一致）
+    assert out["result_disclosures"]["row_count_returned"] == 30
+    full_result_file = out["result_disclosures"]["full_result_file"]
+    assert full_result_file is not None
+    result_path = Path(full_result_file)
+    assert result_path.parent == tmp_path
+    assert result_path.name.startswith("query_result_") and result_path.name.endswith(".json")
+    # 落盘文件内容为全量 30 行（未受预览限幅影响），携带源实现同名字段 rows_after_auto_complete
+    saved = json.loads(result_path.read_text(encoding="utf-8"))
+    assert len(saved["rows_after_auto_complete"]) == 30
+    assert [row["x"] for row in saved["rows_after_auto_complete"]] == list(range(30))
+    assert len(saved["data"]["result"]["data"]) == 30
+
+
+def test_run_flow_result_dir_write_failure_disclosed(monkeypatch, tmp_path: Path):
+    """result_dir 落盘失败（目标路径被同名文件占用，mkdir 抛 OSError）时不阻断查询，
+    只在披露中如实说明；预览限幅依旧生效（与源实现 try/except 后仍继续构造输出的口径一致）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    blocker = tmp_path / "blocker"
+    blocker.write_text("occupied", encoding="utf-8")
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {"data": {"result": {"data": [{"x": 1}]}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=blocker, query_manager=_QM(),
+    )
+    assert out["result_disclosures"]["full_result_file"] is None
+    assert "full_result_file_error" in out["result_disclosures"]
+    assert out["result"]["data"]["result"]["data"] == [{"x": 1}]
+
+
+def test_run_flow_no_result_dir_keeps_full_rows_unchanged(monkeypatch):
+    """不传 result_dir：行为与之前完全一致——result 是完整服务端结果，无落盘披露。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert len(out["result"]["data"]["result"]["data"]) == 30
+    assert "full_result_file" not in out["result_disclosures"]
+
+
+def test_run_flow_large_result_without_result_dir_warns(monkeypatch):
+    """未传 result_dir 且行数超过预览阈值（20 行）：必须出现 large_result_warning_zh，
+    把"忘传 --result-dir 导致大结果静默塞进返回体"变成 Agent 可感知的信号
+    （K5 修复轮：控制器采纳审查方案 b）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(21)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert out["result_disclosures"]["large_result_warning_zh"] == (
+        "本次返回 21 行且未传 --result-dir，全量行已进入返回体；"
+        "行数较大时建议携带 --result-dir 落盘并只读预览。"
+    )
+
+
+def test_run_flow_small_result_without_result_dir_no_warning(monkeypatch):
+    """未传 result_dir 但行数不超过预览阈值（20 行）：不应出现警告键。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(20)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert "large_result_warning_zh" not in out["result_disclosures"]
+
+
+def test_run_flow_large_result_with_result_dir_no_warning(monkeypatch, tmp_path: Path):
+    """传了 result_dir：即便行数超过预览阈值，也已落盘+预览限幅，不需要再警告。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            rows = [{"x": i} for i in range(30)]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+    assert "large_result_warning_zh" not in out["result_disclosures"]
 
 
 def test_run_flow_no_params_keeps_defaults(monkeypatch):
@@ -178,6 +400,277 @@ def test_run_flow_no_params_keeps_defaults(monkeypatch):
     assert t["limit"] is None
     assert t["orderBy"] is None
     assert "offset" not in t
+
+
+def test_run_flow_auto_completes_server_default_page(monkeypatch):
+    """未显式传 limit 时，服务端默认 20 行不得被当成 totalCount=145 的全量。"""
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            row_count = 20 if current_limit is None else 145
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"asin": f"A{i}"} for i in range(row_count)],
+                        "meta": {"totalCount": 145},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    assert calls == [None, 145]
+    assert len(out["result"]["data"]["result"]["data"]) == 145
+    assert out["result_disclosures"] == {
+        "row_count_returned": 145,
+        "total_count": 145,
+        "truncated": False,
+        "auto_complete_applied": True,
+        # 用户原始 limit 为 None（触发 auto-complete 的前提），披露必须仍是 None
+        # 而不是 auto-complete 就地改写后的内部放大值（145），否则模型会把补齐
+        # 动作误当成用户主动要的分页口径
+        "limit": None,
+        "currency": None,
+        "currency_disclosure_zh": (
+            "本次返回未声明币种：只能如实说明未声明，禁止按字段名后缀、数据集习惯或"
+            "历史会话推断具体货币"
+        ),
+        # 145 行 > 预览阈值 20 行且未传 result_dir：必须出现可感知警告，
+        # 否则忘传 --result-dir 时大结果会静默塞进返回体（K5 修复轮）
+        "large_result_warning_zh": (
+            "本次返回 145 行且未传 --result-dir，全量行已进入返回体；"
+            "行数较大时建议携带 --result-dir 落盘并只读预览。"
+        ),
+    }
+
+
+def test_run_flow_auto_complete_does_not_override_template_limit(monkeypatch):
+    """规划器 NL 解析进模板的 limit（如"前3名"）不得被 auto-complete 放大覆盖。
+
+    复现链（终审实证）：规划器把"订单量前3名的渠道"解析进 template limit=3，
+    Agent 未显式传 --limit（run_flow 形参 limit=None）。修复前 auto-complete
+    条件只查形参 limit is None，未查 template 是否已有 limit，会把 3 就地放大
+    为 min(total, CAP)，返回全量而非用户要的前 3 名。修复后需新增
+    template.get("limit") is None 前置：模板已有 limit 时视为「用户意图已锁定
+    分页」，与显式 --limit 同等尊重，不触发 auto-complete。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template(limit=3))
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            calls.append(execution_ref["query_template"].get("limit"))
+            # 首查即返回按模板 limit=3 截断后的结果，总行数 10（服务端还有更多）
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"asin": f"A{i}"} for i in range(3)],
+                        "meta": {"totalCount": 10},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+
+    # 只执行一次，模板 limit 全程保持 3，不被 auto-complete 放大重查
+    assert calls == [3]
+    assert len(out["result"]["data"]["result"]["data"]) == 3
+    assert out["result_disclosures"]["auto_complete_applied"] is False
+    assert out["result_disclosures"]["row_count_returned"] == 3
+    assert out["result_disclosures"]["total_count"] == 10
+    # truncated=True 属实（服务端总行数确实大于本次返回），但不能是
+    # auto-complete 造成的假全量、也不应出现服务端分页兜底类披露
+    assert out["result_disclosures"]["truncated"] is True
+    assert "server_paging" not in out["result_disclosures"]
+    assert "order_fallback" not in out["result_disclosures"]
+
+
+def test_flow_order_by_local_resort_when_server_ignores(monkeypatch):
+    """服务端返回乱序时本地重排（QA 实测服务端 orderBy 有时不生效）。
+
+    与 skill run_query.py 的 _apply_order_fallback 等价迁入：无 limit 时手上就是
+    全量，单调性校验失败即本地重排，不发起加量重查。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            calls.append(execution_ref["query_template"].get("limit"))
+            return {"data": {"result": {"data": [{"x": 1}, {"x": 5}, {"x": 3}]}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只执行一次（无 limit 分支不重查），返回行按 x 降序本地重排
+    assert calls == [None]
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == [5, 3, 1]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback == {
+        "order_fallback_applied": True,
+        "order_field": "x",
+        "direction": "DESC",
+        "strategy": "local_resort",
+    }
+    assert out["result_disclosures"]["row_count_returned"] == 3
+    assert "服务端排序未生效" in out["result_disclosures"]["order_disclosure_zh"]
+
+
+def test_flow_order_by_amplified_requery_on_full_page(monkeypatch):
+    """结果行数=limit 且乱序：加量重查一次再截断（TopN 拿错行的防线）。
+
+    与 skill run_query.py 的 _apply_order_fallback 等价迁入：带 limit 时单调性
+    不能作为判据（常量序列天然单调会掩盖服务端整段忽略 orderBy），一律按总行数
+    取全量重查后本地排序取前 N。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            if current_limit == 3:
+                # 首查：limit=3 满页返回，但乱序（1,9,2 非单调）
+                rows = [{"x": 1}, {"x": 9}, {"x": 2}]
+            else:
+                # 加量重查：按 total=10 全量返回
+                rows = [{"x": v} for v in (9, 7, 1, 2, 3, 4, 5, 6, 8, 0)]
+            return {"data": {"result": {"data": rows, "meta": {"totalCount": 10}}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        limit=3, order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只重查一次，且放大到服务端总行数 10（非倍数放大的尽力而为口径）
+    assert calls == [3, 10]
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == [9, 8, 7]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback["order_fallback_applied"] is True
+    assert fallback["strategy"] == "requery_limit_10_then_local_sort"
+    assert fallback["covers_full_result"] is True
+    assert out["result_disclosures"]["row_count_returned"] == 3
+
+
+def test_flow_order_by_no_extra_requery_when_auto_complete_widens_limit(monkeypatch):
+    """auto-complete 补齐分页 + orderBy 兜底复合场景：不得把 auto-complete 就地
+    写入 template 的放大 limit 误判成用户真实分页约束，否则会对已经取到的全量
+    结果再多发一次未声明的加量重查、且 strategy/covers_full_result 披露失真。
+
+    复现场景（审查员实证）：limit/offset 均未传（只有排序方向没有条数，
+    query_plan._resolve_order_and_limit 的 has_direction=True、row_limit=None
+    是合法路径）、模板 orderBy 已下发、首查服务端默认分页 3 行且乱序、
+    totalCount=10 触发 auto-complete。修复前：calls=[None,10,10]、
+    strategy=requery_limit_10_then_local_sort（多发一次重查、披露失真）。
+    修复后：calls=[None,10]，auto-complete 补齐后的全量视为「无 limit」，
+    单调性校验失败直接本地重排，不再发起第三次网络查询。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+    calls: list[int | None] = []
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            current_limit = execution_ref["query_template"].get("limit")
+            calls.append(current_limit)
+            if current_limit is None:
+                # 首查：服务端默认分页仅 3 行，乱序
+                rows = [{"x": 1}, {"x": 9}, {"x": 2}]
+            else:
+                # auto-complete 补齐：按 totalCount=10 取全量，同样乱序
+                rows = [{"x": v} for v in (1, 9, 2, 8, 3, 7, 4, 6, 5, 0)]
+            return {"data": {"result": {"data": rows, "meta": {"totalCount": 10}}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com",
+        order_by=[{"field": "x", "desc": True}],
+        query_manager=_QM(),
+    )
+
+    # 只有两次调用：首查 + auto-complete 补齐；不应因误判 limit 再发一次加量重查
+    assert calls == [None, 10]
+    fallback = out["result_disclosures"]["order_fallback"]
+    assert fallback["strategy"] == "local_resort"
+    assert "covers_full_result" not in fallback
+    assert [row["x"] for row in out["result"]["data"]["result"]["data"]] == list(range(9, -1, -1))
+    assert out["result_disclosures"]["auto_complete_applied"] is True
+
+
+def test_run_flow_attaches_evidence_contract(monkeypatch):
+    """run_flow：执行成功后合同内嵌 evidence_contract 键，dataset_name_zh 取自
+    model_view，接入位置与 skill run_query.py 内嵌证据合同一致（K3）。
+    """
+    planned = _planned_with_template()
+    planned["model_view"] = {"dataset_name_zh": "即时综合数据集"}
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: planned)
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {
+                "data": {
+                    "result": {
+                        "data": [{"x": 1}],
+                        "meta": {"freshness_status": "monthly_data_available_through_2026-07"},
+                    }
+                }
+            }
+
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    evidence = out["evidence_contract"]
+    assert evidence["contract"] == "evidence_contract_v1"
+    assert evidence["dataset_name_zh"] == "即时综合数据集"
+    assert evidence["freshness_status"] == "monthly_data_available_through_2026-07"
+    assert "evidence_contract_error" not in out
+
+
+def test_run_flow_evidence_contract_failure_does_not_block_result(monkeypatch):
+    """证据合同构建失败时不阻断查询结果，只记录 evidence_contract_error
+    （与 skill run_query.py 的 try/except 语义一致：证据合同失败不阻断查询结果）。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            return {"data": {"result": {"data": [{"x": 1}]}}}
+
+    def _boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(entry.evidence_contract, "build_evidence_contract", _boom)
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
+    assert "evidence_contract" not in out
+    assert out["evidence_contract_error"] == "boom"
+
+
+def test_run_flow_evidence_contract_built_before_preview_truncation(monkeypatch, tmp_path: Path):
+    """result_dir 触发预览限幅（K2）时，证据合同基于完整（未截断）行构建：
+    与 skill run_query.py 用未受落盘/预览影响的 response 构建证据的口径一致
+    ——kernel 单通道架构下用"排序兜底之后、预览截断之前"的 run_result 落地，
+    详细理由见任务 K3 报告的差异对照表。
+    """
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: _planned_with_template())
+
+    class _QM:
+        def run_query_template(self, execution_ref):
+            # 25 行，只有最后一行（index 24）current_value 缺失；预览限幅只保留前 20 行，
+            # 若证据合同建在截断之后，这条缺失路径不会出现
+            rows = [{"current_value": i} for i in range(24)] + [{"current_value": None}]
+            return {"data": {"result": {"data": rows}}}
+
+    out = entry.run_flow(
+        "查询", user_email="u@x.com", result_dir=tmp_path, query_manager=_QM(),
+    )
+    assert "data.result.data[24].current_value" in out["evidence_contract"]["missing_paths"]
+    # 返回给调用方的 result 仍受预览限幅约束（K2 既有行为不受本次改动影响）
+    assert len(out["result"]["data"]["result"]["data"]) == 20
 
 
 def test_run_query_template_drops_null_keys():

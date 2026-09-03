@@ -45,9 +45,21 @@ _ALL_TIME_RE = re.compile(
 # ① 没有任何标签以 不/非/勿/别/无 开头，所以这些否定前缀不会吞掉标签开头；
 # ② 「别」「不含」出现在标签内部（税别 / 币别 / 系统别名 / 周转天数(不含在途)），
 #    因此禁止收裸「别」——它会让「查税别和日期」从「别」起屏蔽、连带吃掉日期。
+# ③ 「别用/别加」与裸「非」还会被合成词从中间切中，必须加左边界断言（见下方注释）。
+#    这类误判比漏判危险得多：它不是少屏蔽一段，而是把用户没说过的排除意图凭空造出来。
 _NEGATED_SPAN_RE = re.compile(
     r"(?:拒绝|排除|不要|不用|不加|不添加|不需要|不按|不含|不带|不分|不显示|不展示"
-    r"|无需|禁止|别用|别加|忽略|去掉|去除|非|勿)"
+    r"|无需|禁止"
+    # 「分别用 A 和 B…」是多币种、多口径对比的标准问法，其中的「别用」曾被判为否定，
+    # 把随后 12 字内的平台名当成排除项——语义直接反转。实测：
+    # 「分别用人民币和美元查询亚马逊搜索词绩效」被读成「已按用户要求排除亚马逊SC、亚马逊VC」。
+    r"|(?<![分区辨识差性特派级个类])别[用加]"
+    r"|忽略|去掉|去除"
+    # 裸「非」同理会被「非常」和「除非/并非/若非/是非/无非」从中间切中。实测：
+    # 「查询非常规渠道亚马逊SC近7天」整段被判否定，亚马逊SC 被误排除。
+    # 「非亚马逊VC」这类真否定不受影响。
+    r"|(?<![除并莫若是无绝])非(?!常)"
+    r"|勿)"
     r"[^，。；！？,;!?]{0,12}"
 )
 
@@ -82,6 +94,12 @@ _MONTH_RE = re.compile(
     re.IGNORECASE,
 )
 _COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
+_MONTH_THRESHOLD_LEFT_RE = re.compile(
+    r"(?:超(?:过)?|大于|高于|多于|不少于|至少|库龄|账龄|货龄|周转)\s*$"
+)
+_MONTH_THRESHOLD_RIGHT_RE = re.compile(
+    r"^\s*(?:个|以上|以下|以内|区间|分段|数量|采购金额)"
+)
 # 绝对日期区间：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日（主周期与对比期共用）
 _ABSOLUTE_RANGE_RE = re.compile(
     r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
@@ -128,6 +146,20 @@ def _month_window(year: int, month: int) -> tuple[date, date]:
     return date(year, month, 1), date(year, month, monthrange(year, month)[1])
 
 
+def _calendar_month_matches(query: str):
+    """只返回自然月表达，排除“超6月/库龄6个月以上”等业务阈值。"""
+    for match in _MONTH_RE.finditer(query):
+        # 显式年份足以证明是日历月份，不受附近业务词影响。
+        if match.group(1):
+            yield match
+            continue
+        left = query[max(0, match.start() - 8) : match.start()]
+        right = query[match.end() : match.end() + 8]
+        if _MONTH_THRESHOLD_LEFT_RE.search(left) or _MONTH_THRESHOLD_RIGHT_RE.search(right):
+            continue
+        yield match
+
+
 def _explicit_comparison(
     query: str, today: date, primary: tuple[date, date] | None = None
 ) -> dict | None:
@@ -166,7 +198,7 @@ def _explicit_comparison(
             "end": _fmt(end),
             "label_zh": "显式对比周期",
         }
-    for month_match in _MONTH_RE.finditer(comparison_text):
+    for month_match in _calendar_month_matches(comparison_text):
         year = int(month_match.group(1) or today.year)
         start, end = _month_window(year, int(month_match.group(2)))
         if primary is not None and (start, end) == primary:
@@ -226,7 +258,7 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         return start, end, f"上季度（{year}年第{quarter}季度）", False
 
     # 指定自然月必须优先于自然年匹配，否则“2026年6月”会被截断成全年。
-    month_match = _MONTH_RE.search(query)
+    month_match = next(_calendar_month_matches(query), None)
     if month_match:
         year = int(month_match.group(1) or today.year)
         month = int(month_match.group(2))

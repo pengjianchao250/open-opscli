@@ -247,10 +247,12 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
 1. 在 `dataset_fields.csv` 中搜索用户所需的金额指标
 2. 若同时匹配到 `xxx` 和 `xxx_cny` 两个版本 → 存在币种歧义
 
-**默认策略**：
-- 用户未指定币种时，**默认使用 CNY（人民币）版本**
-- 在回复中明示"以下数据均为人民币计价"
-- 用户明确提到"美金"、"美元"、"USD"、"原币"时，使用对应版本
+**处理策略**：
+- 币种换算由服务端完成：用户请求含明确币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，CLI 显式传 `opscli query simple --global-currency <代码>`；**未指定币种时不传该参数**，由后端回退用户默认币种配置，禁止本地默认改选 `_cny` 字段来"代替"币种参数
+- 多币种（"分别用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比"）= 逐币种各执行一次相同范围的查询，禁止查一次后用外部汇率或本地计算换算
+- 回复中的币种以返回的 `meta.currency` 为准声明（如 `CNY` 即"以下金额均为人民币计价"）；为 `null` 只能写"本次返回未声明币种"，不得推断；与请求币种不一致时以返回为准并披露
+- 原币字段与 `_cny` 字段并存且用户要求"原币/站点币种"或精准对账口径时，仍属字段口径歧义，用 `AskUserQuestion` 澄清选哪一组字段；跨币种金额不得相加
+- 详细口径见 `references/simple-query-guide.md`「全局币种 globalCurrency」「返回币种 meta.currency」
 
 ---
 
@@ -266,7 +268,7 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
    - 匹配到 0 个 → 使用 `AskUserQuestion` 请求用户指定数据集、查看全量数据集或改写需求
    - 匹配到 1 个 → 使用 `AskUserQuestion` 确认"使用该数据集 / 查看其他候选 / 自定义"，确认前不得查询
    - 匹配到 >=2 个 → **强制列出所有候选**，分别说明其数据粒度和适用场景，再用 `AskUserQuestion` 让用户选择
-3. **本地意图分类可用时** → 优先用 `scripts/route_intent.py` 做本地意图匹配，但仍需用 `AskUserQuestion` 确认匹配结果
+3. **意图路由可用时** → 先用远端实时意图目录 `opscli query intent -q "<用户原文>"`（MCP：`query_intent_match`）匹配；不可用、报错或 `fallback_required=true` 时再用本地 `scripts/route_intent.py`。`ask_user_question_required=true` 或本地匹配置信度不足时仍需用 `AskUserQuestion` 确认；候选附带的 `intent_constraints` 须先向用户复述确认再套用
 4. **业务领域词特殊规则**：当用户只说"广告数据"、"销售数据"、"库存数据"、"物流数据"、"财务数据"等大领域词时，必须搜索数据集列表本身（`datasets.csv` / `query_metadata()`），不能只根据字段搜索结果集中在某个 table_id 就认定数据集唯一。
 
 ### 5.1 数据集名称相似歧义
@@ -399,7 +401,7 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
 
 按以下优先级选择数据集：
 1. 用户明确指定数据集名称 > 所有自动匹配
-2. 本地意图分类（`scripts/route_intent.py`）推荐 > 本地关键词检索
+2. 远端意图目录（`opscli query intent` / `query_intent_match`）命中 > 本地意图分类（`scripts/route_intent.py`）推荐 > 本地关键词检索
 3. 关键词精确匹配 > 模糊匹配
 
 ### 8.2 多个数据集同时匹配
@@ -424,8 +426,8 @@ ACOS、ROAS 等公式指标在多个数据集中存在，但计算口径不同�
          → 搜索 dataset_fields.csv 中维度字段，确认是否有 >=2 组同概念维度
 □ 【产品标识】查询涉及 SKU/ASIN/编码时，是否存在多个变体字段？
          → 搜索 dataset_fields.csv，确认是否匹配到 >=2 个字段
-□ 【币种】查询涉及金额指标时，是否同时存在原币和 CNY 版本？
-         → 搜索 field_name 是否同时有 xxx 和 xxx_cny
+□ 【币种】用户是否表达了币种意图？是否同时存在原币和 CNY 版本？
+         → 有币种意图则传 --global-currency（多币种逐币种查询）；未指定则不传；原币/_cny 字段并存且要求精准口径时澄清
 □ 【数据集】是否已明确指定且唯一？
          → 搜索 datasets.csv / query_metadata，确认用户关键词匹配几个数据集；业务领域词不能只靠字段搜索结果判定唯一
 □ 【数据集名称】用户说的名称是否匹配多个相似数据集？

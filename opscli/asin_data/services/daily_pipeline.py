@@ -646,7 +646,7 @@ class DailyAsinDataPipeline:
                 return keywords
         compact = row.get("keyword_reverse")
         rows = compact.get("rows") if isinstance(compact, dict) and isinstance(compact.get("rows"), list) else []
-        keywords: list[str] = []
+        keywords = []
         seen: set[str] = set()
         for item in rows:
             if not isinstance(item, dict):

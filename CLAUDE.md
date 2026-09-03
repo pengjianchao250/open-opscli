@@ -90,7 +90,10 @@ opscli query
     run      --payload <file>                           # 执行查询（转发服务端）
 opscli skills
     list    [--skills-dir]             # 列出所有已安装 Skill
-    install <name> [--runtime] [--force] [--skills-dir]  # 从内置模板安装
+    install <name> [--runtime] [--force] [--skills-dir]  # 从内置模板 / 广场安装
+        # 安装目标优先级：--skills-dir（只装这一个目录，不探测运行时）
+        #               > --runtime（只装指定运行时）
+        #               > 都不传（探测本机 AI 工具，全装）
     status  [--skills-dir]             # 本地版本 + 远端版本对比
     upgrade [name] [--force] [--skills-dir]  # 升级到远端最新（默认 ops-dataset-query）
 ```

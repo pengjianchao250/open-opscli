@@ -1767,8 +1767,16 @@ def list_skills(
 @app.command("install")
 def install_skill(
     name: str | None = typer.Argument(None, help="Skill 名称或远程标识符（如 pengjianchao@ops-auth）"),
-    skills_dir: str | None = typer.Option(None, "--skills-dir", help="指定安装目录"),
-    runtime: str | None = typer.Option(None, "--runtime", help="claude、openclaw、auwork、all，或逗号分隔多个值"),
+    skills_dir: str | None = typer.Option(
+        None,
+        "--skills-dir",
+        help="只安装到该目录：跳过运行时探测，不写入 ~/.claude、~/.codex 等其他任何目录（优先级高于 --runtime）",
+    ),
+    runtime: str | None = typer.Option(
+        None,
+        "--runtime",
+        help="只安装到指定运行时：claude、openclaw、codex、auwork、all，或逗号分隔多个值；与 --skills-dir 同传时被忽略",
+    ),
     force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
@@ -1787,9 +1795,26 @@ def install_skill(
     - --sync-market 从市场安装记录同步，补装缺失 + 升级旧版（不能与 NAME 同时使用）。
     - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
+    \b
+    安装目标的优先级（三选一，从高到低）：
+    1. --skills-dir DIR：只装到 DIR 这一个目录，不做运行时探测，
+       不写入 ~/.claude、~/.codex 等任何其他目录（隔离安装场景专用）。
+    2. --runtime NAME：只装到指定运行时的全局 skills 目录；all 表示全部运行时。
+    3. 两者都不传：探测本机已安装的 AI 工具，安装到全部检测到的运行时目录。
+
+    技能实体始终落在中央存储 ~/.opscli/skills/<name>，各目标目录只放指向它的链接。
+
     加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
     加 --verbose / -v 可输出逐条安装日志（默认静默，仅输出最终汇总）。
     """
+    # --skills-dir 与 --runtime 同传时以 --skills-dir 为准，给用户一行明确提示。
+    # 写 stderr 而非 stdout：stdout 是给调用方解析的纯 JSON，不能被提示文本污染。
+    if skills_dir and runtime:
+        typer.echo(
+            f"提示：已指定 --skills-dir {skills_dir}，--runtime {runtime} 被忽略（只安装到指定目录）",
+            err=True,
+        )
+
     # ── --sync-market 模式 ─────────────────────────────────
     if sync_market:
         if name is not None:
@@ -1809,7 +1834,8 @@ def install_skill(
     manager = SkillsManager()
     # 显式指定 --runtime auwork 但 ~/.auwork 下无纯数字用户目录时，提示已跳过
     # （AuWork 客户端尚未登录过，无法凭空知道用户 ID）
-    if runtime and "auwork" in [r.strip().lower() for r in runtime.split(",")]:
+    # 已传 --skills-dir 时 runtime 整体被忽略，再提 AuWork 只会误导，故一并跳过
+    if not skills_dir and runtime and "auwork" in [r.strip().lower() for r in runtime.split(",")]:
         if not manager.detector._auwork_targets():
             _console.print("[dim]未发现 AuWork 用户目录（~/.auwork 下无纯数字子目录），已跳过 AuWork 安装[/dim]")
     try:

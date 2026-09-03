@@ -1,0 +1,4728 @@
+{
+  "version": "v1.1.4",
+  "generated_at": "2026-08-14T09:30:13.171217Z",
+  "intent_count": 41,
+  "intents": [
+    {
+      "intent_code": "instant_advertising_analysis",
+      "intent_name": "广告数据分析",
+      "table_id": 15,
+      "dataset_alias": "ds_0759e20F0DrG",
+      "dataset_name": "advertising_list_set",
+      "use_cases": [
+        "查询近30天的广告费用情况",
+        "查询广告转化最低的数据",
+        "查询广告近X天的趋势",
+        "查询ACOS 超过X%的那几个ASIN的广告类型分布",
+        "查询广告分布情况"
+      ],
+      "keywords": [],
+      "scenario_description": "适用于主要查询广告相关的具体数据的时候使用，所有广告数据明细都在当前数据集中",
+      "priority": 1000,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [
+        {
+          "field": "platform_name",
+          "value": "Amazon",
+          "operator": "="
+        }
+      ],
+      "comparison_strategy": {
+        "trend_compare": "MOM",
+        "summary_compare": "dataComparison"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "instant_sales_advertising_overview",
+      "intent_name": "即时销售与广告综合分析",
+      "table_id": 1,
+      "dataset_alias": "ds_d35ac6f3910c",
+      "dataset_name": "order_sale_trend_adv_traffic_inv_set",
+      "use_cases": [
+        "查看本月 Amazon 销售额、广告花费和广告销售额",
+        "按部门或渠道分析即时销售表现",
+        "对比本月与上月同期的销售/广告指标变化"
+      ],
+      "keywords": [
+        "即时销售",
+        "广告花费",
+        "广告销售额",
+        "ACOS",
+        "Amazon",
+        "销售额环比",
+        "渠道SKU"
+      ],
+      "scenario_description": "适用于销售、广告、流量、库存字段同时参与的即时综合看板查询，优先用于销售和广告一起分析的自然语言需求。",
+      "priority": 900,
+      "recommended_dimensions": [
+        "amazon_cat",
+        "asin",
+        "brand_name",
+        "category",
+        "channel_name",
+        "country_name",
+        "date_id",
+        "sell_sku"
+      ],
+      "recommended_metrics": [],
+      "default_filters": [
+        {
+          "field": "platform_name",
+          "value": [
+            "Amazon"
+          ],
+          "operator": "in"
+        }
+      ],
+      "comparison_strategy": {
+        "trend_compare": "MOY",
+        "summary_compare": "dataComparison"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "样例数据：字段名需以实际 dataset_fields.csv 为准，AI 使用前必须校验字段存在。",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "billing_sales_trend",
+      "intent_name": "账单销售趋势分析",
+      "table_id": 2,
+      "dataset_alias": "ds_9e288aa0df06",
+      "dataset_name": "sale_trend_set",
+      "use_cases": [
+        "查看账单口径销售额趋势",
+        "按月份统计销售额和销量",
+        "做财务口径销售数据环比分析"
+      ],
+      "keywords": [
+        "账单销售",
+        "销售趋势",
+        "财务口径",
+        "销售额",
+        "销量",
+        "月环比"
+      ],
+      "scenario_description": "适用于偏财务/账单确认口径的销售趋势查询，和即时销售数据集区分使用。",
+      "priority": 780,
+      "recommended_dimensions": [
+        "date_id",
+        "dept_name",
+        "platform_name",
+        "country_name"
+      ],
+      "recommended_metrics": [
+        "price",
+        "order_qty",
+        "profit",
+        "refund_amount"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "trend_compare": "MOY",
+        "summary_compare": "dataComparison"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "样例数据：用于验证 catalog 轻量导出链路。",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "instant_advertising_analysis_01",
+      "intent_name": "广告数据分析01",
+      "table_id": 15,
+      "dataset_alias": "ds_0759e20F0DrG",
+      "dataset_name": "advertising_list_set",
+      "use_cases": [],
+      "keywords": [],
+      "scenario_description": "",
+      "priority": 100,
+      "recommended_dimensions": [
+        "amazon_cat",
+        "asin",
+        "brand_name"
+      ],
+      "recommended_metrics": [
+        "ads_acos",
+        "ads_clicks",
+        "ads_clicks_percent"
+      ],
+      "default_filters": [
+        {
+          "field": "amazon_cat",
+          "value": "Amazon",
+          "operator": "="
+        }
+      ],
+      "comparison_strategy": [],
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "ops_comprehensive_monitoring",
+      "intent_name": "销售、广告、流量、库存联动的综合运营监控",
+      "table_id": 1,
+      "dataset_alias": "ds_d35ac6f3910c",
+      "dataset_name": "order_sale_trend_adv_traffic_inv_set",
+      "use_cases": [
+        "销售、广告、流量、库存联动的综合运营监控",
+        "查看近30天销售、广告、流量和库存的整体经营情况"
+      ],
+      "keywords": [
+        "综合",
+        "整体",
+        "经营大盘",
+        "运营大盘",
+        "经营健康度",
+        "销售广告库存流量",
+        "运营表现"
+      ],
+      "scenario_description": "销售、广告、流量、库存联动的综合运营监控",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "亚马逊广告活动、广告组等明细深挖",
+        "亚马逊目录绩效或搜索词绩效",
+        "纯物控库存、库龄、补货计划分析"
+      ],
+      "clarify_when": [
+        "用户只问销售、广告、流量、库存单一业务域时，需判断是否应转专项数据集。",
+        "用户只问销售、广告、流量、库存单一业务域时，需判断是否转专项意图",
+        "用户要求库存字段做聚合分析时，需说明库存快照字段限制"
+      ],
+      "hard_constraints": [
+        "开发类型、SKU等级、物控编码等级、父公司SKU、风格化名称、保护等级(风格化)字段仅项目二部专属维度可用",
+        "已售天数字段只能用于明细表或无聚合过滤条件",
+        "总库存、海外仓库存、在途库存、国内库存、采购库存、待销毁库存属于库存快照字段，只能用于明细表或无聚合过滤条件",
+        "平均CPC、SP平均CPC、SD平均CPC、SB平均CPC、SBV平均CPC按广告费/点击量计算，广告费取 BI系统即时销量趋势中的相应广告费字段",
+        "转化率按订单销量/流量计算，订单销量取 BI系统即时销量趋势中的订单销量字段"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "realtime_sales_monitoring",
+      "intent_name": "短期或实时销售监控",
+      "table_id": 3,
+      "dataset_alias": "ds_6fbfb45edd2a",
+      "dataset_name": "order_sale_trend_set",
+      "use_cases": [
+        "短期或实时销售监控",
+        "查看近7天每日销售额、销量和订单数趋势"
+      ],
+      "keywords": [
+        "即时销售",
+        "实时销售",
+        "今日销售",
+        "当天销售",
+        "近几天",
+        "大促",
+        "短期波动",
+        "销售异常"
+      ],
+      "scenario_description": "短期或实时销售监控",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "embedded_intent",
+      "execution_dataset_id": 1,
+      "avoid_when": [
+        "月度、季度、年度账单销售复盘"
+      ],
+      "clarify_when": [
+        "用户要求独立即时销售数据集入口时，说明当前实际由即时综合销售主表口径承接。",
+        "用户要求独立即时销售数据集入口",
+        "用户未说明看订单下单时间还是包裹发货时间"
+      ],
+      "hard_constraints": [
+        "当前无独立 dataset_alias；后续开放独立入口后再补 dataset_alias/table_id",
+        "已售天数字段只能用于明细表或无聚合过滤条件",
+        "总库存字段属于库存快照字段，只能用于明细表或无聚合过滤条件"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        }
+      ]
+    },
+    {
+      "intent_code": "billing_sales_review",
+      "intent_name": "长周期账单销售复盘与趋势分析",
+      "table_id": 2,
+      "dataset_alias": "ds_9e288aa0df06",
+      "dataset_name": "sale_trend_set",
+      "use_cases": [
+        "长周期账单销售复盘与趋势分析",
+        "查看上月按包裹发货时间统计的销售额、销量和毛利趋势"
+      ],
+      "keywords": [
+        "账单销售",
+        "历史销售",
+        "月度",
+        "季度",
+        "年度",
+        "复盘",
+        "预测",
+        "销售趋势"
+      ],
+      "scenario_description": "长周期账单销售复盘与趋势分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "今日、实时、大促、短期波动销售监控"
+      ],
+      "clarify_when": [
+        "用户问今日、实时、大促、短期波动时，应优先识别为即时销售意图。",
+        "用户未说明看订单下单时间还是包裹发货时间"
+      ],
+      "hard_constraints": [
+        "已售天数字段只能用于明细表或无聚合过滤条件",
+        "总库存字段属于库存快照字段，只能用于明细表或无聚合过滤条件"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "ads_overall",
+      "intent_name": "全平台、全广告类型的汇总级广告表现总览",
+      "table_id": 15,
+      "dataset_alias": "ds_0759e20F0DrG",
+      "dataset_name": "advertising_list_set",
+      "use_cases": [
+        "全平台、全广告类型的汇总级广告表现总览",
+        "查看近30天各平台广告费、广告销售额和ACOS"
+      ],
+      "keywords": [
+        "广告费",
+        "广告总览",
+        "广告ROI",
+        "广告整体投入",
+        "广告整体效果",
+        "广告预算执行",
+        "广告部门KPI",
+        "跨平台广告",
+        "平台广告对比",
+        "ACOS",
+        "CPC",
+        "点击率",
+        "广告销售额"
+      ],
+      "scenario_description": "全平台、全广告类型的汇总级广告表现总览",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "亚马逊SP/SD/SB广告深度明细",
+        "广告类型投入结构拆解"
+      ],
+      "clarify_when": [
+        "用户要求单广告活动、单关键词、搜索词、投放词或受众组级别分析时，不应直接使用广告费数据集。",
+        "用户要求单广告活动、单广告组、关键词、搜索词、投放词或受众组级别分析"
+      ],
+      "hard_constraints": [
+        "包含SP、SD、SB、SBV类型广告相关汇总字段和销售字段",
+        "总销售额和总销量字段来自即时销量趋势数据集",
+        "已售天数字段只能用于明细表或无聚合过滤条件",
+        "非亚马逊平台广告明细只能使用该数据集；如字段不支持明细粒度，必须说明限制"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "ads_type_compare",
+      "intent_name": "分平台、分广告类型的广告表现对比分析",
+      "table_id": 20,
+      "dataset_alias": "ds_j7mYcAr6j7YD",
+      "dataset_name": "custom_type_advertising_list",
+      "use_cases": [
+        "分平台、分广告类型的广告表现对比分析",
+        "按SP、SD、SB和SBV查看近30天广告费、销售额和ACOS"
+      ],
+      "keywords": [
+        "广告类型",
+        "SP对比",
+        "SD对比",
+        "SB对比",
+        "SBV对比",
+        "SP/SD/SB/SBV",
+        "广告结构",
+        "投放结构",
+        "预算分配",
+        "类型ACOS",
+        "类型CPC",
+        "类型转化率"
+      ],
+      "scenario_description": "分平台、分广告类型的广告表现对比分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "公司级全平台广告总览"
+      ],
+      "clarify_when": [
+        "用户需要公司级跨平台整体广告预算规划时，优先广告费数据集。",
+        "用户需要SP、SD、SB单类型深度明细时，进入对应亚马逊广告明细数据集。",
+        "用户需要SP、SD、SB单类型深度明细",
+        "用户要求SBV明细"
+      ],
+      "hard_constraints": [
+        "总销售额和总销量字段来自即时销量趋势数据集",
+        "总销售额(分摊)和总销量(分摊)按各广告类型广告费比例分摊",
+        "SBV只能在该数据集或广告费数据集做汇总分析，不进入SB广告明细",
+        "不用于广告活动、广告组、关键词、搜索词、投放词或受众组明细"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sp_ads_detail",
+      "intent_name": "亚马逊SP广告活动与广告组明细分析",
+      "table_id": 27,
+      "dataset_alias": "ds_fE0flP7WonsJ",
+      "dataset_name": "custom_sp_ads_set",
+      "use_cases": [
+        "亚马逊SP广告活动与广告组明细分析",
+        "按广告活动和广告组查看近30天SP广告费、销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SP明细",
+        "SP广告",
+        "Sponsored Products",
+        "SP广告活动",
+        "SP广告组",
+        "SP campaign"
+      ],
+      "scenario_description": "亚马逊SP广告活动与广告组明细分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "非亚马逊平台",
+        "SP词组分析"
+      ],
+      "clarify_when": [
+        "SP可能指SPU时需要澄清。",
+        "用户要求搜索词、关键词、投放词或词组分析时，需要澄清当前SP广告数据集不支持。",
+        "SP可能指产品SPU而不是Sponsored Products",
+        "用户要求搜索词、关键词、投放词或词组分析"
+      ],
+      "hard_constraints": [
+        "仅亚马逊平台可用",
+        "只包含广告活动和广告组相关数据",
+        "不包含搜索词、关键词、投放词等词组数据；相关分析必须澄清"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门名称",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道名称",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sd_ads_detail",
+      "intent_name": "亚马逊SD广告明细分析",
+      "table_id": 28,
+      "dataset_alias": "ds_lvU8LlQaphxH",
+      "dataset_name": "custom_sd_ads_set",
+      "use_cases": [
+        "亚马逊SD广告明细分析",
+        "查看近30天SD广告的可见展示、新买家销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SD明细",
+        "SD广告",
+        "Sponsored Display",
+        "可见展示",
+        "新买家",
+        "加购",
+        "再营销"
+      ],
+      "scenario_description": "亚马逊SD广告明细分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "非亚马逊平台"
+      ],
+      "clarify_when": [
+        "点击口径、浏览口径、可见展示口径不明确时需要澄清。",
+        "点击口径、浏览口径、可见展示口径不明确"
+      ],
+      "hard_constraints": [
+        "仅亚马逊平台可用"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sb_ads_detail",
+      "intent_name": "亚马逊SB广告明细分析",
+      "table_id": 29,
+      "dataset_alias": "ds_SsIdByVi8zzN",
+      "dataset_name": "custom_sb_ads_set",
+      "use_cases": [
+        "亚马逊SB广告明细分析",
+        "查看近30天SB品牌广告的曝光、点击、销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SB明细",
+        "SB广告",
+        "Sponsored Brands",
+        "品牌广告"
+      ],
+      "scenario_description": "亚马逊SB广告明细分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "非亚马逊平台",
+        "SBV明细"
+      ],
+      "clarify_when": [
+        "用户问SBV明细时，不使用SB广告数据集，应转广告费或广告类型费做汇总分析。",
+        "用户需要部门、ASIN、SKU维度时，需先校验字段或查询组件。",
+        "用户问SBV明细",
+        "用户需要部门、ASIN、SKU维度"
+      ],
+      "hard_constraints": [
+        "仅亚马逊平台可用",
+        "只包含SB广告，不包含SBV",
+        "不默认承诺部门、ASIN、SKU完整粒度；需要先校验字段"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sbv_summary",
+      "intent_name": "亚马逊SBV广告汇总分析",
+      "table_id": 20,
+      "dataset_alias": "ds_j7mYcAr6j7YD",
+      "dataset_name": "custom_type_advertising_list",
+      "use_cases": [
+        "亚马逊SBV广告汇总分析",
+        "查看近30天SBV视频广告的花费、销售额和ACOS汇总"
+      ],
+      "keywords": [
+        "SBV",
+        "视频广告",
+        "SBV广告"
+      ],
+      "scenario_description": "亚马逊SBV广告汇总分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "公司级全平台广告总览"
+      ],
+      "clarify_when": [
+        "用户要求SBV明细时，需要说明当前没有SBV明细数据集。",
+        "用户需要SP、SD、SB单类型深度明细",
+        "用户要求SBV明细"
+      ],
+      "hard_constraints": [
+        "总销售额和总销量字段来自即时销量趋势数据集",
+        "总销售额(分摊)和总销量(分摊)按各广告类型广告费比例分摊",
+        "SBV只能在该数据集或广告费数据集做汇总分析，不进入SB广告明细",
+        "不用于广告活动、广告组、关键词、搜索词、投放词或受众组明细"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sp_sd_ads_detail",
+      "intent_name": "亚马逊SP+SD合并广告分析",
+      "table_id": 30,
+      "dataset_alias": "ds_B3myrFWFXY7t",
+      "dataset_name": "custom_sp_sd_ads_set",
+      "use_cases": [
+        "亚马逊SP+SD合并广告分析",
+        "查看近30天SP和SD组合投放的花费、销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SP+SD",
+        "SP和SD合并",
+        "组合投放",
+        "协同效果"
+      ],
+      "scenario_description": "亚马逊SP+SD合并广告分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "非亚马逊平台"
+      ],
+      "clarify_when": [
+        "用户未明确是否需要合并口径时，需要确认。",
+        "用户未明确是否需要SP+SD合并口径"
+      ],
+      "hard_constraints": [
+        "仅亚马逊平台可用",
+        "只问SP或只问SD时，应使用对应单类型数据集"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sp_sd_sb_ads_detail",
+      "intent_name": "亚马逊SP+SD+SB全广告类型合并分析",
+      "table_id": 31,
+      "dataset_alias": "ds_S0CgT7ArBdBs",
+      "dataset_name": "custom_sp_sd_sb_ads_set",
+      "use_cases": [
+        "亚马逊SP+SD+SB全广告类型合并分析",
+        "查看近30天SP、SD和SB全广告类型的花费、销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SP+SD+SB",
+        "全广告类型",
+        "亚马逊全部广告"
+      ],
+      "scenario_description": "亚马逊SP+SD+SB全广告类型合并分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "非亚马逊平台"
+      ],
+      "clarify_when": [
+        "用户需要SBV明细时，应说明当前不支持。",
+        "用户需要部门、SKU、ASIN维度时，需先校验字段或查询组件。",
+        "用户需要SBV明细",
+        "用户需要部门、SKU、ASIN维度"
+      ],
+      "hard_constraints": [
+        "仅亚马逊平台可用",
+        "不包含SBV明细",
+        "需要部门、SKU、ASIN维度时先校验字段"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "traffic_conversion",
+      "intent_name": "ASIN流量与转化分析",
+      "table_id": 19,
+      "dataset_alias": "ds_x40rpZlLlo0j",
+      "dataset_name": "custom_asin_sales_traffic_set",
+      "use_cases": [
+        "ASIN流量与转化分析",
+        "按ASIN查看近30天流量、浏览量、销量和转化率"
+      ],
+      "keywords": [
+        "流量",
+        "Sessions",
+        "浏览量",
+        "转化率",
+        "ASIN转化"
+      ],
+      "scenario_description": "ASIN流量与转化分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "销售主口径转化率，应优先即时综合数据集"
+      ],
+      "clarify_when": [
+        "用户问销售主口径转化率时，优先即时综合数据集。",
+        "用户问销售主口径转化率"
+      ],
+      "hard_constraints": [],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_catalog_performance",
+      "intent_name": "亚马逊目录绩效分析",
+      "table_id": 41,
+      "dataset_alias": "ds_I13gHlcdwevS",
+      "dataset_name": "custom_brand_search_catalog_set",
+      "use_cases": [
+        "亚马逊目录绩效分析",
+        "查看亚马逊目录绩效的曝光、点击、加购和购买表现"
+      ],
+      "keywords": [
+        "目录绩效",
+        "Catalog",
+        "目录点击",
+        "目录购买率"
+      ],
+      "scenario_description": "亚马逊目录绩效分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "搜索词份额，应转亚马逊搜索词绩效"
+      ],
+      "clarify_when": [
+        "用户未提供报告周期时必须澄清。",
+        "用户问搜索词或份额时，应转亚马逊搜索词绩效。",
+        "用户未提供报告周期"
+      ],
+      "hard_constraints": [
+        "必须选择报告周期"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道名称",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门名称",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_search_query_performance",
+      "intent_name": "亚马逊搜索词绩效分析",
+      "table_id": 42,
+      "dataset_alias": "ds_xsTOkHIpr3ad",
+      "dataset_name": "custom_brand_search_query_set",
+      "use_cases": [
+        "亚马逊搜索词绩效分析",
+        "查看亚马逊搜索词的点击份额、加购份额和购买份额"
+      ],
+      "keywords": [
+        "搜索词",
+        "Search Query",
+        "点击份额",
+        "加购份额",
+        "购买份额"
+      ],
+      "scenario_description": "亚马逊搜索词绩效分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "广告搜索词、广告关键词或投放词分析"
+      ],
+      "clarify_when": [
+        "用户未提供报告周期时必须澄清。",
+        "自然搜索词与广告关键词不明确时需要澄清。",
+        "用户未提供报告周期",
+        "自然搜索词与广告关键词不明确"
+      ],
+      "hard_constraints": [
+        "必须选择报告周期"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道名称",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门名称",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "pmc_inventory",
+      "intent_name": "物控库存、库龄与补货分析",
+      "table_id": 40,
+      "dataset_alias": "ds_97zj6R0KDKpB",
+      "dataset_name": "custom_inventory_turnover_wk_set",
+      "use_cases": [
+        "物控库存、库龄与补货分析",
+        "查看最新一天物控库龄超180天库存、可售库存和周转天数"
+      ],
+      "keywords": [
+        "物控",
+        "库龄",
+        "补货",
+        "近7天销量",
+        "近30天销量"
+      ],
+      "scenario_description": "物控库存、库龄与补货分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [
+        "物控组织与普通销售组织不明确时需要澄清。",
+        "物控组织与普通销售组织不明确",
+        "用户只说库存但未说明是否为物控视角"
+      ],
+      "hard_constraints": [
+        "只能按天查看",
+        "日期是确切某天时可升维聚合",
+        "日期是区间段时，数据维度必须包含日期天字段"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        }
+      ]
+    },
+    {
+      "intent_code": "activity_operations",
+      "intent_name": "Deals/Coupons活动资源与执行分析",
+      "table_id": 24,
+      "dataset_alias": "ds_q0sbhk0fqwFh",
+      "dataset_name": "custom_merge_deals",
+      "use_cases": [
+        "Deals/Coupons活动资源与执行分析",
+        "查看近30天Deal和Coupons活动的状态、售出量和浏览量"
+      ],
+      "keywords": [
+        "活动",
+        "Deal",
+        "Deals",
+        "Coupons",
+        "秒杀",
+        "促销"
+      ],
+      "scenario_description": "Deals/Coupons活动资源与执行分析",
+      "priority": 100,
+      "recommended_dimensions": [],
+      "recommended_metrics": [],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [
+        "用户问活动带来的销售增量时，需要联动销售数据，不能只用活动数据集。",
+        "用户问活动带来的销售增量，需要联动销售数据"
+      ],
+      "hard_constraints": [
+        "Coupons 统一写法",
+        "活动数据集不能直接代表活动销售增量"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "inventory_turnover_sql",
+      "intent_name": "库存周转、库存金额与短期销量分析",
+      "table_id": 18,
+      "dataset_alias": "ds_HAx3oJZ0OQkO",
+      "dataset_name": "custom_inventory_turnover_set",
+      "use_cases": [
+        "库存周转、库存金额与短期销量分析",
+        "查看最新一天各公司SKU的可售库存周转天数、含在途周转天数和总库存"
+      ],
+      "keywords": [
+        "库存周转SQL",
+        "可售周转",
+        "含在途周转",
+        "总周转天数",
+        "库存金额"
+      ],
+      "scenario_description": "库存周转、库存金额与短期销量分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "ed_sku",
+        "dept_name",
+        "pmc_code"
+      ],
+      "recommended_metrics": [
+        "sell_cost_days",
+        "sell_intransit_cost_days",
+        "total_cost_days",
+        "total_qty"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "期初期末库龄和计提分析，应使用物控库存周转【期初期末】"
+      ],
+      "clarify_when": [
+        "用户只说库存周转但未说明普通库存还是物控库存"
+      ],
+      "hard_constraints": [
+        "库存数量和库存金额为快照口径；区间分析必须保留日期维度"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        }
+      ]
+    },
+    {
+      "intent_code": "device_traffic_conversion",
+      "intent_name": "亚马逊SC设备类型流量与转化分析",
+      "table_id": 21,
+      "dataset_alias": "ds_pB7neVa6YZk3",
+      "dataset_name": "custom_type_asin_sales_traffic",
+      "use_cases": [
+        "亚马逊SC设备类型流量与转化分析",
+        "按设备类型查看近30天亚马逊SC的流量、浏览量和转化率"
+      ],
+      "keywords": [
+        "设备流量",
+        "移动端流量",
+        "浏览器流量",
+        "设备转化率",
+        "SC设备"
+      ],
+      "scenario_description": "亚马逊SC设备类型流量与转化分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "traffic_type",
+        "asin",
+        "country_name"
+      ],
+      "recommended_metrics": [
+        "sessions",
+        "page_views",
+        "convert_percent"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "不按设备拆分的ASIN流量分析，应使用流量转化率数据集"
+      ],
+      "clarify_when": [
+        "用户未说明是否需要按设备类型拆分"
+      ],
+      "hard_constraints": [
+        "仅用于亚马逊SC设备类型口径，不能替代全平台流量转化分析"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "department_sales_kpi",
+      "intent_name": "客服部门销售与退款指标分析",
+      "table_id": 23,
+      "dataset_alias": "ds_LhoTxNThCL4z",
+      "dataset_name": "sale_data_lifan",
+      "use_cases": [
+        "客服部门销售与退款指标分析",
+        "查看近30天客服各部门的订单数、总销量、总销售额和退款率"
+      ],
+      "keywords": [
+        "客服部门销售",
+        "部门销售指标",
+        "部门退款率",
+        "各部门销售"
+      ],
+      "scenario_description": "客服部门销售与退款指标分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "dept_name"
+      ],
+      "recommended_metrics": [
+        "orders",
+        "order_qty",
+        "price",
+        "refund",
+        "refund_percent"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "商品级销售明细"
+      ],
+      "clarify_when": [],
+      "hard_constraints": [
+        "仅用于客服部门汇总指标，不提供SKU或ASIN粒度"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        }
+      ]
+    },
+    {
+      "intent_code": "refund_origin_analysis",
+      "intent_name": "退款产地、退款量、退款金额与退款率分析",
+      "table_id": 32,
+      "dataset_alias": "ds_y5EoxUyLf6Aq",
+      "dataset_name": "custom_refund_place_set",
+      "use_cases": [
+        "退款产地、退款量、退款金额与退款率分析",
+        "按产地查看近30天退款量、退款金额和退款率"
+      ],
+      "keywords": [
+        "退款产地",
+        "产地退款",
+        "退款量",
+        "退款金额",
+        "退款率"
+      ],
+      "scenario_description": "退款产地、退款量、退款金额与退款率分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "overseas_origin_suffix",
+        "asin",
+        "sell_sku",
+        "dept_name"
+      ],
+      "recommended_metrics": [
+        "refund_qty",
+        "refund_amount_cny",
+        "refund_percent"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [
+        "用户只说退款时，需要确认退款量、退款金额或退款率"
+      ],
+      "hard_constraints": [
+        "退款金额区分原币与人民币；默认使用人民币字段"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道名称",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门名称",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "listing_latest_snapshot",
+      "intent_name": "Listing最新快照的价格、库存、评分与排名分析",
+      "table_id": 33,
+      "dataset_alias": "ds_pdTYjvLRCadv",
+      "dataset_name": "custom_crawler_listing_snapshot",
+      "use_cases": [
+        "Listing最新快照的价格、库存、评分与排名分析",
+        "查看最新Listing快照的价格、库存、星级、评分数和类目排名"
+      ],
+      "keywords": [
+        "Listing快照",
+        "最新Listing",
+        "当前价格",
+        "当前库存",
+        "当前排名"
+      ],
+      "scenario_description": "Listing最新快照的价格、库存、评分与排名分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "item_uuid",
+        "platform",
+        "site_code",
+        "major_rank",
+        "subclass_rank"
+      ],
+      "recommended_metrics": [
+        "price",
+        "stock_qty",
+        "rating",
+        "rating_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "历史趋势和字段变更前后值"
+      ],
+      "clarify_when": [
+        "用户按ASIN精确筛选时，需确认item_uuid与ASIN的映射来源"
+      ],
+      "hard_constraints": [
+        "仅表示最新快照；时间趋势必须下钻ASIN详情趋势表"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        }
+      ]
+    },
+    {
+      "intent_code": "listing_trend_analysis",
+      "intent_name": "Listing价格、库存、评分与排名趋势分析",
+      "table_id": 34,
+      "dataset_alias": "ds_VnpFakCIUmWI",
+      "dataset_name": "custom_crawler_listing_trend_set",
+      "use_cases": [
+        "Listing价格、库存、评分与排名趋势分析",
+        "按日期查看Listing价格、库存、星级、评分数和排名变化趋势"
+      ],
+      "keywords": [
+        "Listing趋势",
+        "价格趋势",
+        "库存趋势",
+        "评分趋势",
+        "排名趋势"
+      ],
+      "scenario_description": "Listing价格、库存、评分与排名趋势分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "item_uuid",
+        "platform",
+        "site_code"
+      ],
+      "recommended_metrics": [
+        "price",
+        "stock_qty",
+        "rating",
+        "rating_count",
+        "major_rank",
+        "subclass_rank"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "字段级变更审计"
+      ],
+      "clarify_when": [
+        "用户未指定趋势时间范围"
+      ],
+      "hard_constraints": [
+        "用于历史快照趋势，不提供字段级变更前后值"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        }
+      ]
+    },
+    {
+      "intent_code": "listing_change_event",
+      "intent_name": "Listing变动事件类型与处理状态分析",
+      "table_id": 35,
+      "dataset_alias": "ds_f09EWV12xg1L",
+      "dataset_name": "custom_listing_change_event_set",
+      "use_cases": [
+        "Listing变动事件类型与处理状态分析",
+        "查看Listing变动事件的事件名称、变动类型、处理状态和发生时间"
+      ],
+      "keywords": [
+        "Listing变动事件",
+        "变动类型",
+        "变动状态",
+        "变更事件"
+      ],
+      "scenario_description": "Listing变动事件类型与处理状态分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "change_event",
+        "change_parent_id",
+        "source_id"
+      ],
+      "recommended_metrics": [
+        "change_type",
+        "change_status",
+        "created_at"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "Listing字段前后值明细"
+      ],
+      "clarify_when": [],
+      "hard_constraints": [
+        "事件表用于变动分类和状态；字段前后值需下钻Listing详情变化记录"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "listing_change_detail",
+      "intent_name": "Listing字段变更前后值明细分析",
+      "table_id": 36,
+      "dataset_alias": "ds_dROEpcIJTCqy",
+      "dataset_name": "custom_listing_change_log_set",
+      "use_cases": [
+        "Listing字段变更前后值明细分析",
+        "查看ASIN的Listing字段、变更前值、变更后值和变更时间"
+      ],
+      "keywords": [
+        "Listing变化记录",
+        "变更前值",
+        "变更后值",
+        "字段变更"
+      ],
+      "scenario_description": "Listing字段变更前后值明细分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "listing_id",
+        "change_field",
+        "before_data",
+        "after_data",
+        "change_datetime"
+      ],
+      "recommended_metrics": [
+        "created_at"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "仅统计变动类型和处理状态"
+      ],
+      "clarify_when": [],
+      "hard_constraints": [
+        "before_data和after_data是原始变更值，不应做聚合"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        }
+      ]
+    },
+    {
+      "intent_code": "crawler_listing_monitoring",
+      "intent_name": "爬虫Listing监控状态与站点覆盖分析",
+      "table_id": 37,
+      "dataset_alias": "ds_ARijgpb6a1dR",
+      "dataset_name": "custom_crawler_listing_set",
+      "use_cases": [
+        "爬虫Listing监控状态与站点覆盖分析",
+        "查看爬虫Listing的站点、商品链接和监控状态"
+      ],
+      "keywords": [
+        "爬虫Listing",
+        "Listing监控状态",
+        "监控链接",
+        "站点监控"
+      ],
+      "scenario_description": "爬虫Listing监控状态与站点覆盖分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "item_uuid",
+        "url",
+        "platform",
+        "site_code",
+        "listing_id"
+      ],
+      "recommended_metrics": [
+        "monitor_status"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "价格、库存、评分或排名分析"
+      ],
+      "clarify_when": [],
+      "hard_constraints": [
+        "仅用于爬虫监控对象与状态，不代表Listing业务表现"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "operation_suggestion_monitoring",
+      "intent_name": "运营建议、问题严重程度与恢复进度分析",
+      "table_id": 38,
+      "dataset_alias": "ds_zY0BAi0Txsga",
+      "dataset_name": "custom_operation_suggest_suggestions_set",
+      "use_cases": [
+        "运营建议、问题严重程度与恢复进度分析",
+        "查看当前运营问题的关注点、严重程度、持续天数和恢复天数"
+      ],
+      "keywords": [
+        "运营建议",
+        "运营提醒",
+        "问题严重程度",
+        "问题持续天数",
+        "恢复天数"
+      ],
+      "scenario_description": "运营建议、问题严重程度与恢复进度分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "issue_type",
+        "severity",
+        "status",
+        "asin",
+        "sell_sku"
+      ],
+      "recommended_metrics": [
+        "issue_days",
+        "recovery_days"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [
+        "用户未说明仅看未恢复问题还是全部状态"
+      ],
+      "hard_constraints": [
+        "恢复天数字段当前元数据名称为recovery_days，展示时使用元数据中文名称"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "inventory_period_comparison",
+      "intent_name": "物控期初期末库存、库龄与周转对比分析",
+      "table_id": 39,
+      "dataset_alias": "ds_dI5gNc0YRLrD",
+      "dataset_name": "custom_inventory_turnover_wk_cw_set",
+      "use_cases": [
+        "物控期初期末库存、库龄与周转对比分析",
+        "按公司SKU查看月初和月末超180天库存、预估计提金额及含采购总周转天数"
+      ],
+      "keywords": [
+        "期初期末库存",
+        "月初库存",
+        "月末库存",
+        "库龄计提",
+        "含采购周转"
+      ],
+      "scenario_description": "物控期初期末库存、库龄与周转对比分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "ed_sku",
+        "dept_name",
+        "pmc_code"
+      ],
+      "recommended_metrics": [
+        "over180days_inventory_quantity",
+        "month_begin_estimated_accrual_amount",
+        "month_end_estimated_accrual_amount",
+        "total_turnaround_days"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "仓库级实时库存"
+      ],
+      "clarify_when": [
+        "用户未说明月初、月末或两者对比"
+      ],
+      "hard_constraints": [
+        "期初、期末和计提指标均为快照口径；区间分析必须保留快照日期"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_asin_detail",
+      "intent_name": "Amazon ASIN价格、库存、评分、排名与跟卖明细分析",
+      "table_id": 43,
+      "dataset_alias": "ds_icw50TLOFu4F",
+      "dataset_name": "custom_crawler_amazon_details",
+      "use_cases": [
+        "Amazon ASIN价格、库存、评分、排名与跟卖明细分析",
+        "查看ASIN的价格、可售库存、星级、评分数、类目排名和跟卖卖家数"
+      ],
+      "keywords": [
+        "ASIN明细",
+        "ASIN价格",
+        "ASIN星级",
+        "ASIN排名",
+        "跟卖"
+      ],
+      "scenario_description": "Amazon ASIN价格、库存、评分、排名与跟卖明细分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "asin",
+        "country",
+        "brand",
+        "major_rank"
+      ],
+      "recommended_metrics": [
+        "price",
+        "stock_qty",
+        "rating",
+        "rating_count",
+        "cs_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "订单销售额和广告表现"
+      ],
+      "clarify_when": [
+        "用户未说明站点或快照日期"
+      ],
+      "hard_constraints": [
+        "ASIN明细为爬虫快照数据，不能替代订单销售或广告数据"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        }
+      ]
+    },
+    {
+      "intent_code": "vc_manufacturing_performance",
+      "intent_name": "Amazon VC Manufacturing盈利、库存与供应链绩效分析",
+      "table_id": 45,
+      "dataset_alias": "ds_RMoN44WXhu4Z",
+      "dataset_name": "custom_vc_ppm_set",
+      "use_cases": [
+        "Amazon VC Manufacturing盈利、库存与供应链绩效分析",
+        "查看VC Manufacturing的Net PPM、售罄率、供应商确认率、交货时间和在库可售库存"
+      ],
+      "keywords": [
+        "VC Manufacturing",
+        "Net PPM",
+        "VC售罄率",
+        "供应商确认率",
+        "供应商交货时间"
+      ],
+      "scenario_description": "Amazon VC Manufacturing盈利、库存与供应链绩效分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "end_date",
+        "report_period",
+        "asin",
+        "country_name"
+      ],
+      "recommended_metrics": [
+        "net_ppm",
+        "sell_through_rate",
+        "vendor_confirmation_rate",
+        "overall_vendor_lead_time",
+        "sellable_on_hand_units"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "Amazon SC销售和库存分析"
+      ],
+      "clarify_when": [
+        "用户未指定报告周期"
+      ],
+      "hard_constraints": [
+        "仅适用于Amazon VC Manufacturing报告口径；金额字段区分原币和换算币种"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "bi_dashboard_creation",
+      "intent_name": "BI仪表盘创建类型与数量趋势分析",
+      "table_id": 46,
+      "dataset_alias": "ds_8ATeMwpMtWWY",
+      "dataset_name": "dashboard_create_statistics",
+      "use_cases": [
+        "BI仪表盘创建类型与数量趋势分析",
+        "按日期和创建类型查看用户创建仪表盘的数量"
+      ],
+      "keywords": [
+        "仪表盘创建类型",
+        "创建仪表盘数量",
+        "BI创建类型"
+      ],
+      "scenario_description": "BI仪表盘创建类型与数量趋势分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "type"
+      ],
+      "recommended_metrics": [
+        "counter"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [
+        "用于BI产品使用分析，不是运营业务数据"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "bi_department_usage",
+      "intent_name": "部门BI用户、登录与仪表盘使用率分析",
+      "table_id": 49,
+      "dataset_alias": "ds_qJvTj6Ugj0j8",
+      "dataset_name": "dept_usage_stats",
+      "use_cases": [
+        "部门BI用户、登录与仪表盘使用率分析",
+        "按部门查看BI用户数、运营人数、登录人数、创建仪表盘人数和仪表盘总数"
+      ],
+      "keywords": [
+        "部门BI使用",
+        "BI用户数量",
+        "运营登录率",
+        "仪表盘创建率"
+      ],
+      "scenario_description": "部门BI用户、登录与仪表盘使用率分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "slug"
+      ],
+      "recommended_metrics": [
+        "user_count",
+        "ops_count",
+        "login_ops_count",
+        "dashboard_count",
+        "total_dashboard_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [
+        "slug字段表示部门；各人数指标口径不同，不能直接互相替代"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "bi_dashboard_share_usage",
+      "intent_name": "BI仪表盘分享数量与使用次数趋势分析",
+      "table_id": 50,
+      "dataset_alias": "ds_sbWgE6QZ2Hrv",
+      "dataset_name": "template_share_data",
+      "use_cases": [
+        "BI仪表盘分享数量与使用次数趋势分析",
+        "按日期查看仪表盘分享数量和被使用次数"
+      ],
+      "keywords": [
+        "仪表盘分享统计",
+        "仪表盘使用统计",
+        "分享数量",
+        "使用次数趋势"
+      ],
+      "scenario_description": "BI仪表盘分享数量与使用次数趋势分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id"
+      ],
+      "recommended_metrics": [
+        "share_count",
+        "usage_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "分享访问明细"
+      ],
+      "clarify_when": [],
+      "hard_constraints": [
+        "仅提供按日期汇总，不提供分享人和使用人明细"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "bi_template_usage_ranking",
+      "intent_name": "BI仪表盘模板使用排行榜分析",
+      "table_id": 51,
+      "dataset_alias": "ds_0ESRAYSVugES",
+      "dataset_name": "template_usage_ranking",
+      "use_cases": [
+        "BI仪表盘模板使用排行榜分析",
+        "查看各仪表盘模板的使用次数排行榜"
+      ],
+      "keywords": [
+        "模板使用排行",
+        "仪表盘模板排行",
+        "热门模板"
+      ],
+      "scenario_description": "BI仪表盘模板使用排行榜分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "template_name"
+      ],
+      "recommended_metrics": [
+        "use_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [],
+      "clarify_when": [],
+      "hard_constraints": [
+        "排行榜必须明确时间范围和排序方向"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": []
+    },
+    {
+      "intent_code": "bi_dashboard_share_detail",
+      "intent_name": "BI仪表盘分享人与使用人访问明细分析",
+      "table_id": 52,
+      "dataset_alias": "ds_uSZHXRm1Qvt2",
+      "dataset_name": "用户仪表盘分享明细",
+      "use_cases": [
+        "BI仪表盘分享人与使用人访问明细分析",
+        "查看仪表盘分享人、使用人、源仪表盘、使用仪表盘、分享时间和使用时间"
+      ],
+      "keywords": [
+        "仪表盘分享明细",
+        "分享人",
+        "使用人",
+        "源仪表盘",
+        "使用仪表盘"
+      ],
+      "scenario_description": "BI仪表盘分享人与使用人访问明细分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "dept_name",
+        "source_name",
+        "usage_name",
+        "source_dashboard_title",
+        "usage_dashboard_title",
+        "share_time",
+        "usage_time"
+      ],
+      "recommended_metrics": [
+        "usage_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "仅按部门汇总使用次数"
+      ],
+      "clarify_when": [
+        "用户只说分享明细但未说明访问明细还是部门汇总"
+      ],
+      "hard_constraints": [
+        "该数据集为10字段访问明细，不得与2字段部门汇总数据集混淆"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "amazon_sp_keyword",
+      "intent_name": "Amazon SP搜索词、关键词与直接间接转化分析",
+      "table_id": 53,
+      "dataset_alias": "f_oPMsnwmb8VpDVG7PfejE",
+      "dataset_name": "custom_sp_keyword_set",
+      "use_cases": [
+        "Amazon SP搜索词、关键词与直接间接转化分析",
+        "按SP搜索词、关键词和匹配类型查看直接与间接订单、销售额、ACOS和ROAS"
+      ],
+      "keywords": [
+        "SP关键词",
+        "SP搜索词",
+        "匹配类型",
+        "直接订单",
+        "间接订单"
+      ],
+      "scenario_description": "Amazon SP搜索词、关键词与直接间接转化分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "date_id",
+        "query",
+        "keyword_text",
+        "match_type",
+        "campaign_name",
+        "ad_group_name"
+      ],
+      "recommended_metrics": [
+        "purchases_promoted_clicks",
+        "purchases_indirect",
+        "sales_promoted_clicks_cny",
+        "sales_indirect_cny",
+        "acos",
+        "roas"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "自然搜索词份额，应使用亚马逊搜索词绩效"
+      ],
+      "clarify_when": [
+        "用户只说关键词时，需要确认自然搜索词还是SP广告关键词"
+      ],
+      "hard_constraints": [
+        "搜索词query与投放关键词keyword_text必须区分；直接和间接转化不得合并后冒充单一口径"
+      ],
+      "time_basis": "date_id",
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "date_id",
+          "verbose_name": "日期",
+          "component_dataset_alias": "ds_d35ac6f3910c"
+        },
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "bi_department_share_summary",
+      "intent_name": "部门仪表盘分享使用次数汇总分析",
+      "table_id": 61,
+      "dataset_alias": "f_PftlpoGcsBTKj4cki",
+      "dataset_name": "用户仪表盘分享明细",
+      "use_cases": [
+        "部门仪表盘分享使用次数汇总分析",
+        "按部门汇总仪表盘分享后的使用次数"
+      ],
+      "keywords": [
+        "部门分享汇总",
+        "部门使用次数",
+        "各部门仪表盘使用"
+      ],
+      "scenario_description": "部门仪表盘分享使用次数汇总分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "dept_name"
+      ],
+      "recommended_metrics": [
+        "usage_count"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "分享人与使用人访问明细"
+      ],
+      "clarify_when": [
+        "用户只说分享明细但未说明访问明细还是部门汇总"
+      ],
+      "hard_constraints": [
+        "该数据集仅有部门和使用次数2个字段，不提供分享人、使用人或仪表盘名称"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    },
+    {
+      "intent_code": "realtime_inventory_detail",
+      "intent_name": "实时仓库库存可用、占用与在途明细分析",
+      "table_id": 69,
+      "dataset_alias": "f_wg0PKyjrXiPxKlyrBAj",
+      "dataset_name": "custom_realtime_inventory_set",
+      "use_cases": [
+        "实时仓库库存可用、占用与在途明细分析",
+        "按仓库和公司SKU查看实时总库存、可用库存、占用库存和在途库存"
+      ],
+      "keywords": [
+        "实时库存",
+        "仓库库存",
+        "可用库存",
+        "占用库存",
+        "在途库存"
+      ],
+      "scenario_description": "实时仓库库存可用、占用与在途明细分析",
+      "priority": 100,
+      "recommended_dimensions": [
+        "stock_name",
+        "stock_code",
+        "ed_sku",
+        "dept_name"
+      ],
+      "recommended_metrics": [
+        "total_qty",
+        "available_qty",
+        "occupied_qty",
+        "intransit_qty"
+      ],
+      "default_filters": [],
+      "comparison_strategy": {
+        "summary_compare": "dataComparison",
+        "trend_compare": "MOY"
+      },
+      "routing_status": "direct_intent",
+      "execution_dataset_id": null,
+      "avoid_when": [
+        "历史库存周转、库龄和计提分析"
+      ],
+      "clarify_when": [
+        "用户只说库存但未说明实时仓库库存还是库存周转"
+      ],
+      "hard_constraints": [
+        "仓库库存为实时明细口径，不用于历史周转或库龄趋势"
+      ],
+      "time_basis": null,
+      "min_grain": null,
+      "notes": "QA profile import candidate; Owner, minimum grain, predicates and GOLD evidence require manual review.",
+      "select_columns": [
+        {
+          "column_name": "platform_name",
+          "verbose_name": "平台",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "country_name",
+          "verbose_name": "国家",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "channel_name",
+          "verbose_name": "渠道",
+          "component_dataset_alias": "ds_3d2714e6d40e"
+        },
+        {
+          "column_name": "team_name",
+          "verbose_name": "销售小组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "team_username",
+          "verbose_name": "销售",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "develop_username",
+          "verbose_name": "开发",
+          "component_dataset_alias": "ds_b5f5ac7c8501"
+        },
+        {
+          "column_name": "asin",
+          "verbose_name": "ASIN",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "ed_sku",
+          "verbose_name": "公司SKU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "sell_sku",
+          "verbose_name": "渠道SKU",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "product_name",
+          "verbose_name": "产品名称",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "model",
+          "verbose_name": "产品型号",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "dept_name",
+          "verbose_name": "部门",
+          "component_dataset_alias": "ds_1n8a4K0d7yBB"
+        },
+        {
+          "column_name": "brand_name",
+          "verbose_name": "品牌",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "pmc_code",
+          "verbose_name": "物控编码",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "category",
+          "verbose_name": "品类",
+          "component_dataset_alias": "ds_8f24440d149b"
+        },
+        {
+          "column_name": "amazon_cat",
+          "verbose_name": "平台类目",
+          "component_dataset_alias": "ds_3634c85fc90f"
+        },
+        {
+          "column_name": "large_team_name",
+          "verbose_name": "大组",
+          "component_dataset_alias": "ds_d1bf6b0b1723"
+        },
+        {
+          "column_name": "spu",
+          "verbose_name": "SPU",
+          "component_dataset_alias": "ds_8f24440d149b"
+        }
+      ]
+    }
+  ],
+  "query_strategy": {
+    "dataset_selection": "先用 intents.keywords/use_cases/scenario_description 匹配用户意图，再按 priority 选择候选数据集",
+    "field_resolution": "使用 catalog 推荐字段作为首选，再读取 dataset_fields.csv/query_metadata.json 校验字段存在性",
+    "default_query_entry": "query_simple",
+    "fallback_query_entry": "query_run"
+  }
+}

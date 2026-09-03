@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from copy import deepcopy
 from importlib.resources import files
 from typing import Any, Iterable, Sequence
 
@@ -28,6 +29,63 @@ from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 INTERNAL_CONTRACT = "query_plan_contract_v1"
 MODEL_CONTRACT = "query_plan_model_contract_v2"
 MAX_OUTPUT_BYTES = 24000
+
+# 全局币种白名单与后端 simple 查询支持范围保持一致。
+SUPPORTED_GLOBAL_CURRENCIES = ["USD", "GBP", "CAD", "EUR", "JPY", "CNY"]
+
+# 只匹配明确币种词，避免把泛指“元”或货币符号误判成服务端换算诉求。
+_CURRENCY_INTENT_PATTERNS = [
+    ("CAD", ("cad", "加元", "加币", "加拿大元", "canadian dollar")),
+    ("USD", ("usd", "美元", "美金", "美刀", "us dollar", "dollar")),
+    ("GBP", ("gbp", "英镑", "pound", "sterling")),
+    ("EUR", ("eur", "欧元", "euro")),
+    ("JPY", ("jpy", "日元", "日币", "日圆", "yen")),
+    ("CNY", ("cny", "rmb", "人民币", "人民幣")),
+]
+
+
+def _detect_global_currencies(query: str) -> list[str]:
+    """按原文顺序识别币种意图，并排除重叠关键词与重复币种。"""
+    if not query:
+        return []
+    text = str(query).lower()
+    matches: list[tuple[int, int, int, str]] = []
+    for code_order, (code, keywords) in enumerate(_CURRENCY_INTENT_PATTERNS):
+        for keyword in keywords:
+            start = text.find(keyword)
+            while start >= 0:
+                matches.append((start, start + len(keyword), code_order, code))
+                start = text.find(keyword, start + 1)
+
+    # 同起点优先保留更长词，防止 Canadian dollar 同时被识别成 CAD 和 USD。
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    occupied: list[tuple[int, int]] = []
+    currencies: list[str] = []
+    for start, end, _code_order, code in matches:
+        if any(start < used_end and end > used_start for used_start, used_end in occupied):
+            continue
+        occupied.append((start, end))
+        if code not in currencies:
+            currencies.append(code)
+
+    # “同时用加拿大元对比显示”沿用既有业务合同：人民币主口径加 CAD 对照。
+    cad_comparison = any(
+        re.search(pattern, text, flags=re.IGNORECASE)
+        for pattern in (
+            r"(?:同时|一并|并列).{0,12}(?:加拿大元|加元|加币|cad)",
+            r"(?:加拿大元|加元|加币|cad).{0,12}(?:对比显示|对照显示|并列显示|双币种)",
+            r"双币种.{0,12}(?:加拿大元|加元|加币|cad)",
+        )
+    )
+    if currencies == ["CAD"] and cad_comparison:
+        return ["CNY", "CAD"]
+    return currencies
+
+
+def _detect_global_currency(query: str) -> str | None:
+    """兼容单模板路径，返回用户请求中的第一个明确币种。"""
+    currencies = _detect_global_currencies(query)
+    return currencies[0] if currencies else None
 
 
 def _load_rules_resource() -> dict:
@@ -51,6 +109,7 @@ CLARIFICATION_MESSAGES = {
                       "（如销售、广告、库存、物流）以及具体指标名称。",
     "dataset_selection": "多个数据集与当前请求同等匹配，请在给出的候选数据集中"
                          "确认使用哪一个（可直接在请求中写明数据集名称）。",
+    # 兜底文案；实际会在合同层按「组件表」还是「同名冲突」替换成更具体的一句
     "business_dataset": "当前命中的是权限枚举组件或多个同名数据集，无法唯一确定"
                         "业务数据集，请确认要使用的具体业务数据集。",
     "dataset_not_available_in_current_scope": "请求中提到的数据集标识不在当前账号的"
@@ -65,7 +124,42 @@ CLARIFICATION_MESSAGES = {
     "time_scope_confirmation": "未识别到明确时间范围，需要确认是否使用默认近30天。",
     "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
     "default_dataset_confirmation": "未明确指定数据集，建议使用已授权且兼容的即时综合数据集，需要确认是否采用。",
+    "time_comparison_unsupported": "该数据集没有日期字段，无法按时间筛选，也无法做环比或同比。",
 }
+
+# business_dataset 的两种具体成因。只给兜底文案时 Agent 只能看到
+# 「需要补充查询条件」，既不知道组件表不能当业务结果集，也不知道存在同名冲突，
+# 实测 7 张组件表在 14 个维度上全部卡死且被判为「澄清过度」。
+BUSINESS_DATASET_MESSAGES = {
+    "query_component": (
+        "命中的是权限枚举组件数据集，只能用于查询筛选项的可选值，"
+        "不能作为业务结果数据集取数。请改为指定一个业务数据集。"
+    ),
+    "name_conflict": (
+        "当前账号内存在多个中文名完全相同的数据集，无法唯一确定要查哪一个。"
+        "请按候选卡片中的同名序号或代表字段选择其一。"
+    ),
+}
+# 阻断动作 → 面向用户的中文阻断原因。
+# 为什么必须有：answer_contract 会强制要求「说明当前查询被阻断的原因」，
+# 但合同里从来没有原因文本、没有 recovery_command、也不说当前账号实际授权了什么，
+# Agent 只能泛泛而谈或违反 no-guess 政策去猜。要求解释却不提供解释材料，
+# 是把披露义务变成了猜测诱因。
+BLOCK_REASON_MESSAGES = {
+    "block_platform_scope_unsupported": (
+        "请求中的平台不在当前规划规则支持的平台范围内，无法构造平台筛选条件。"
+    ),
+    "block_platform_scope_not_authorized": (
+        "当前账号的平台权限枚举中没有请求的平台，本次未执行查询。"
+    ),
+    "block_platform_filter_missing_component": (
+        "该数据集没有可用的平台权限枚举组件，无法校验平台筛选值，本次未执行查询。"
+    ),
+    "block_platform_enum_ambiguous": (
+        "平台权限枚举值同时命中多个平台语义，禁止猜测，本次未执行查询。"
+    ),
+}
+
 # 披露代码 → 最终回答中必须覆盖的中文披露内容
 DISCLOSURE_MESSAGES = {
     "permission_enum_required": "正式查询前需要按当前账号权限枚举确认平台筛选值。",
@@ -152,6 +246,54 @@ _CHINESE_DIGITS = {
     "九": "9",
 }
 
+# 宽后缀兜底正则：任意 1-6 个汉字/字母/数字紧跟「部」即视为部门名候选。
+# 上限 6 取自内部真实部门名长度分布（最长如「经营管理团队」为 6 字，
+# 带「部」后缀的更短）；放宽会把整句吞进候选。候选仍要走授权枚举完整
+# 等值校验，零命中转澄清，因此宽进严出是安全的。
+_DEPARTMENT_WIDE_SUFFIX_RE = re.compile(r"[一-鿿A-Za-z0-9]{1,6}部")
+
+# 宽后缀候选头部的噪声前缀：正则按「最左 + 贪婪」匹配，会把紧邻的时间词、
+# 祈使动词、连接助词一并吞进候选（「近7天魔法部」「查询销售部」），这里循环剥掉。
+# 时间量词必须整段剥除（近7天/上月），不能单剥数字——「3C事业部」这类
+# 以数字开头的真实部门名会被误伤。
+_DEPARTMENT_NOISE_PREFIX_RE = re.compile(
+    r"^(?:"
+    # 数字时间跨度：近7天 / 30日 / 过去3个月
+    r"(?:近|最近|过去)?\d+(?:天|日|周|个月|月|季度|年)"
+    # 中文数字时间跨度：近七天 / 两周
+    r"|(?:近|最近|过去)?[一二三四五六七八九十两]+(?:天|日|周|个月|月|季度|年)"
+    # 相对时间词：本月 / 上周 / 去年
+    r"|[本上下今昨明去前](?:天|日|周|月|季度|年|半年)"
+    # 祈使/请求前缀
+    r"|请|麻烦|帮我|帮忙|我想|我要|需要"
+    # 常见取数动词（长词在前，避免「查询」只剥掉「查」）
+    r"|查询|查一下|查下|查看|查|看看|看下|看|获取|拉取|统计|分析|对比|比较|汇总|导出|展示|给出|计算|一下"
+    # 连接助词
+    r"|的|地|和|与|及|或|在|按|把|给"
+    r")"
+)
+
+# 宽后缀候选的停用词表：以「部」结尾但几乎不可能是部门名的常见词。
+# 取值依据：范围词（全部/内部/外部/局部/大部/各部/多部）、方位词（东西南北中
+# 与上下前后顶底头尾）、机构与职务惯用词（俱乐部/干部/总部）、商品描述里
+# 高频出现的身体部位词（腰部按摩、颈部支撑等）。按「候选以停用词结尾」判定，
+# 这样「按摩腰部」「近7天全部」这类带前缀噪声的候选也能被拦住。
+# 停用词只抑制「未知候选转澄清」这一步；真实部门若恰好同名，仍会被授权枚举
+# 反查原文（reverse_lookup）兜住，因此宁可多收，也不因误收而丢失真实筛选。
+_DEPARTMENT_SUFFIX_STOPWORDS = (
+    # 范围词
+    "全部", "内部", "外部", "局部", "大部", "各部", "多部",
+    # 方位词
+    "东部", "西部", "南部", "北部", "中部",
+    "上部", "下部", "前部", "后部", "顶部", "底部", "头部", "尾部", "根部",
+    # 机构与职务惯用词
+    "俱乐部", "干部", "总部",
+    # 商品描述高频身体部位词
+    "颈部", "肩部", "背部", "腰部", "腹部", "胸部", "臀部",
+    "腿部", "膝部", "脚部", "足部", "手部", "腕部",
+    "面部", "脸部", "眼部", "鼻部", "唇部", "耳部",
+)
+
 # 图表 UUID 既可能是标准 UUID，也可能是平台生成的短标识。只有请求中明确出现
 # “图表/chart”语义时才启用该路由，避免把工单、任务等其他 UUID 误判为图表。
 CHART_REFERENCE_PATTERN = re.compile(
@@ -208,6 +350,31 @@ def _normalize_department_value(value: str) -> str:
     return f"{prefix or ''}{number}部"
 
 
+def _extract_wide_suffix_department_value(query: str) -> str:
+    """宽后缀兜底：从「X部」形态中提取部门名候选。
+
+    只在前三条窄规则（编号部门/显式标签/分析句式）都未命中时调用。
+    候选返回后走既有「精确等值 → 零命中转澄清」链路：真实部门被枚举锁定，
+    虚构部门（「魔法部」）转澄清，取代原先的静默放大为全量查询。
+    """
+    for match in _DEPARTMENT_WIDE_SUFFIX_RE.finditer(query):
+        candidate = match.group(0)
+        # 循环剥离候选头部的时间词/动词/助词噪声（「近7天魔法部」→「魔法部」）
+        while True:
+            noise = _DEPARTMENT_NOISE_PREFIX_RE.match(candidate)
+            if not noise:
+                break
+            candidate = candidate[noise.end():]
+        # 剥完只剩「部」或空，说明整个候选都是噪声
+        if len(candidate) < 2:
+            continue
+        # 以停用词结尾的候选（「全部」「按摩腰部」）不是部门名
+        if candidate.endswith(_DEPARTMENT_SUFFIX_STOPWORDS):
+            continue
+        return candidate
+    return ""
+
+
 def _extract_requested_department_value(query: str) -> str:
     """从明确部门表达或“分析某组织的数据”中提取单个部门筛选值。"""
     number_match = _DEPARTMENT_NUMBER_RE.search(query)
@@ -217,12 +384,14 @@ def _extract_requested_department_value(query: str) -> str:
     if label_match:
         return label_match.group(1)
     analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
-    if not analysis_match:
-        return ""
-    candidate = analysis_match.group(1)
-    if re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
-        return ""
-    return candidate
+    if analysis_match:
+        candidate = analysis_match.group(1)
+        if not re.fullmatch(r"(?:本|上|下)?(?:月|周|季度|年)|近\d+(?:天|日)", candidate):
+            return candidate
+    # 第四条兜底：宽后缀「X部」候选。编号部门已被第一条正则截获，
+    # 走到这里的候选要么是特殊名部门（孵化部），要么是虚构部门（魔法部），
+    # 交给授权枚举等值校验分流：命中放行、零命中转澄清。
+    return _extract_wide_suffix_department_value(query)
 
 
 def _extract_chart_uuids(query: str) -> list[str]:
@@ -435,6 +604,8 @@ def _platform_scope(
     selection: dict,
     rules: dict,
     authorized_platform_values: Sequence[str] | None,
+    *,
+    query: str = "",
 ) -> dict:
     """构建请求的平台范围规划器。
 
@@ -445,22 +616,47 @@ def _platform_scope(
     slots = selection.get("slots", {}).get("platform", [])
     if not isinstance(slots, list):
         slots = []
+    excluded_slots: list[str] = []
+    for start, end in time_scope.negated_spans(query):
+        negated_semantics = schema.extract_query_semantics(query[start:end], rules)
+        excluded_slots.extend(
+            negated_semantics.get("slots", {}).get("platform", [])
+        )
+    excluded_slots = _deduplicate(excluded_slots)
+    slots = [slot for slot in slots if slot not in excluded_slots]
     members = rules["platform_scope"]["members"]
+    excluded_members = {
+        member for slot in excluded_slots for member in members.get(slot, [])
+    }
     semantic_members = _deduplicate(
-        [member for slot in slots for member in members.get(slot, [])]
+        [
+            member
+            for slot in slots
+            for member in members.get(slot, [])
+            if member not in excluded_members
+        ]
     )
     return {
         "requested_slots": slots,
+        "excluded_slots": excluded_slots,
+        "excluded_semantic_members": sorted(excluded_members),
         "semantic_members": semantic_members,
-        "requires_permission_enum_validation": bool(slots),
-        "permission_field": "platform_name" if slots else "",
+        # 保留本次拿到的授权枚举原值：阻断时要把「当前账号实际能查哪些平台」
+        # 作为可选项交给用户，否则 Agent 只能说「没权限」而给不出下一步
+        "authorized_enum_values": [
+            str(value).strip()
+            for value in (authorized_platform_values or [])
+            if str(value).strip()
+        ],
+        "requires_permission_enum_validation": bool(slots or excluded_slots),
+        "permission_field": "platform_name" if slots or excluded_slots else "",
         "component_lookup": None,
         "enum_resolution": _resolve_platform_enum(
             semantic_members, authorized_platform_values, rules
         ),
         "authorization_rule": (
             "resolve_only_from_current_account_component_enum"
-            if slots
+            if slots or excluded_slots
             else "not_applicable"
         ),
     }
@@ -674,7 +870,12 @@ def build_query_plan(
         )
         guidance = selected_guidance(selection)
 
-    platform_scope = _platform_scope(selection, raw_rules, authorized_platform_values)
+    platform_scope = _platform_scope(
+        selection,
+        raw_rules,
+        authorized_platform_values,
+        query=query,
+    )
     if selection["planner_status"] == "candidate_ready":
         candidates = selection.get("dataset_candidates", [])
         if candidates:
@@ -777,11 +978,45 @@ def _ambiguous_natural_field_labels(guidance: dict, query: str) -> list[str]:
     return [display[label] for label, names in grouped.items() if len(names) > 1]
 
 
-def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
+def _label_spans(label: str, normalized_query: str) -> list[tuple[int, int]]:
+    """标签在查询原文中的全部命中区间。"""
+    spans = []
+    start = normalized_query.find(label)
+    while start >= 0:
+        spans.append((start, start + len(label)))
+        start = normalized_query.find(label, start + 1)
+    return spans
+
+
+def _is_swallowed(short: str, long: str, normalized_query: str) -> bool:
+    """短标签是否只是长标签的一部分（同一段文本），而非用户另外说出的字段。
+
+    判据是命中区间而不是字符串包含：只要短标签在原文里存在任何一次
+    落在所有长标签区间之外的出现，就说明用户单独提过它，必须保留。
+    """
+    short_spans = _label_spans(short, normalized_query)
+    if not short_spans:
+        return True
+    long_spans = _label_spans(long, normalized_query)
+    if not long_spans:
+        return False
+    return all(
+        any(ls <= ss and se <= le for ls, le in long_spans)
+        for ss, se in short_spans
+    )
+
+
+def _longest_unique_labels(fields: Iterable[dict], normalized_query: str = "") -> list[dict]:
     """标签去重并做最长标签吞并：被更长标签完全包含的短标签让位。
 
     例：查询同时命中"销售额"与"广告销售额"时只保留"广告销售额"，
     避免同一个文本片段产出两个字段结论。
+
+    但吞并必须限定在「同一段文本」内：用户写「花费(原币)和花费」时点名了两个字段，
+    单纯按字符串包含判断会把 cost_cny（花费）整个丢掉，且 model_view.metrics
+    也只报一个，用户无从察觉少了一半（矩阵实测 10/35 个多指标请求中招）。
+    因此改为按命中区间判断——短标签只要在长标签区间之外还出现过，就说明是独立点名。
+    normalized_query 为空时退回旧的纯包含判据（保持无原文场景的行为不变）。
     """
     unique = []
     identity_keys = set()
@@ -804,6 +1039,12 @@ def _longest_unique_labels(fields: Iterable[dict]) -> list[dict]:
         or not any(
             _normalize(item.get("verbose_name")) != other
             and _normalize(item.get("verbose_name")) in other
+            and (
+                not normalized_query
+                or _is_swallowed(
+                    _normalize(item.get("verbose_name")), other, normalized_query
+                )
+            )
             for other in labels
         )
     ]
@@ -867,8 +1108,8 @@ def _selected_fields(
             for item in (field_guidance.get("metrics") or [])[:MAX_RECOMMENDED_FIELDS]
             if isinstance(item, dict)
         ]
-    dimensions = _longest_unique_labels(dimensions)
-    metrics = _longest_unique_labels(metrics)
+    dimensions = _longest_unique_labels(dimensions, normalized_query)
+    metrics = _longest_unique_labels(metrics, normalized_query)
     # 按标签在查询原文中的出现位置排序，保持与用户表述一致的呈现顺序
     dimensions.sort(key=lambda item: normalized_query.find(_normalize(item.get("verbose_name"))))
     metrics.sort(key=lambda item: normalized_query.find(_normalize(item.get("verbose_name"))))
@@ -1000,10 +1241,21 @@ def _answer_contract(
     }
 
 
-def _platform_scope_disclosures(platform: dict) -> list[str]:
+def _platform_scope_disclosures(platform: dict, *, blocked: bool = False) -> list[str]:
     """生成裸“亚马逊”默认范围及部分权限降级的强制披露。"""
+    excluded = platform.get("excluded_semantic_members") or []
+    if excluded:
+        labels = [PLATFORM_MEMBER_LABELS.get(member, member) for member in excluded]
+        return [f"已按用户要求排除{'、'.join(labels)}，未将排除项重新扩入查询范围。"]
     if "amazon" not in set(platform.get("requested_slots") or []):
         return []
+
+    # 阻断态下「本次默认按 SC + VC 处理」是错的：本次根本没有处理，是被拦下了。
+    # 这条完成态文案会让用户以为查询已按 SC+VC 执行，必须换成阻断口径。
+    if blocked:
+        return [
+            "「亚马逊」按亚马逊SC + 亚马逊VC解释，但本次查询被阻断，未按该范围执行任何取数。"
+        ]
 
     disclosures = ["用户未指定亚马逊SC或亚马逊VC，本次默认按亚马逊SC + 亚马逊VC处理。"]
     resolution = platform.get("enum_resolution") or {}
@@ -1038,19 +1290,62 @@ def _reason_zh(reasons: Iterable[str]) -> str:
     return "语义相关"
 
 
+def _clarification_message(
+    code: str, selection: dict, dataset_names_zh: dict[str, str]
+) -> str:
+    """把澄清原因码翻成中文话术；business_dataset 按实际成因细分。
+
+    business_dataset 同时承接「命中权限枚举组件」与「命中多个同名数据集」两种成因，
+    共用一句笼统文案时 Agent 无从追问。成因可由候选卡片直接判定，不需要新增原因码。
+    """
+    if code != "business_dataset":
+        return CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")
+    candidates = selection.get("dataset_candidates") or []
+    if any(item.get("dataset_category") == "query_component" for item in candidates):
+        return BUSINESS_DATASET_MESSAGES["query_component"]
+    names = [
+        _normalize(dataset_names_zh.get(str(item.get("dataset_alias", "")), ""))
+        for item in candidates
+    ]
+    names = [name for name in names if name]
+    if len(names) != len(set(names)):
+        return BUSINESS_DATASET_MESSAGES["name_conflict"]
+    return CLARIFICATION_MESSAGES["business_dataset"]
+
+
 def _candidate_cards_zh(
     selection: dict,
     dataset_names_zh: dict[str, str],
     dataset_summaries_zh: dict[str, str],
 ) -> list[dict]:
-    """澄清态的候选卡片投影（P0-2）：中文名 + 命中原因，供带选项提问。"""
+    """澄清态的候选卡片投影（P0-2）：中文名 + 命中原因，供带选项提问。
+
+    同名候选必须带序号：账号内存在两张中文名完全相同的数据集时（实测
+    「用户仪表盘分享明细」table_id 52/61），卡片的 name_zh 一模一样，
+    Agent 无法构造「你要第 1 个还是第 2 个」这样的有效提问，14 个维度全部卡死。
+    选表层早已算出 name_conflict 标记，但此前从未被消费。
+    """
     cards = []
-    for item in (selection.get("dataset_candidates") or [])[:MAX_CANDIDATE_CARDS]:
+    candidates = (selection.get("dataset_candidates") or [])[:MAX_CANDIDATE_CARDS]
+    name_counts: dict[str, int] = {}
+    for item in candidates:
+        key = _normalize(dataset_names_zh.get(str(item.get("dataset_alias", "")), ""))
+        if key:
+            name_counts[key] = name_counts.get(key, 0) + 1
+    duplicate_seen: dict[str, int] = {}
+    for item in candidates:
         alias = str(item.get("dataset_alias", ""))
         name_zh = dataset_names_zh.get(alias) or ""
         if not name_zh:
             continue
-        card = {"name_zh": name_zh, "reason_zh": _reason_zh(item.get("reasons") or [])}
+        key = _normalize(name_zh)
+        total = name_counts.get(key, 0)
+        display = name_zh
+        if total > 1:
+            index = duplicate_seen.get(key, 0) + 1
+            duplicate_seen[key] = index
+            display = f"{name_zh}（同名第 {index}/{total} 个）"
+        card = {"name_zh": display, "reason_zh": _reason_zh(item.get("reasons") or [])}
         summary = dataset_summaries_zh.get(alias)
         if summary:
             card["summary_zh"] = summary
@@ -1099,12 +1394,123 @@ def _field_suggestions(
     return suggestions
 
 
+# ---------------------------------------------------------------------------
+# 排序与行数意图解析（Top N）
+# ---------------------------------------------------------------------------
+#
+# 为什么必须由规划期做：模板的 orderBy/limit 曾恒为 None，而 SKILL.md 又规定
+# Agent 不得改写模板、plan_integrity 摘要也把模板哈希绑死——三条规则叠加的结果是
+# 「取前10名」在自然语言主线上结构性不可能实现（矩阵实测 0/384 下发排序或行数）。
+# 端到端表现为：用户要前 10 名，拿回全量 193 行按主键自然序，truncated=false，
+# 且没有任何一处告诉用户 Top N 没生效。排序与行数是用户口径的一部分，
+# 必须和表、字段、时间一样由规划器权威确定。
+# 注意：本副本的 orderBy 形态是 {field, desc}（布尔），与 Skill 模板的
+# {field, direction} 不同，两处不可直接复制粘贴。
+
+# 行数单位必须显式限定，否则「前7天」这类时间表述会被误读成 limit=7
+_ROW_UNIT = r"名|行|条|位|项|个|款|种|款式"
+_LIMIT_RE = re.compile(
+    rf"(?:前|头)\s*(?P<head>[0-9]+|[一两二三四五六七八九十百]+)\s*(?:{_ROW_UNIT})"
+    rf"|top\s*(?P<top>[0-9]+)"
+    rf"|(?:只要|只取|仅要|仅取|只显示|只展示|返回|取)\s*"
+    rf"(?P<take>[0-9]+|[一两二三四五六七八九十百]+)\s*(?:{_ROW_UNIT})",
+    re.IGNORECASE,
+)
+_DESC_RE = re.compile(
+    r"降序|倒序|从高到低|从大到小|从多到少|最高|最多|最大|最好|排行|排名|top",
+    re.IGNORECASE,
+)
+_ASC_RE = re.compile(r"升序|正序|从低到高|从小到大|从少到多|最低|最少|最小|最差|倒数")
+# 「按X降序/按X排序」才是排序诉求；「按X统计」是分组维度，不能当排序字段
+_ORDER_FIELD_RE = re.compile(
+    r"(?:按|以|根据|依据|用)\s*"
+    r"(?P<label>[一-鿿A-Za-z0-9_()（）%\.\-]{1,40}?)\s*"
+    r"(?:从高到低|从低到高|从大到小|从小到大|从多到少|从少到多|降序|升序|倒序|正序|排序|排列|排名)"
+)
+_LIMIT_WORDS = {"十": 10, "二十": 20, "三十": 30, "五十": 50, "一百": 100, "百": 100}
+_LIMIT_DIGITS = {
+    "一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9,
+}
+
+
+def _parse_count(text: str) -> int | None:
+    """解析行数：阿拉伯数字优先，另支持 Top N 常用的少量中文数词。"""
+    text = text.strip()
+    if text.isdigit():
+        value = int(text)
+        return value if 0 < value <= 5000 else None
+    if text in _LIMIT_WORDS:
+        return _LIMIT_WORDS[text]
+    return _LIMIT_DIGITS.get(text)
+
+
+def _match_ordered_field(label: str, fields: Sequence[dict]) -> dict | None:
+    """把「按X排序」里的 X 绑定到本次已选字段；完整等值优先于去括号基名。"""
+    needle = _normalize(label)
+    if not needle:
+        return None
+    for field in fields:
+        if _normalize(field.get("label_zh")) == needle:
+            return field
+    for field in fields:
+        base = re.split(r"[（(]", _normalize(field.get("label_zh")), maxsplit=1)[0]
+        if base and base == needle:
+            return field
+    return None
+
+
+def _resolve_order_and_limit(
+    query: str, dimensions: Sequence[dict], metrics: Sequence[dict]
+) -> tuple[list[dict] | None, int | None, str]:
+    """解析排序与行数意图。
+
+    返回 (orderBy, limit, 未解析原因)。未解析原因非空时调用方必须强制披露——
+    静默放行会让用户把「全量自然序」当成「Top N」，是本审计中修掉的高危形态之一。
+
+    排序字段解析优先级：
+    1. 「按X降序/按X排序」显式点名，且 X 能绑定到本次已选字段；
+    2. 本次只选了一个指标时按该指标排（Top N 的常识语义）；
+    3. 都不成立则不下发排序与行数，改为强制披露。
+    """
+    match = _LIMIT_RE.search(query)
+    raw_count = ""
+    if match:
+        raw_count = match.group("head") or match.group("top") or match.group("take") or ""
+    limit = _parse_count(raw_count) if raw_count else None
+    has_direction = bool(_DESC_RE.search(query) or _ASC_RE.search(query))
+    if not limit and not has_direction:
+        return None, None, ""
+
+    # 方向：显式升序优先于降序词（「最低的前5名」应按升序），都没有时 Top N 默认降序
+    descending = not _ASC_RE.search(query)
+
+    ordered_field = None
+    field_match = _ORDER_FIELD_RE.search(query)
+    if field_match:
+        ordered_field = _match_ordered_field(
+            field_match.group("label"), list(metrics) + list(dimensions)
+        )
+    if ordered_field is None and len(metrics) == 1:
+        ordered_field = metrics[0]
+    if ordered_field is None:
+        target = "排序指标" if metrics else "排序字段"
+        return None, None, (
+            f"用户要求了排序或行数限制，但未能唯一确定{target}"
+            f"（本次共 {len(metrics)} 个指标）：本次查询未应用排序与行数限制，"
+            "返回的是完整结果集且按服务端自然序排列，不得当作 Top N 汇报。"
+        )
+    return [{"field": ordered_field["field_name"], "desc": descending}], limit, ""
+
+
 def _build_query_template(
     table_id: object,
     dimensions: list[dict],
     metrics: list[dict],
     date_fields: list[dict],
     scope: dict | None,
+    platform_values: list[str] | None = None,
+    global_currency: str | None = None,
 ) -> dict | None:
     """生成可直接填充的正式查询 payload 骨架（P1-4）。
 
@@ -1145,7 +1551,54 @@ def _build_query_template(
                 "startDate": comparison["start"],
                 "endDate": comparison["end"],
             }
+    resolved_platforms = [
+        str(value).strip() for value in (platform_values or []) if str(value).strip()
+    ]
+    if resolved_platforms:
+        filters.append(
+            {
+                "field": "platform_name",
+                "operator": "=" if len(resolved_platforms) == 1 else "in",
+                "value": (
+                    resolved_platforms[0]
+                    if len(resolved_platforms) == 1
+                    else resolved_platforms
+                ),
+            }
+        )
+    # 币种是查询口径的一部分，必须在完整性摘要封存前写入模板。
+    if global_currency:
+        template["globalCurrency"] = global_currency
     return template
+
+
+def _attach_multi_currency_templates(contract: dict, query: str) -> dict:
+    """为多币种意图生成除 globalCurrency 外完全一致的独立查询模板。"""
+    if contract.get("status") != "planned" or contract.get("query_mode") != "dataset_query":
+        return contract
+    currencies = _detect_global_currencies(query)
+    if len(currencies) < 2:
+        return contract
+    execution = contract.get("execution_ref")
+    if not isinstance(execution, dict):
+        return contract
+    template = execution.get("query_template")
+    if not isinstance(template, dict):
+        return contract
+
+    templates: list[dict] = []
+    for currency in currencies:
+        currency_template = deepcopy(template)
+        currency_template["globalCurrency"] = currency
+        templates.append(currency_template)
+    execution["requested_global_currencies"] = currencies
+    execution["query_templates"] = templates
+    execution["query_template"] = deepcopy(templates[0])
+    execution["currency_execution_contract_zh"] = (
+        "每个 query_templates 项必须分别调用取数服务；禁止用任一结果配合外部汇率或本地换算"
+        "生成其他币种。各次查询除 globalCurrency 外的表、字段、时间和筛选必须完全一致。"
+    )
+    return contract
 
 
 def _platform_enum_command(component_table_id: object) -> str | None:
@@ -1352,6 +1805,32 @@ def build_model_contract(
             "comparison": None,
             "label_zh": "全部时间（仅维度查询，原文未限定时间，不加日期筛选）",
         }
+    # 无日期字段的数据集：_build_query_template 只在 date_fields 非空时才落日期过滤，
+    # 而 time_scope 已按用户原文算出了具体窗口。放任不管的后果是 model_view 声明一个
+    # 根本没生效的时间窗，Agent 按 SKILL.md 第 4 条把它当权威口径讲给用户，
+    # 数字却是全表历史累计——无异常、无阻断、无披露，是唯一会产出
+    # 「看起来完全正常的错误答案」的路径（矩阵实测 41/384 命中，涉及 5 张表）。
+    # 处置分两种：请求含环比/同比时根本无从对比，必须澄清；否则收敛为全时段并强制披露。
+    date_scope_unavailable = False
+    if scope and not date_fields and not scope.get("unbounded"):
+        date_scope_unavailable = True
+        if scope.get("comparison"):
+            status = "clarify_required"
+            if "time_comparison_unsupported" not in clarification_reasons:
+                clarification_reasons.append("time_comparison_unsupported")
+            pending_confirmations_zh.append(
+                "该数据集没有日期字段，无法做环比或同比：确认改为不限时间的整体查询，或更换数据集"
+            )
+        scope = {
+            **scope,
+            "start": None,
+            "end": None,
+            "unbounded": True,
+            "is_default": False,
+            "matched": False,
+            "comparison": None,
+            "label_zh": "全部时间（该数据集没有日期字段，无法按时间筛选）",
+        }
     if status == "planned" and execution_path_ready and scope and scope.get("is_default"):
         status = "clarify_required"
         clarification_reasons.append("time_scope_confirmation")
@@ -1372,7 +1851,7 @@ def build_model_contract(
         "platform_filter_state": platform_state,
         "clarification_reason_codes": clarification_reasons,
         "clarification_messages_zh": [
-            CLARIFICATION_MESSAGES.get(code, "需要补充查询条件。")
+            _clarification_message(code, selection, dataset_names_zh or {})
             for code in clarification_reasons
         ],
         "next_action": str(internal.get("next_action", "")),
@@ -1383,9 +1862,20 @@ def build_model_contract(
     ]
     if resolved_platform_members:
         model_view["platform_effective_members"] = resolved_platform_members
-    platform_disclosures = _platform_scope_disclosures(platform)
+    platform_disclosures = _platform_scope_disclosures(platform, blocked=status == "blocked")
     if platform_disclosures:
         model_view["platform_scope_disclosures_zh"] = platform_disclosures
+    # 阻断态必须自带可执行材料：原因一句话 + 当前账号实际可用的平台。
+    # 只留一条「需要说明被阻断的原因」而不给原因，等于把披露义务变成猜测诱因。
+    block_reason = BLOCK_REASON_MESSAGES.get(str(internal.get("next_action", "")))
+    if status == "blocked" and block_reason:
+        model_view["block_reason_zh"] = block_reason
+        authorized_values = platform.get("authorized_enum_values") or []
+        if authorized_values:
+            model_view["authorized_alternatives_zh"] = (
+                "当前账号已授权的平台为：" + "、".join(authorized_values)
+                + "。可改用其中之一重新提问。"
+            )
     # 放开固定槽位后，选中数据集覆盖的口径可能比用户要求更宽，必须如实告知，
     # 否则用户会把「关键词×搜索词」级明细当成「搜索词」级汇总，
     # 或把 SP+SD+SB 合计当成纯 SP 数据。
@@ -1527,6 +2017,7 @@ def build_model_contract(
                 "--authorized-platform-value 参数传回本规划命令，取得终版规划器"
             )
     # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
+    order_unresolved = ""
     if status == "planned" and str(internal.get("next_action", "")) == "construct_query":
         template = _build_query_template(
             dataset.get("table_id"),
@@ -1534,15 +2025,27 @@ def build_model_contract(
             execution_metrics,
             date_fields,
             scope,
+            resolution.get("resolved_filter_values", []),
+            _detect_global_currency(query),
         )
         if template is not None:
+            # 排序与行数由规划期解析后直接写入模板（纳入 plan_integrity 摘要）。
+            # 调用方显式传入的 order_by/limit（run_flow 参数）优先级更高，会在其中覆盖。
+            order_by, row_limit, order_unresolved = _resolve_order_and_limit(
+                query, execution_dimensions, execution_metrics
+            )
+            if order_by:
+                template["orderBy"] = order_by
+            if row_limit:
+                template["limit"] = row_limit
             execution_ref["query_template"] = template
             execution_ref["query_template_fill_rules_zh"] = (
-                "模板已预填授权字段与时间窗（日期过滤为 >=/<= 两行实测形态）。"
+                "模板已预填授权字段、时间窗与排序行数（日期过滤为 >=/<= 两行实测形态）。"
                 "时间窗由 Python 按 execution_ref.time_scope 的参考日期生成，禁止自行心算、猜测年份或改写。"
                 "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
-                "排序填 orderBy=[{\"field\":\"<结果alias>\",\"desc\":true/false}]（desc 布尔，true 降序），"
-                "行数填 limit；不需要的键（null 值）必须删除后再执行。"
+                "排序与行数已由规划器按用户原文解析写入 orderBy（形态 [{\"field\":\"<结果alias>\","
+                "\"desc\":true/false}]，desc 布尔、true 降序）与 limit，Agent 不得改写；"
+                "未下发时以 answer_contract 的披露为准。不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
                 "数据集默认条件（若有）由服务端查询时自动应用，请勿手动加入 filters；"
                 "仅需在回答中向用户披露 default_filters_zh。"
@@ -1566,6 +2069,23 @@ def build_model_contract(
         )
     if grain_extra:
         answer_contract["required_disclosures_zh"].extend(model_view["grain_disclosure_zh"])
+    # 时间窗被收敛为全时段时必须显式告知：用户原文里说了时间，结论却不能按那个时间讲。
+    # 少了这条，Agent 只会看到一个语气平静的「全部时间」标签，不会意识到需要向用户交代差异。
+    if date_scope_unavailable:
+        answer_contract["required_disclosures_zh"].append(
+            "该数据集没有日期字段，用户请求的时间范围无法作为查询条件生效："
+            "本次为全量口径，结论不得表述为该时间段的数据。"
+        )
+    # 排序/行数解析不出时必须显式告知：静默放行会让用户把「全量自然序」当成 Top N
+    if order_unresolved:
+        answer_contract["required_disclosures_zh"].append(order_unresolved)
+    # 阻断原因与可选平台一并进入强制披露，让「说明被阻断的原因」这条要求真正可执行
+    if model_view.get("block_reason_zh"):
+        answer_contract["required_disclosures_zh"].append(model_view["block_reason_zh"])
+    if model_view.get("authorized_alternatives_zh"):
+        answer_contract["required_disclosures_zh"].append(
+            model_view["authorized_alternatives_zh"]
+        )
     return {
         "contract": MODEL_CONTRACT,
         "query_mode": "dataset_query",
@@ -1714,6 +2234,7 @@ def build_model_query_plan(
     contract = _resolve_component_filters(
         contract, query, enum_fn, auto_enum=auto_enum, adapter=adapter
     )
+    contract = _attach_multi_currency_templates(contract, query)
     contract = _attach_fallback_guidance(contract)
     # planned 合同生成后立即封存，执行器据此拒绝规划与执行之间的手工改写。
     if contract.get("status") == "planned" and contract.get("query_mode") == "dataset_query":
@@ -1998,7 +2519,9 @@ def _shared_prefix(values: list) -> str:
 # - label_terms：标签形态抽取用的说法集合，命中标签才发起枚举，零额外网络成本。
 # - reverse_lookup：拿授权枚举原值反查原文，用于兜住不带字段名的裸值
 #   （「查傲彼瑞的ASIN」「查史子涵的销量」）。只给低基数字段开——实测渠道 9、
-#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；SKU/产品名这类几百上千的
+#   国家 2、品牌 3、销售 12，枚举一次就能覆盖全集；部门枚举是当前账号的
+#   权限子集、同属低基数，开反查兜住「宁波」「泛泰克」「孵化部」这类
+#   无后缀或特殊名部门的裸值提及；SKU/产品名这类几百上千的
 #   字段开反查既慢又不可能枚举完整，改用形态抽取。
 # - value_pattern：编码型字段的裸值形态，抽到候选后仍要枚举校验权限。
 _ENUM_COMPONENT_SPECS = (
@@ -2007,7 +2530,7 @@ _ENUM_COMPONENT_SPECS = (
         "label_zh": "部门",
         "extract": _extract_requested_department_value,
         "normalize": _normalize_department_value,
-        "reverse_lookup": False,
+        "reverse_lookup": True,
     },
     {
         "field_name": "channel_name",
@@ -2411,6 +2934,28 @@ def _resolve_enum_component_filter(
             if not _value_already_consumed(normalize(value), consumed)
         ]
         if not matched:
+            # requested 非空说明用户用「字段+系词」显式点名了一组值（如
+            # 「国家为德国、法国」，labeled_enumeration 命中），只是反查在授权
+            # 枚举里零命中——不同于原文根本没提该字段的静默放行场景，不能沿用
+            # 同一条 `return contract`：那会把「用户点名的国家全部未授权」悄悄
+            # 处理成「用户没有筛选意图」，下发不含筛选条件的可执行模板，
+            # run_flow 会原样执行，等同于把「只查德国」放行成「查全部国家」
+            # （QA 实测另一形态：值本身在授权枚举里，被执行器 precheck 拒绝；
+            # 无论哪种，客户端都必须先与权限枚举求交集，零交集时不注入且披露）。
+            # requested 为空则是原文确实没提这个字段，继续保持原有静默放行。
+            if requested:
+                return _block_component_filter(
+                    contract,
+                    execution,
+                    status="clarify_required",
+                    state="clarify_required",
+                    next_action="ask_user_for_component_filter",
+                    message_zh=(
+                        f"识别到{label_zh}“{requested}”等表述，但均不在当前账号"
+                        f"授权范围内，已阻止扩大为全范围查询；请改用当前账号可见的"
+                        f"{label_zh}取值，或确认是否需要该筛选。"
+                    ),
+                )
             return contract
         exact_multi = len(matched) > 1 and match_kind == "exact"
         if exact_multi:

@@ -44,10 +44,11 @@ def test_skill_defaults_to_bounded_single_flow_entry():
     assert "正常路径工具调用预算" in text
     assert "最多 3 次工具调用" in text
     assert "非正常路径最多 7 次" in text
-    assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
+    assert 'opscli query flow "$USER_REQUEST"' in text
     assert "禁止为了“确认环境/字段/语法”调用 `opscli query catalog`" in text
     assert "禁止手工修改 plan" in text
-    assert "`query_plan.py` + `run_query.py` 不是 Agent 的规划器正常路径" in text
+    assert "都不是 Agent 的规划器正常路径" in text
+    assert "`query_plan.py`/`run_query.py`" in text
 
 
 def test_skill_allows_fallback_only_on_objective_failure():
@@ -58,12 +59,44 @@ def test_skill_allows_fallback_only_on_objective_failure():
     """
     text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-    assert "**CLI 主线的优先入口是 `query_flow.py`。**" in text
+    assert "**CLI 主线的优先入口是 `opscli query flow`。**" in text
     assert "### 降级触发条件（满足其一即可降级）" in text
     assert "**不构成降级理由**" in text
     assert "主观觉得规划器不合适" in text
     # 降级态的字段来源护栏不得随触发条件一起放宽
     assert "仍禁止凭记忆手拼" in text
+    # 旧脚本入口退居备选执行通道（命令级环境异常时），不得与主线入口混淆
+    assert "备选执行通道" in text
+    assert 'python3 scripts/query_flow.py "$USER_REQUEST"' in text
+
+
+def test_skill_defines_multi_dataset_excel_orchestration_contract():
+    """多表 Excel 请求必须保留逐表时间、全量和 LEFT JOIN 语义。
+
+    本次真实异常把库龄“超6月”错当自然月，又把“未售出”反向改成销量大于 0。
+    这些不是单字段解析问题，而是多表编排边界；用静态合同测试防止后续精简文档时
+    再删除关键口径。
+    """
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "多数据集计算与 Excel 交付" in text
+    assert "181 天以上" in text
+    assert "执行当天" in text
+    assert "LEFT JOIN" in text
+    assert "无销售记录按 `order_qty=0`" in text
+    assert "禁止改写成 `order_qty>0`" in text
+    assert "`truncated=false`" in text
+    assert "每张快照表独立" in text
+
+
+def test_skill_requires_service_queries_for_each_currency():
+    """人民币/加拿大元对照必须逐币种取数，不能引用外部汇率转换。"""
+    text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    assert "多币种查询是多次取数，不是汇率换算" in text
+    assert "同时用加拿大元对比显示" in text
+    assert "Bank of Canada Valet `FXCNYCAD`" in text
+    assert "MCP-only 也必须为每个币种分别调用 `query_simple`" in text
 
 
 def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
@@ -105,6 +138,74 @@ def test_query_flow_plans_and_executes_once(monkeypatch, tmp_path: Path):
 
     assert exit_code == 0
     assert calls == {"plan": 1, "run": 1}
+
+
+def test_query_flow_executes_every_currency_template(
+    monkeypatch, capsys, tmp_path: Path
+):
+    """多币种规划仍只规划一次，但必须逐币种调用执行器并汇总服务端结果。"""
+    base = {"tableId": "1", "dimensions": [], "metrics": [], "filters": []}
+    cny = {**base, "globalCurrency": "CNY"}
+    cad = {**base, "globalCurrency": "CAD"}
+    plan = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "data_state": "ready",
+        "metadata_version": "1.3.20",
+        "status": "planned",
+        "model_view": {},
+        "answer_contract": {},
+        "execution_ref": {
+            "user_visible": False,
+            "table_id": "1",
+            "query_template": cny,
+            "query_templates": [cny, cad],
+            "requested_global_currencies": ["CNY", "CAD"],
+        },
+    }
+    query_flow.plan_integrity.attach(plan)
+    calls: list[dict] = []
+
+    monkeypatch.setattr(
+        query_flow.query_plan,
+        "build_model_query_plan",
+        lambda *_args, **_kwargs: plan,
+    )
+
+    def fake_opscli(_table_id: str, payload: dict, **_kwargs) -> dict:
+        calls.append(payload)
+        return {
+            "success": True,
+            "data": [],
+            "meta": {
+                "totalCount": 0,
+                "currency": payload["globalCurrency"],
+            },
+        }
+
+    monkeypatch.setattr(query_flow.run_query, "_run_opscli", fake_opscli)
+
+    exit_code = query_flow.execute_flow(
+        "报告中把涉及金钱的同时用加拿大元对比显示一下",
+        result_dir=tmp_path,
+    )
+    output = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 0
+    assert [item["globalCurrency"] for item in calls] == ["CNY", "CAD"]
+    assert all(item.get("tableId") == "1" for item in calls)
+    assert all(item.get("dimensions") == [] for item in calls)
+    assert all(item.get("metrics") == [] for item in calls)
+    assert output["multi_currency"] is True
+    assert output["requested_global_currencies"] == ["CNY", "CAD"]
+    assert output["comparison_contract"]["service_queries_complete"] is True
+    assert output["comparison_contract"]["currency_validation_passed"] is True
+    assert output["comparison_contract"]["comparison_ready"] is False
+    assert output["comparison_contract"]["alignment_validation_required"] is True
+    assert [item["returned_currency"] for item in output["currency_results"]] == [
+        "CNY",
+        "CAD",
+    ]
 
 
 def test_query_flow_returns_clarification_without_execution(

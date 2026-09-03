@@ -7,7 +7,7 @@
 
 规划器路线（自然语言取数首选，需传输层已验证账号）：
 - query_plan            — 自然语言请求 → 规划合同（只规划不执行）
-- query_flow            — 一体化：规划 + planned 时按 query_template 执行一次并回传结果
+- query_flow            — 一体化：只规划一次；单币种执行一次，多币种逐项取数
 
 手工构造路线（先取元数据再查）：
 - query_metadata        — 查询数据集 metadata（维度/指标字段、select_columns、filter_configs）
@@ -21,7 +21,7 @@
 - query_chart           — 通过 chart_uuid 获取/执行图表查询
 - query_chart_doc       — 通过 chart_uuid 生成图表 API 调用 Markdown 文档
 
-内部暂时屏蔽（不对外注册）：query_catalog、query_intent_match。
+catalog / intent 路线：query_catalog — 读取数据集业务语义索引；query_intent_match — 自然语言匹配 catalog intents。
 
 所有工具函数定义在模块级，可直接导入调用（测试友好）。
 调用 register(mcp) 将以上工具批量注册到指定 MCP 实例。
@@ -219,6 +219,11 @@ async def query_intent_match(
     comparison_strategy、recommended_dimensions、recommended_metrics 等业务约束；
     后续构造查询时必须优先遵循这些约束，再进行字段存在性校验。
 
+    返回体额外含 match_record_id（本次匹配的服务端归因记录 ID，上报失败时为
+    None）；命中候选并执行查询时，应将其与候选的 intent_code 一并透传给
+    query_run / query_build_and_run 的 match_record_id / intent_code 参数，
+    用于闭环归因统计。
+
     Args:
         query: 自然语言查询需求
         skills_dir: 可选，自定义 Skills 目录（用于读取本地缓存 catalog）
@@ -236,6 +241,10 @@ async def query_intent_match(
             skills_dir=skills_dir,
             source=source,
             fallback_local=fallback_local,
+            # MCP 路径需显式声明上报来源为 mcp_intent，
+            # 否则会沿用 QueryManager.intent_match 的默认值 "cli_intent"，
+            # 导致服务端归因统计里 MCP 调用被误记为 CLI 调用。
+            report_source="mcp_intent",
         )
         return _ok(result)
     except Exception as exc:
@@ -453,6 +462,9 @@ async def query_run(
     payload_path: str,
     session_id: str | None = None,
     jwt: str | None = None,
+    intent_code: str | None = None,
+    selection_source: str | None = None,
+    match_record_id: int | None = None,
 ) -> dict:
     """读取本地 payload JSON 文件并转发至服务端执行查询。
 
@@ -470,6 +482,9 @@ async def query_run(
         payload_path: 本地 payload JSON 文件路径
         session_id:   可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:          可选，已有 JWT 可直接使用（为空则自动加载本地缓存的）
+        intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
+        selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
+        match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -482,7 +497,10 @@ async def query_run(
         return _err(ValueError("无 session_id：请完成授权登录，或传入有效的 session_id"))
     try:
         result = _query_manager(jwt=jw, session_id=sid).run(
-            payload_path=payload_path
+            payload_path=payload_path,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
         )
         return _ok(result)
     except Exception as exc:
@@ -505,6 +523,9 @@ async def query_build_and_run(
     skills_dir: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    intent_code: str | None = None,
+    selection_source: str | None = None,
+    match_record_id: int | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果（CLI 风格字符串参数）。
 
@@ -537,6 +558,9 @@ async def query_build_and_run(
         skills_dir:        可选，自定义 Skills 目录
         session_id:        可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:               可选，已有 JWT（为空则自动加载本地缓存的）
+        intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
+        selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
+        match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -573,6 +597,9 @@ async def query_build_and_run(
             dry_run=dry_run,
             data_comparison=data_comparison,
             skills_dir=skills_dir,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
         )
         return _ok(result)
     except Exception as exc:
@@ -724,13 +751,22 @@ async def query_flow(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """一体化取数：规划 + planned 数据集查询时按 query_template 执行一次并回传结果。
+    """一体化取数：只规划一次；单币种执行一次，多币种按模板逐项执行并回传结果。
 
     非 planned（需澄清/被阻断/图表 UUID 等）合同原样返回，交调用方按 model_view 处置。
-    planned 时把 limit/order_by/offset 填入 query_template 再执行（不传则沿用后端默认：
-    limit=20、无排序、offset=0）。返回体的 execution_notes 是**按需披露**的已知延后项，
-    仅在本次真正用到相关能力时出现（传了 order_by 才提示服务端 orderBy 缺陷的本地兜底/加量重查
-    未内核化）；未出现该键属正常，不是异常。
+    planned 时把 limit/order_by/offset 填入 query_template 再执行；不传 limit 且
+    服务端默认页少于 totalCount 时会自动补齐一次（最多 5000 行）。返回体的
+    result_disclosures 除实际行数/总数/截断状态（row_count_returned/total_count/truncated/
+    auto_complete_applied）外，还带 limit（原始请求的分页上限，不受自动补齐影响）与
+    currency/currency_disclosure_zh（本次实际生效币种，取自服务端 meta.currency；为
+    null 时只能声明未声明，禁止推断）；传了 order_by 且检测到服务端排序未生效（已知缺陷）
+    时会额外出现 order_fallback/order_disclosure_zh，说明已本地重排或加量重查后本地排序，
+    结论中必须披露该兜底行为，排序正常生效或未传 order_by 时不会出现 order_fallback。
+    返回体还内嵌 evidence_contract（构建失败时为 evidence_contract_error，与合同其余字段
+    同级），组织结论时优先使用其 required_evidence/required_disclosures_zh/
+    forbidden_inferences_zh。本工具不支持 result_dir/落盘，行数超过 20 行时
+    result_disclosures 会出现 large_result_warning_zh，提示全量行已原样进入返回体，
+    结果集较大时应改用更小的 limit 或按维度拆分多次查询。
 
     【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
 
@@ -739,8 +775,9 @@ async def query_flow(
     时等待约 25 秒后用相同参数原样重调（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
     不要执行该命令，也不要自行升级），连续 3 次仍未就绪才提交反馈并停止。
 
-    【结果被截断时】返回结果元数据显示只回了部分行（rowCount < totalCount）时，
-    传更大的 limit 重新调用本工具即可取全（后端 limit 无上限）。
+    【结果被截断时】先看 result_disclosures：truncated=false 才可按全量陈述；
+    truncated=true 表示总数超过自动补齐上限或服务端仍未返回完整结果，此时显式传更大
+    limit 重新调用，拿到全量前必须声明当前仅为部分结果。
 
     【反馈边界】仅在本工具意外失败时提交一次 feedback_submit；0 行、需要澄清、
     认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
@@ -748,7 +785,7 @@ async def query_flow(
     Args:
         request:          用户查询原文（自然语言）。
         requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
-        limit:            可选，返回行数上限；不传则用后端默认 20。
+        limit:            可选，返回行数上限；不传时自动补齐默认页，最多 5000 行。
         order_by:         可选，排序 [{"field": "<结果字段>", "desc": true}]（可传 JSON 字符串）；
                           只认 desc 布尔值，写成 {"direction": "DESC"} 会被后端忽略并恒按升序返回。
         offset:           可选，分页偏移；不传则后端默认 0。
@@ -826,9 +863,8 @@ async def query_preferences(
 _ALL_TOOLS = [
     query_spec_must_read,
     query_metadata,
-    # 【临时屏蔽】catalog / intent 能力暂停对外暴露，恢复时取消下两行注释即可
-    # query_catalog,
-    # query_intent_match,
+    query_catalog,
+    query_intent_match,
     query_simple,
     query_build,
     query_run,

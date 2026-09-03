@@ -29,6 +29,42 @@ class _FieldSpec:
 
 SELECT_ALIAS_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
+# 目前支持的全局币种白名单（大写 ISO 4217，与后端 dm_global_currencies 表种子一致）
+SUPPORTED_GLOBAL_CURRENCIES = ["USD", "GBP", "CAD", "EUR", "JPY", "CNY"]
+
+
+def _attribution_headers(
+    intent_code: str | None, selection_source: str | None, match_record_id: int | None,
+) -> dict | None:
+    """把归因三元组转成请求头字典；全空返回 None 表示不附加。
+
+    为什么走 Header 而非 payload 字段：cli-query / cli-query/simple 的 body 会原样
+    透传给 Python 取数服务，塞入归因字段有被下游拒绝的风险；服务端契约（QA 已上线）
+    约定归因信息通过 X-Intent-Code / X-Selection-Source / X-Match-Record-Id 三个请求头传递。
+    """
+    headers = {}
+    if intent_code:
+        headers["X-Intent-Code"] = intent_code
+    if selection_source:
+        headers["X-Selection-Source"] = selection_source
+    if match_record_id:
+        headers["X-Match-Record-Id"] = str(match_record_id)
+    return headers or None
+
+
+def _normalize_global_currency(value: str | None) -> str | None:
+    """归一并校验全局币种：去空格转大写，仅接受白名单 6 种；None/空返回 None，非白名单抛错。"""
+    if value is None:
+        return None
+    code = str(value).strip().upper()
+    if code == "":
+        return None
+    if code not in SUPPORTED_GLOBAL_CURRENCIES:
+        raise InvalidPayloadError(
+            f"不支持的币种: {value}，仅支持 {'/'.join(SUPPORTED_GLOBAL_CURRENCIES)}"
+        )
+    return code
+
 
 class QueryManager:
     """协调本地 metadata 与远端 query 执行。
@@ -152,6 +188,18 @@ class QueryManager:
                     "\n  当前使用的是本地缓存数据，可能未同步。"
                     "\n  请执行 opscli skills upgrade ops-dataset-query 更新缓存后重试"
                 )
+            owners = self._component_owner_datasets(datasets, needle)
+            if owners:
+                # 该 alias 是某个已授权数据集下发的查询组件。这类失败此前只回一句
+                # 「未找到目标数据集」，调用方会误以为是自己写错了 alias，
+                # 于是反复改名重试——线上取数反馈里 607 条（单项最大）都是这一形态。
+                # 真实成因是该组件表未随引用它的数据集一起授权，属服务端权限配置。
+                hint = (
+                    f"\n  该标识是「{owners[0]}」等 {len(owners)} 个已授权数据集下发的查询组件，"
+                    "不是业务数据集，说明它未随引用它的数据集一并授权。"
+                    "\n  这不是 alias 写错，重试与改名都无效："
+                    "请升级到已修复该问题的服务端版本，或按 references/feedback-guide.md 提交一次反馈。"
+                )
             raise DatasetNotFoundError(f"未找到目标数据集: {needle}{hint}")
 
         # 筛选该数据集对应的字段
@@ -188,8 +236,19 @@ class QueryManager:
         """获取当前用户的图表字段偏好列表（远端实时获取）。"""
         return self.client.fetch_user_preferences()
 
-    def run(self, *, payload_path: str) -> dict:
-        """读取本地 payload 文件并转发执行查询。"""
+    def run(
+        self,
+        *,
+        payload_path: str,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+    ) -> dict:
+        """读取本地 payload 文件并转发执行查询。
+
+        intent_code/selection_source/match_record_id 为可选的执行归因三元组，
+        标注本次查询来自哪次意图匹配/选表来源，以请求头形式透传，不写入 payload。
+        """
         payload_file = Path(payload_path).expanduser()
         if not payload_file.exists():
             raise InvalidPayloadError(f"payload 文件不存在: {payload_file}")
@@ -200,7 +259,8 @@ class QueryManager:
             raise InvalidPayloadError(f"payload 不是合法 JSON: {payload_file}") from exc
 
         self._validate_payload(payload)
-        return self.client.cli_query(payload)
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        return self.client.cli_query(payload, extra_headers=extra_headers)
 
     def build(
         self,
@@ -221,6 +281,7 @@ class QueryManager:
         cwd: Path | None = None,
         output_path: str | None = None,
         data_comparison: str | None = None,
+        global_currency: str | None = None,
     ) -> dict:
         """基于简化参数构造标准 query payload。"""
         if not dimensions and not metrics:
@@ -304,6 +365,11 @@ class QueryManager:
                 data_comparison, dataset_alias=str(dataset["dataset_alias"]),
             )
 
+        # 全局币种：归一+白名单校验后放入 payload 顶层，透传给后端（后端再放到 query.from 层级）
+        normalized_currency = _normalize_global_currency(global_currency)
+        if normalized_currency:
+            payload["globalCurrency"] = normalized_currency
+
         self._validate_payload(payload)
         if output_path:
             output_file = Path(output_path).expanduser()
@@ -316,10 +382,22 @@ class QueryManager:
             "output": str(Path(output_path).expanduser()) if output_path else None,
         }
 
-    def build_and_run(self, **kwargs) -> dict:
-        """先构造 payload，再立即执行查询。"""
+    def build_and_run(
+        self,
+        *,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+        **kwargs,
+    ) -> dict:
+        """先构造 payload，再立即执行查询。
+
+        intent_code/selection_source/match_record_id 说明见 run()，此处同样以
+        请求头形式透传给 cli_query，不进入构造出的 payload。
+        """
         build_result = self.build(**kwargs)
-        query_result = self.client.cli_query(build_result["payload"])
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        query_result = self.client.cli_query(build_result["payload"], extra_headers=extra_headers)
         return {
             **build_result,
             "result": query_result,
@@ -344,6 +422,7 @@ class QueryManager:
         validate_fields: bool = False,
         skills_dir: str | None = None,
         cwd: Path | None = None,
+        global_currency: str | None = None,
     ) -> dict:
         """基于简化参数构造标准 simple query payload。
 
@@ -376,6 +455,15 @@ class QueryManager:
         # 此处对缺失/空 alias 的项统一以 field 末段兜底补齐，覆盖 CLI 与 MCP 两条 simple 手工路线。
         dimensions = self._fill_simple_alias(dimensions)
         metrics = self._fill_simple_alias(metrics)
+        # 过滤操作符符号形态归一（= → eq、>= → gte …）。
+        # 此前归一只作用于 --where 简写（走 _parse_where_condition），
+        # 而 query simple 的 filters 直接来自 --json/--payload，从不经过归一，
+        # 于是手写 payload 用 "=" 会被服务端硬拒：「无效的过滤操作符: =」。
+        # 线上 3987 条取数反馈里有 189 条卡在这里，全部来自绕过执行器直连的场景。
+        # 复用既有的 _validate_simple_filter_operators：它就地归一且支持嵌套
+        # conditions 与 AND/OR 逻辑节点，此前只在 validate_fields=True 时才可达。
+        if filters:
+            self._validate_simple_filter_operators(filters)
 
         payload: dict[str, object] = {
             "tableId": table_id,
@@ -397,6 +485,11 @@ class QueryManager:
         payload["limit"] = 20 if limit is None else limit
         payload["offset"] = 0 if offset is None else offset
 
+        # 全局币种：归一+白名单校验后放入 payload 顶层，透传给后端 simple 接口
+        normalized_currency = _normalize_global_currency(global_currency)
+        if normalized_currency:
+            payload["globalCurrency"] = normalized_currency
+
         if dry_run:
             payload["dryRun"] = True
 
@@ -410,10 +503,22 @@ class QueryManager:
             "output": str(Path(output_path).expanduser()) if output_path else None,
         }
 
-    def build_simple_and_run(self, **kwargs) -> dict:
-        """先构造简化 payload，再立即执行查询。"""
+    def build_simple_and_run(
+        self,
+        *,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+        **kwargs,
+    ) -> dict:
+        """先构造简化 payload，再立即执行查询。
+
+        intent_code/selection_source/match_record_id 说明见 run()，此处同样以
+        请求头形式透传给 cli_simple_query，不进入构造出的 payload。
+        """
         build_result = self.build_simple(**kwargs)
-        query_result = self.client.cli_simple_query(build_result["payload"])
+        extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
+        query_result = self.client.cli_simple_query(build_result["payload"], extra_headers=extra_headers)
         return {
             **build_result,
             "result": query_result,
@@ -466,22 +571,30 @@ class QueryManager:
         注意：select_columns（查询组件）中的字段即使不在普通 fields 列表中，
         也是合法的过滤条件，过滤校验时会跳过这些字段的 metadata 强制匹配。
         """
-        if not fields and select_columns:
-            self._validate_simple_filter_operators(filters)
-            return
-
-        if not fields:
-            raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
-
-        # 构建查询组件字段名集合（用于 filter 白名单跳过）
+        # 构建查询组件字段名集合。提到最前面：dimensions 的校验也要用它区分
+        # 「这个字段根本不存在」与「这个字段只能筛选、不能分组」两种情况。
         select_column_names: set[str] = set()
         for sc in (select_columns or []):
             col = str(sc.get("column_name") or "").strip().lower()
             if col:
                 select_column_names.add(col)
 
+        if not fields and select_columns:
+            # 没有普通字段、只有查询组件时，任何分组维度都不可能成立，
+            # 必须在这里就说清楚，不能放行到服务端换一句笼统的「字段不存在」
+            for item in dimensions:
+                field_ref = self._extract_simple_field_ref(item, context="dimension")
+                self._reject_filter_only_dimension(field_ref, select_column_names, fields)
+            self._validate_simple_filter_operators(filters)
+            return
+
+        if not fields:
+            raise InvalidPayloadError("当前数据集 metadata 未返回字段，无法执行字段歧义门禁")
+
         for item in dimensions:
             field_ref = self._extract_simple_field_ref(item, context="dimension")
+            if not self._has_dimension_candidate(fields, field_ref):
+                self._reject_filter_only_dimension(field_ref, select_column_names, fields)
             self._resolve_simple_field(fields, field_ref, field_type="dimension", context="dimension")
 
         for item in metrics:
@@ -517,6 +630,109 @@ class QueryManager:
             if not field_ref:
                 raise InvalidPayloadError("dataComparison 缺少 field")
             self._resolve_simple_field(fields, str(field_ref), field_type=None, context="dataComparison")
+
+    @staticmethod
+    def _component_owner_datasets(datasets: list[dict], needle: str) -> list[str]:
+        """找出把 needle 作为查询组件下发出去的已授权数据集中文名。
+
+        用于把「未找到目标数据集」这句话，从「你写错了 alias」纠正为
+        「这是组件表且未随引用它的数据集一并授权」——两者的处置方式完全不同。
+        """
+        target = str(needle or "").strip()
+        if not target:
+            return []
+        owners: list[str] = []
+        for dataset in datasets:
+            for column in dataset.get("select_columns") or []:
+                if str(column.get("component_dataset_alias") or "").strip() == target:
+                    name = str(
+                        dataset.get("description")
+                        or dataset.get("dataset_name")
+                        or dataset.get("dataset_alias")
+                        or ""
+                    ).strip()
+                    if name and name not in owners:
+                        owners.append(name)
+                    break
+        return owners
+
+    @staticmethod
+    def _is_groupable(field: dict) -> bool:
+        """字段是否可作为分组维度。
+
+        groupable 由服务端按 dm_table_columns.groupby 下发；老版本 metadata 没有
+        这个键，此时一律按可分组处理，保证升级前后行为不回退。
+        """
+        flag = field.get("groupable")
+        if flag is None:
+            return True
+        return str(flag).strip() not in ("0", "false", "False", "")
+
+    def _has_dimension_candidate(self, fields: list[dict], identifier: str) -> bool:
+        """该标识在当前数据集里是否存在可作为分组维度的字段。
+
+        只做存在性判断、不抛异常：用于在报「字段不存在」之前，先分辨出
+        「其实存在，但只能筛选不能分组」这一类，给出针对性的错误信息。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return False
+        for item in fields:
+            if str(item.get("field_type") or "").strip().lower() != "dimension":
+                continue
+            if not self._is_groupable(item):
+                continue
+            for key in ("global_alias", "field_name", "verbose_name"):
+                if str(item.get(key) or "").strip().lower() == normalized:
+                    return True
+        return False
+
+    def _matches_filter_only_field(self, fields: list[dict], identifier: str) -> bool:
+        """该标识是否命中了一个「存在但不可分组」的字段。
+
+        与 select_columns 互补：有些字段就在 fields 里，只是服务端把 groupby 关了
+        （线上反馈原文：「table_id=13 的 platform_name 仍仅可筛选不可分组」）。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return False
+        for item in fields:
+            if self._is_groupable(item):
+                continue
+            for key in ("global_alias", "field_name", "verbose_name"):
+                if str(item.get(key) or "").strip().lower() == normalized:
+                    return True
+        return False
+
+    def _reject_filter_only_dimension(
+        self,
+        identifier: str,
+        select_column_names: set[str],
+        fields: list[dict] | None = None,
+    ) -> None:
+        """字段只存在于查询组件（select_columns）时，明确告知它不能当分组维度。
+
+        为什么要单独区分：select_columns 里的字段（platform_name / asin / team_name …）
+        在 metadata 里可见，也确实是合法的**筛选**字段，但不在 fields 里，
+        因此不能进 dimensions。此前这种情况要么被放行到服务端换回一句
+        「dimension 字段不存在于当前数据集 metadata 中: platform_name」，
+        要么被客户端报成同样笼统的「字段不存在」——两种措辞都在暗示「换个字段名」，
+        而真正的解法是「把它从 dimensions 挪到 filters」。
+        线上 3987 条取数反馈里 497 条属字段类失败，其中 275 条正是这一形态。
+        """
+        normalized = self._normalize_simple_field_identifier(identifier)
+        if not normalized:
+            return
+        is_component = normalized in select_column_names
+        if not is_component and not self._matches_filter_only_field(fields or [], identifier):
+            return
+        source = "该数据集的查询组件字段" if is_component else "该数据集中不可分组的字段"
+        raise InvalidPayloadError(
+            f"dimension 字段 {identifier} 是{source}，只能用于 filters 筛选，"
+            f"不能作为分组维度\n"
+            f"  处理方式: 把它从 dimensions 移到 filters；"
+            f"若确实需要按它分组，请改用本身含该字段可分组的数据集"
+        )
 
     @staticmethod
     def _extract_simple_field_ref(item: dict | str, *, context: str) -> str:
@@ -1572,10 +1788,12 @@ class QueryManager:
         cwd: Path | None = None,
         source: str = "remote",
         fallback_local: bool = True,
+        report_source: str = "cli_intent",
     ) -> dict:
-        """按自然语言需求匹配 dataset catalog intents。
+        """按自然语言需求匹配 dataset catalog intents，并上报匹配事件。
 
-        返回匹配候选、是否需要用户确认，以及命中 intent 中携带的业务约束。
+        上报是 fire-and-forget：闭环遥测的价值在服务端聚合，客户端绝不因
+        上报失败影响匹配结果（match_record_id 置 None 即可）。
         """
         catalog = self.catalog(
             skills_dir=skills_dir,
@@ -1583,7 +1801,31 @@ class QueryManager:
             source=source,
             fallback_local=fallback_local,
         )
-        return match_catalog_intents(catalog, query)
+        result = match_catalog_intents(catalog, query)
+        result["match_record_id"] = self._report_intent_match(result, query, report_source)
+        return result
+
+    def _report_intent_match(self, result: dict, query: str, report_source: str) -> int | None:
+        """构造并发送匹配事件；任何异常静默吞掉返回 None（不阻塞主流程，不打印堆栈）。"""
+        selected = result.get("selected") or (result.get("candidates") or [{}])[0]
+        payload = {
+            "matched": bool(result.get("matched")),
+            "intent_code": selected.get("intent_code") or None,
+            "score": int(selected.get("score") or 0),
+            "ask_required": bool(result.get("ask_user_question_required")),
+            "fallback_reason": result.get("fallback_reason") or "",
+            "match_source": report_source,
+            "query_text": query[:500],
+            "query_keywords": result.get("fallback_query_keywords")
+                or [term for term in selected.get("matched_terms") or []],
+            "catalog_version": str(result.get("catalog_version") or ""),
+        }
+        try:
+            response = self.client.report_intent_match(payload)
+            record_id = (response.get("data") or {}).get("match_record_id")
+            return int(record_id) if record_id else None
+        except Exception:
+            return None
 
     def _load_dataset_catalog(self, *, skills_dir: str | None, cwd: Path | None) -> dict:
         """从已安装 Skill 或内置模板中读取 dataset_catalog.json。"""
@@ -1688,7 +1930,10 @@ class QueryManager:
             if not file_path.exists():
                 raise InvalidPayloadError(f"where 文件不存在: {file_path}")
             try:
-                payload = json.loads(file_path.read_text(encoding="utf-8"))
+                # utf-8-sig：PowerShell 的 Out-File / > 默认写 UTF-8 with BOM，
+                # 用 utf-8 读会在首字符残留 ﻿ 导致 json.loads 直接失败
+                # （线上反馈原文：「query build --where-file 无法读取 PowerShell UTF8 输出的 JSON」）
+                payload = json.loads(file_path.read_text(encoding="utf-8-sig"))
             except Exception as exc:
                 raise InvalidPayloadError(f"where 文件不是合法 JSON: {file_path}") from exc
         else:

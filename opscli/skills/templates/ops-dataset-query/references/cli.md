@@ -24,7 +24,7 @@ description: 使用本地缓存的数据集与字段索引辅助检索和查询�
 
 > **认证按动作触发**：本地只读检索不要求登录；涉及远端执行或升级时，必须先检测是否已授权登录。
 
-- 本地只读动作可直接执行：`python scripts/search.py`、`python scripts/route_intent.py`、`opscli query metadata`
+- 本地只读动作可直接执行：`python scripts/search.py`、`python scripts/route_intent.py`、`opscli query metadata`、`opscli query intent`、`opscli query catalog`
 - 远端动作前先执行 `opscli auth token status`：`opscli query simple --run`、`opscli query chart --run`、`opscli skills upgrade ops-dataset-query`
 - 若状态中出现“未登录 / 未授权 / Token 过期 / expired / 401”，必须立即调用 `ops-auth` Skill
 - 若是“未登录 / 未授权 / 401”，在 `ops-auth` 中执行 `opscli auth login`
@@ -68,7 +68,7 @@ opscli auth token status
 
 标准顺序：
 
-0. 若用户未显式指定 `dataset_alias/table_id`，必须先执行 `python scripts/route_intent.py "<用户自然语言需求>"` 做本地意图路由，未命中再用 `python scripts/search.py` 关键词搜索
+0. 若用户未显式指定 `dataset_alias/table_id`，必须先执行 `opscli query intent -q "<用户自然语言需求>"` 走远端实时意图目录；不可用/报错/未命中再执行 `python scripts/route_intent.py` 本地意图路由，仍未命中再用 `python scripts/search.py` 关键词搜索
 1. 已确认目标数据集后，确认目标 `dataset_alias` 是否存在于 `data/datasets.csv`，或用 `opscli query metadata`（无参数）查看数据集列表
 2. 再确认目标字段是否存在于 `data/dataset_fields.csv`
 3. 如需获取**最新**字段信息（含公式字段、聚合方式、表达式结构），执行 `opscli query metadata --dataset <dataset_alias> --pretty`（远端优先，自动回退本地）
@@ -96,7 +96,8 @@ python scripts/search.py "广告" -n 20
 推荐检查方式：
 
 ```bash
-# 0. 用户未指定数据集时，先做本地意图路由
+# 0. 用户未指定数据集时，先走远端意图目录，不可用/未命中再做本地意图路由
+opscli query intent -q "查看库存周转趋势" --pretty
 python scripts/route_intent.py "查看库存周转趋势"
 
 # 1. 意图路由确认数据集后，再确认数据集
@@ -224,9 +225,44 @@ opscli query metadata --table-id 123 --pretty
 
 ---
 
+### `opscli query intent` / `opscli query catalog`（远端实时意图目录）
+
+> **推荐入口**：用户未指定 dataset/table_id 时，**先**用远端实时意图目录路由选表（不依赖本地快照）；不可用、报错或 `fallback_required=true` 时再降到本地 `route_intent.py`。
+
+`opscli query catalog` 读取数据集业务语义索引（dataset catalog），返回完整 catalog JSON（`version`、`intent_count`、`intents` 数组、`query_strategy`）：
+
+```bash
+opscli query catalog [--source remote|local] [--fallback-local/--no-fallback-local] [--skills-dir <目录>] [--pretty]
+```
+
+- `--source`：`remote`（默认，远端优先）或 `local`（仅本地缓存）。
+- `--fallback-local` / `--no-fallback-local`：`--source remote` 时远端失败是否回退本地缓存，默认回退。
+- `--skills-dir`：自定义 Skills 目录，用于读取本地缓存 catalog。
+
+`opscli query intent` 将自然语言需求匹配到 catalog 中的 intents，返回选表候选与业务约束，并向服务端上报一次匹配事件（fire-and-forget，上报失败不影响匹配结果）：
+
+```bash
+opscli query intent -q "<用户原文>" [--source remote|local] [--fallback-local/--no-fallback-local] [--skills-dir <目录>] [--pretty]
+```
+
+返回重点字段：
+
+| 字段 | 说明 |
+|------|------|
+| `matched` | 是否命中任一 intent；`false` 时无 `selected`，转本地 `route_intent.py` |
+| `candidates[]` | 候选列表，每项含 `intent_code`、`table_id`、`dataset_alias`、`score`、`intent_constraints`（`hard_constraints`/`avoid_when`/`clarify_when`/`recommended_dimensions`/`recommended_metrics`/`default_filters`/`comparison_strategy`）、`routing_status`（`direct_intent` / `embedded_intent`）、`embedded_from_table_id`（`embedded_intent` 时指向原始意图行，实际查询仍落在 `table_id` 指向的父表） |
+| `ask_user_question_required` | `true` 时候选不唯一（多个候选分数接近），必须用 `AskUserQuestion` 让用户从 `candidates` 里选，不得默认取第一个 |
+| `fallback_required` / `fallback_reason` | `true` 表示 catalog 为空或无匹配意图，转本地 `route_intent.py` |
+| `selected` | `matched=true` 且 `ask_user_question_required=false` 时的唯一候选，可直接采用 |
+| `match_record_id` | 本次匹配的服务端归因记录 ID（上报失败为 `null`）；命中并执行查询时须透传 |
+
+**意图归因参数**：`opscli query simple --run` 与 `opscli query run` 均支持三个可选参数，向服务端透传本次选表来源：`--intent-code <编码>`（取自候选的 `intent_code`）、`--selection-source <来源>`（`planner`/`intent_route`/`local_fallback`/`user_specified` 四选一）、`--match-record-id <ID>`（取自 `query intent` 返回的 `match_record_id`）。三者均可选，不传不影响执行；经 `query intent` 命中候选后应一并透传，便于闭环统计。
+
+**约束提示处置**：候选里的 `intent_constraints`（`hard_constraints` / `avoid_when` / `clarify_when`）是尚未经人工复核的业务约束提示，**必须先向用户复述并确认，再决定是否套用**，不得静默应用，也不得忽略。
+
 ### `python scripts/route_intent.py`（本地意图路由）
 
-> **推荐入口**：用户未指定 dataset/table_id 时，先用该脚本做本地意图匹配（不依赖网络）。
+> **兜底入口**：`opscli query intent` 不可用、报错或未命中时，用该脚本做本地意图匹配（不依赖网络）。
 
 ```bash
 python scripts/route_intent.py "<用户自然语言问题>" [--top-n 3] [--data-dir data/]
@@ -241,13 +277,17 @@ python scripts/route_intent.py "<用户自然语言问题>" [--top-n 3] [--data-
 | `requires_clarification` | 为 `true` 时必须先用 AskUserQuestion 澄清，禁止直接执行查询 |
 | `fallback_needed` | 为 `true` 时回退本地关键词搜索（search.py） |
 
+命中后执行查询时透传 `--selection-source local_fallback`。
+
 ---
 
 ## 查询命令索引
 
 | 命令 | 类型 | 说明 | 详细文档 |
 |------|------|------|---------|
-| `opscli query simple` | 简易版 | 基于简化参数构造并执行查询（推荐优先使用） | `references/cli-simple-guide.md` |
+| `opscli query simple` | 简易版 | 基于简化参数构造并执行查询（推荐优先使用）；支持 `--global-currency` 与意图归因参数 | `references/cli-simple-guide.md` |
+| `opscli query intent` | 意图路由 | 自然语言 → 远端实时意图目录选表候选（用户未指定数据集时的第一步） | 本文「辅助命令参考」 |
+| `opscli query catalog` | 意图目录 | 读取完整数据集业务语义索引 | 本文「辅助命令参考」 |
 | `opscli query chart` | 图表 | 通过图表 ID 获取查询结构并执行，含多 query/小计总计 | `references/cli-simple-guide.md` |
 
 ---
@@ -339,13 +379,20 @@ python3 -c "import json; print(json.load(open('/tmp/result.json'))['data']['resu
 
 ### 意图分析 → 数据集选择 → 构造 → 执行（推荐）
 
-> **【强制】用户未指定 dataset 时，先做本地意图路由，再做本地关键词搜索，禁止跳过直接猜测数据集。**
+> **【强制】用户未指定 dataset 时，先走远端意图目录 `opscli query intent`，不可用/未命中再做本地意图路由，最后本地关键词搜索，禁止跳过直接猜测数据集。**
 
 ```bash
 # 0. 先检查认证状态；如未登录则调用 ops-auth 完成登录
 opscli auth token status
 
-# 1. 本地意图路由（不依赖网络）
+# 1a. 远端实时意图目录（优先）
+opscli query intent -q "<用户自然语言问题>" --pretty
+# matched=true 且 ask_user_question_required=false → 取 selected.table_id / selected.dataset_alias
+# ask_user_question_required=true → AskUserQuestion 让用户在 candidates 里选
+# intent_constraints 先向用户复述确认再套用
+# 命令不可用 / 报错 / matched=false / fallback_required=true → 转 1b
+
+# 1b. 本地意图路由（不依赖网络，兜底）
 python scripts/route_intent.py "<用户自然语言问题>"
 # 命中 direct_intent     → 使用返回的 table_id / dataset_alias
 # 命中 embedded_intent   → 使用 execution_alias 执行，向用户说明口径映射
@@ -356,7 +403,10 @@ python scripts/search.py <field_name> --dataset <dataset_alias> -n 20
 # 或查看完整 metadata
 opscli query metadata --dataset <dataset_alias> --pretty
 
-# 3. 基于确认的 table_id 构造查询
+# 3. 基于确认的 table_id 构造查询，经 query intent 命中时透传归因参数；含币种意图时传 --global-currency
+opscli query simple --table-id <table_id> --payload /tmp/simple.json \
+  --intent-code <selected.intent_code> --selection-source intent_route --match-record-id <match_record_id> \
+  --run --pretty
 #    详见 references/cli-simple-guide.md 中的简化接口示例
 ```
 
@@ -384,7 +434,7 @@ python scripts/search.py "库存周转" -n 20
 
 | 场景 | 方式 |
 |------|------|
-| 用户给出自然语言需求且未指定数据集 | 先 route_intent.py，未命中再 search.py |
+| 用户给出自然语言需求且未指定数据集 | 先 opscli query intent，不可用/未命中再 route_intent.py，再 search.py |
 | 用户已明确指定数据集别名 | 跳过意图路由，直接进入字段检查 |
 | 只需确认字段是否存在 | 直接 python scripts/search.py |
 

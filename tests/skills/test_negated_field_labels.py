@@ -164,3 +164,62 @@ def test_negated_time_scope_still_masked():
 
     assert parsed.get("start") is not None
     assert "近30天" not in (parsed.get("scope_zh") or "")
+
+
+# ── 合成词把否定词从中间切中（误判出用户没说过的排除意图）──────────────────
+#
+# 上面的事故是「该屏蔽的没屏蔽」；这里是反向的、更危险的一类：「不该屏蔽的被屏蔽」。
+# 「分别用 A 和 B…」是多币种、多口径对比的标准问法，其中的「别用」曾命中否定词表，
+# 随后的 12 字窗口把平台名一并吞进否定区间，规划器于是产出
+# 「已按用户要求排除亚马逊SC、亚马逊VC」——用户从未要求排除任何平台，语义被反转。
+# 裸「非」同理会被「非常」「除非」从中间切中。
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # 「分别用」不是「别用」
+        "分别用人民币和美元查询亚马逊搜索词绩效近7天的流量销售额",
+        "分别用CNY和USD查询亚马逊SC的销售额",
+        # 「非常」不是「非」
+        "查询非常规渠道亚马逊SC近7天的销售额",
+        # 「除非」不是「非」
+        "除非亚马逊VC没有数据，否则查亚马逊VC",
+    ],
+)
+def test_compound_word_is_not_a_negation(query: str):
+    """合成词内部的否定字不构成否定语境，不得凭空造出排除意图。"""
+    assert time_scope.negated_spans(query) == [], (
+        f"合成词被误判为否定，会把随后的平台/口径当成排除项：{query!r}"
+    )
+
+
+@pytest.mark.parametrize(
+    "query,expected_fragment",
+    [
+        ("发货数据集近7天的销售额，不要亚马逊VC", "不要亚马逊VC"),
+        ("仅取platform_name=Amazon，排除 Amazon VC", "排除 Amazon VC"),
+        # 真「非」否定必须继续生效，加左边界断言不能把它一起关掉
+        ("查非亚马逊VC的销售额", "非亚马逊VC的销售额"),
+        ("用户已明确拒绝默认近30天", "拒绝默认近30天"),
+    ],
+)
+def test_real_negation_still_detected(query: str, expected_fragment: str):
+    """加左边界断言后，真正的否定语境必须原样保留。"""
+    spans = time_scope.negated_spans(query)
+    assert spans, f"真否定被漏判：{query!r}"
+    assert any(query[start:end] == expected_fragment for start, end in spans), (
+        f"否定区间与预期不符：{[query[s:e] for s, e in spans]}"
+    )
+
+
+def test_multi_currency_request_keeps_platform_scope():
+    """端到端：多币种问法不得把数据集名里的平台词读成排除项。"""
+    scope = query_plan._platform_scope(
+        {"slots": {"platform": ["amazon"]}},
+        query_plan._load_json_object(query_plan.RULES_PATH, "invalid_rules_file"),
+        None,
+        query="分别用人民币和美元查询亚马逊搜索词绩效近7天的流量销售额",
+    )
+    assert scope["excluded_slots"] == []
+    assert scope["semantic_members"] == ["amazon_sc", "amazon_vc"]
