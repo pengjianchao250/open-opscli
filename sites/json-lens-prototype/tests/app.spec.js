@@ -49,7 +49,7 @@ test("商品查询发送正确的 Authorization 与请求体", async ({ page }) 
     site: "US",
     params: {
       asin: "B0CQM9WB7R",
-      history: false,
+      history: true,
       stats: 30,
     },
     export_format: "json",

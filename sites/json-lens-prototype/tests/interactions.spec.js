@@ -56,14 +56,31 @@ test("Product Finder 会转换并合并复杂筛选参数", async ({ page }) => 
 
   await expect(page.locator(".status-line")).toContainText("请求成功");
   expect(requestBody.params).toEqual({
-    perPage: "500",
     selection: {
       brand: ["AUKEY", "Anker"],
       rootCategory: [172282, 1055398],
       hasReviews: true,
+      perPage: 500,
+      page: 0,
       variationCount: { gte: 2 },
     },
   });
+});
+
+test("Keepa 场景会展示 MCP 对应的默认参数", async ({ page }) => {
+  await page.goto("/?variant=a");
+
+  await page.getByLabel("查询场景").selectOption("product");
+  await expect(page.getByLabel("包含价格历史")).toBeChecked();
+  await expect(page.getByLabel("统计区间（天）")).toHaveValue("30");
+
+  await page.getByLabel("查询场景").selectOption("product-finder");
+  await page.locator("details.advanced-options summary").click();
+  await expect(page.getByLabel("返回数量")).toHaveValue("50");
+  await expect(page.getByLabel("页码")).toHaveValue("0");
+
+  await page.getByLabel("查询场景").selectOption("seller");
+  await expect(page.getByLabel("读取店铺 ASIN")).not.toBeChecked();
 });
 
 test("筛选校验失败会保留在页面且不发送请求", async ({ page }) => {

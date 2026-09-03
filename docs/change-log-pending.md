@@ -7059,3 +7059,12 @@ tests/skills/test_dataset_query_flow.py`
 **影响范围**：上述 MCP 服务在 OSS 上传失败后的返回合同；上传成功时响应结构不变，CLI 本地导出和服务端文件生成逻辑不变。
 **回滚方式**：回退 `opscli/mcp/tools/export_fallback.py`、各 MCP 工具接入、对应测试及本条记录。
 ---
+
+## 2026-09-03 JSON Lens - 对齐 Keepa MCP 场景默认参数
+
+**变更原因**：JSON Lens 的部分 Keepa 场景默认值与 MCP 实际参数合同不一致，且 Finder 的分页参数被提交在 `selection` 外层，后端不会按预期使用。
+**改动点**：商品详情默认开启 `history`；类目详情和卖家详情显式带入 `parents=false`、`storefront=false`；Product Finder 与 Seller Finder 默认使用 `page=0`、`perPage=50`，并把分页参数按 Keepa 合同放入 `selection`，同时保留至少一项业务筛选条件的页面校验；同步更新场景矩阵、请求合同和默认值展示测试。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 36 个 Playwright 场景、交互及视觉回归测试；`node --check app.js` 通过。
+**影响范围**：JSON Lens 原型的 Keepa 场景初始表单值和请求参数结构；结果展示、鉴权、API 地址、历史记录和下载逻辑不变。
+**回滚方式**：回退 `sites/json-lens-prototype/app.js`、相关 Playwright 测试及本条记录。
+---

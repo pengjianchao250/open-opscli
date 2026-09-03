@@ -97,7 +97,7 @@ const SCENARIOS = {
       { key: "stock", label: "包含库存", type: "checkbox" },
       { key: "history", label: "包含价格历史", type: "checkbox" },
     ],
-    defaults: { identifierType: "asin", history: false, stats: 30 },
+    defaults: { identifierType: "asin", history: true, stats: 30 },
   },
   "product-search": {
     title: "商品关键词搜索",
@@ -134,12 +134,12 @@ const SCENARIOS = {
     optional: [
       { key: "singleVariation", label: "仅单变体商品", type: "checkbox" },
       { key: "hasParentASIN", label: "必须有父 ASIN", type: "checkbox" },
-      { key: "perPage", label: "返回数量", type: "select", options: [["50", "50 条"], ["100", "100 条"], ["500", "500 条"], ["1000", "1000 条"]] },
-      { key: "page", label: "页码", type: "number", min: 0 },
+      { key: "perPage", label: "返回数量", type: "select", options: [["50", "50 条"], ["100", "100 条"], ["500", "500 条"], ["1000", "1000 条"]], selection: true, valueKind: "number" },
+      { key: "page", label: "页码", type: "number", min: 0, selection: true },
       { key: "stats", label: "返回统计数据", type: "checkbox" },
       { key: "customSelection", label: "自定义筛选 JSON", type: "json", placeholder: '{"variationCount": {"gte": 2}}' },
     ],
-    defaults: {},
+    defaults: { perPage: "50", page: 0 },
   },
   "category-search": {
     title: "类目搜索",
@@ -151,12 +151,14 @@ const SCENARIOS = {
     description: "按 category id 查询类目详情，最多 10 个。",
     required: [{ key: "categories", label: "类目 ID", type: "text", placeholder: "例如 172282" }],
     optional: [{ key: "parents", label: "包含父级类目", type: "checkbox" }],
+    defaults: { parents: false },
   },
   seller: {
     title: "卖家详情",
     description: "按 seller id 查询卖家指标，最多 100 个。",
     required: [{ key: "sellers", label: "Seller ID", type: "text", placeholder: "例如 A1ABCDEF123" }],
     optional: [{ key: "storefront", label: "读取店铺 ASIN", type: "checkbox" }],
+    defaults: { storefront: false },
   },
   "seller-finder": {
     title: "Seller Finder",
@@ -176,11 +178,11 @@ const SCENARIOS = {
     ],
     optional: [
       { key: "totalStorefrontAsins_gte", label: "店铺商品数不低于", type: "number", min: 0 },
-      { key: "perPage", label: "返回数量", type: "select", options: [["50", "50 条"], ["100", "100 条"], ["500", "500 条"], ["1000", "1000 条"]] },
-      { key: "page", label: "页码", type: "number", min: 0 },
+      { key: "perPage", label: "返回数量", type: "select", options: [["50", "50 条"], ["100", "100 条"], ["500", "500 条"], ["1000", "1000 条"]], selection: true, valueKind: "number" },
+      { key: "page", label: "页码", type: "number", min: 0, selection: true },
       { key: "customSelection", label: "自定义筛选 JSON", type: "json", placeholder: '{"ratingCount": {"gte": 100}}' },
     ],
-    defaults: {},
+    defaults: { perPage: "50", page: 0 },
   },
   "top-seller": {
     title: "Top Sellers",
@@ -587,9 +589,10 @@ class JsonLensApp extends HTMLElement {
       if (field.type === "number" && params[field.key] !== "" && params[field.key] !== undefined) params[field.key] = Number(params[field.key]);
     }
     if (definition.selectionFields) {
-      const selectionKeys = new Set(definition.selectionFields.map((field) => field.key));
+      const selectionFields = definition.selectionFields.concat((definition.optional || []).filter((field) => field.selection));
+      const selectionKeys = new Set(selectionFields.map((field) => field.key));
       const selection = {};
-      for (const field of definition.selectionFields) {
+      for (const field of selectionFields) {
         const value = params[field.key];
         if (field.key === "priceTypes" && value !== "" && value !== undefined) selection.priceTypes = [Number(value)];
         else if (field.type === "csv" && typeof value === "string" && value.trim()) {
@@ -605,12 +608,13 @@ class JsonLensApp extends HTMLElement {
             selection[field.key] = numbers;
           } else selection[field.key] = items;
         }
-        else if (field.type === "checkbox" ? value === true : value !== "" && value !== undefined) selection[field.key] = value;
+        else if (field.type === "checkbox" ? value === true : value !== "" && value !== undefined) selection[field.key] = field.valueKind === "number" ? Number(value) : value;
       }
       const customSelection = params.customSelection;
       delete params.customSelection;
+      const hasBusinessSelection = definition.selectionFields.some((field) => Object.hasOwn(selection, field.key));
       if (isRecord(customSelection)) Object.assign(selection, customSelection);
-      if (!Object.keys(selection).length || (this.state.scenario === "deals" && !selection.priceTypes?.length)) {
+      if ((!hasBusinessSelection && !Object.keys(customSelection || {}).length) || (this.state.scenario === "deals" && !selection.priceTypes?.length)) {
         this.state.status = "请至少填写一项筛选条件。";
         this.state.tone = "error";
         this.render();

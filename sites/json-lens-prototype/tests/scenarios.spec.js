@@ -9,7 +9,7 @@ const scenarioCases = [
     prepare: async (page) => {
       await page.getByLabel("ASIN 或商品编码必填").fill("B0TESTPRODUCT");
     },
-    params: { asin: "B0TESTPRODUCT", history: false, stats: 30 },
+    params: { asin: "B0TESTPRODUCT", history: true, stats: 30 },
   },
   {
     id: "product-search",
@@ -25,7 +25,7 @@ const scenarioCases = [
     prepare: async (page) => {
       await page.getByLabel("标题包含").fill("rechargeable lamp");
     },
-    params: { selection: { title: "rechargeable lamp" } },
+    params: { selection: { title: "rechargeable lamp", perPage: 50, page: 0 } },
   },
   {
     id: "category-search",
@@ -41,7 +41,7 @@ const scenarioCases = [
     prepare: async (page) => {
       await page.getByLabel("类目 ID必填").fill("172282");
     },
-    params: { categories: "172282" },
+    params: { categories: "172282", parents: false },
   },
   {
     id: "seller",
@@ -49,7 +49,7 @@ const scenarioCases = [
     prepare: async (page) => {
       await page.getByLabel("Seller ID必填").fill("A1TESTSELLER");
     },
-    params: { sellers: "A1TESTSELLER" },
+    params: { sellers: "A1TESTSELLER", storefront: false },
   },
   {
     id: "seller-finder",
@@ -57,7 +57,7 @@ const scenarioCases = [
     prepare: async (page) => {
       await page.getByLabel("搜索关键词").fill("AUKEY");
     },
-    params: { selection: { search: "AUKEY" } },
+    params: { selection: { search: "AUKEY", perPage: 50, page: 0 } },
   },
   {
     id: "top-seller",
