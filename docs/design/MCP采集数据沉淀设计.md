@@ -74,6 +74,11 @@ collection_records
 
 同一个任务重放时，在一个 MySQL 事务中保留 `collection_runs` ID，并替换其文件、Dataset 和记录，覆盖 Worker 在提交确认间隙重启的情况。
 
+`collection_runs.request_fingerprint` 保存规范化业务请求的 SHA-256 摘要，
+`cache_scope` 保存共享池或专属账号隔离范围。两者均不保存 ASIN、关键词等原始值，
+并通过 `ix_collection_runs_cache_lookup` 支撑精确的新鲜结果查询；
+`request_params._cache` 继续保留结果重建所需的版本和低敏摘要。
+
 ## 6. 环境和历史边界
 
 `data_environment` 只能来自 MCP 宿主进程配置：

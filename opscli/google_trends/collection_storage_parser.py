@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from opscli.google_trends.collection_storage_integration import (
+    google_trends_cache_identity_from_params,
+)
 from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     ParsedCollection,
@@ -14,7 +17,10 @@ from opscli.shared.collection_storage.parser_utils import (
     load_result_files,
     standard_artifacts,
 )
-from opscli.shared.collection_storage.result_cache import attach_cache_metadata
+from opscli.shared.collection_storage.result_cache import (
+    attach_cache_metadata,
+    safe_result_metadata,
+)
 
 # Parser 版本写入 collection_runs，解析合同变化时递增以便追踪口径。
 PARSER_VERSION = "google-trends-v1"
@@ -71,14 +77,23 @@ class GoogleTrendsCollectionParser:
                 f"不支持的 Google Trends 导出格式：{export_format}"
             )
         datasets = _result_datasets(files.result)
+        cache_key, cache_scope = submission.cache_key, submission.cache_scope
+        if not cache_key:
+            cache_key, cache_scope = google_trends_cache_identity_from_params(
+                files.params,
+                scenario=submission.scenario,
+                geo=submission.site,
+            )
         return ParsedCollection(
             submission=submission,
             parser_version=self.parser_version,
             request_params=attach_cache_metadata(
                 files.params,
-                cache_key=submission.cache_key,
-                cache_scope=submission.cache_scope,
-                result_metadata=submission.result_metadata,
+                cache_key=cache_key,
+                cache_scope=cache_scope,
+                result_metadata=(
+                    submission.result_metadata or safe_result_metadata(files.result)
+                ),
             ),
             artifacts=standard_artifacts(
                 files,

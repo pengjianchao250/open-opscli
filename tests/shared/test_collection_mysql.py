@@ -7,7 +7,7 @@ from opscli.shared.collection_storage.models import (
     ParsedCollection,
 )
 from opscli.shared.collection_storage.mysql_repository import MySqlCollectionRepository
-from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS
+from opscli.shared.collection_storage.schema import SCHEMA_STATEMENTS, SCHEMA_VERSION
 
 
 class FakeCursor:
@@ -88,6 +88,19 @@ def test_schema_includes_unified_mcp_call_events_table():
     assert "ix_mcp_call_events_service_endpoint_time" in telemetry_schema
 
 
+def test_schema_v2_includes_indexed_cache_identity_columns():
+    runs_schema = next(
+        statement
+        for statement in SCHEMA_STATEMENTS
+        if "CREATE TABLE IF NOT EXISTS collection_runs" in statement
+    )
+
+    assert SCHEMA_VERSION == 2
+    assert "request_fingerprint CHAR(64) NULL" in runs_schema
+    assert "cache_scope VARCHAR(128) NULL" in runs_schema
+    assert "ix_collection_runs_cache_lookup" in runs_schema
+
+
 def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
     result_path = tmp_path / "result.json"
     result_path.write_text("{}", encoding="utf-8")
@@ -102,6 +115,8 @@ def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
         result_path=result_path,
         started_at="2026-08-04T10:00:00+08:00",
         completed_at="2026-08-04T10:01:00+08:00",
+        cache_key="d" * 64,
+        cache_scope="shared",
     )
     document = ParsedCollection(
         submission=submission,
@@ -149,6 +164,13 @@ def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):
     assert connection.closed is True
     statements = [sql for sql, _ in connection.executions]
     assert any(sql.startswith("INSERT INTO collection_runs") for sql in statements)
+    run_sql, run_params = next(
+        (sql, params)
+        for sql, params in connection.executions
+        if sql.startswith("INSERT INTO collection_runs")
+    )
+    assert "request_fingerprint, cache_scope" in run_sql
+    assert run_params[8:10] == ("d" * 64, "shared")
     assert "DELETE FROM collection_artifacts WHERE run_id = %s" in statements
     assert "DELETE FROM collection_datasets WHERE run_id = %s" in statements
     assert "UPDATE collection_datasets SET row_count = %s WHERE id = %s" in statements
@@ -418,8 +440,9 @@ def test_mysql_repository_finds_exact_fresh_cached_result():
     assert result.datasets[0]["records"][0]["payload"] == {"asin": "B0TEST"}
     cache_sql, cache_params = connection.cursor_instance.calls[0]
     assert "persistence_completed_at >= TIMESTAMPADD" in cache_sql
-    assert "'$._cache.cache_key'" in cache_sql
-    assert "'$._cache.cache_scope'" in cache_sql
+    assert "request_fingerprint = %s" in cache_sql
+    assert "cache_scope = %s" in cache_sql
+    assert "JSON_EXTRACT" not in cache_sql
     assert cache_params == (
         "keepa",
         "production",
@@ -430,3 +453,47 @@ def test_mysql_repository_finds_exact_fresh_cached_result():
         "shared",
     )
     assert connection.closed is True
+
+
+def test_schema_upgrade_adds_and_backfills_cache_identity():
+    class MigrationCursor:
+        def __init__(self):
+            self.calls = []
+            self.columns = set()
+            self.indexes = set()
+            self.last_sql = ""
+            self.last_params = None
+
+        def execute(self, sql, params=None):
+            self.last_sql = " ".join(sql.split())
+            self.last_params = params
+            self.calls.append((self.last_sql, params))
+            if "ADD COLUMN request_fingerprint" in self.last_sql:
+                self.columns.add("request_fingerprint")
+            elif "ADD COLUMN cache_scope" in self.last_sql:
+                self.columns.add("cache_scope")
+            elif self.last_sql.startswith(
+                "CREATE INDEX ix_collection_runs_cache_lookup"
+            ):
+                self.indexes.add("ix_collection_runs_cache_lookup")
+
+        def fetchone(self):
+            if "FROM information_schema.COLUMNS" in self.last_sql:
+                return {} if self.last_params[1] in self.columns else None
+            if "FROM information_schema.STATISTICS" in self.last_sql:
+                return {} if self.last_params[1] in self.indexes else None
+            return None
+
+    cursor = MigrationCursor()
+
+    MySqlCollectionRepository._ensure_cache_identity_schema(cursor)
+    MySqlCollectionRepository._ensure_cache_identity_schema(cursor)
+
+    sql = [statement for statement, _params in cursor.calls]
+    assert sum("ADD COLUMN request_fingerprint" in item for item in sql) == 1
+    assert sum("ADD COLUMN cache_scope" in item for item in sql) == 1
+    assert sum(item.startswith("CREATE INDEX") for item in sql) == 1
+    assert any(
+        "JSON_EXTRACT(request_params, '$._cache.cache_key')" in item
+        for item in sql
+    )

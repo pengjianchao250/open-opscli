@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from opscli.keepa.collection_storage_integration import (
+    keepa_cache_identity_from_params,
+)
 from opscli.keepa.services.api_manager import extract_rows
 from opscli.shared.collection_storage.models import (
     CollectionSubmission,
@@ -17,7 +20,10 @@ from opscli.shared.collection_storage.parser_utils import (
     standard_artifacts,
     xlsx_datasets,
 )
-from opscli.shared.collection_storage.result_cache import attach_cache_metadata
+from opscli.shared.collection_storage.result_cache import (
+    attach_cache_metadata,
+    safe_result_metadata,
+)
 
 # Parser 版本写入 collection_runs，解析合同变化时递增以便追踪口径。
 PARSER_VERSION = "keepa-v4"
@@ -51,14 +57,23 @@ class KeepaCollectionParser:
             )
         else:
             raise CollectionParseError(f"不支持的 Keepa 导出格式：{export_format}")
+        cache_key, cache_scope = submission.cache_key, submission.cache_scope
+        if not cache_key:
+            cache_key, cache_scope = keepa_cache_identity_from_params(
+                files.params,
+                scenario=submission.scenario,
+                site=submission.site,
+            )
         return ParsedCollection(
             submission=submission,
             parser_version=self.parser_version,
             request_params=attach_cache_metadata(
                 files.params,
-                cache_key=submission.cache_key,
-                cache_scope=submission.cache_scope,
-                result_metadata=submission.result_metadata,
+                cache_key=cache_key,
+                cache_scope=cache_scope,
+                result_metadata=(
+                    submission.result_metadata or safe_result_metadata(files.result)
+                ),
             ),
             artifacts=standard_artifacts(
                 files,

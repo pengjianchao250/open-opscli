@@ -1,7 +1,7 @@
-"""共享采集结果 MySQL v1 表结构。"""
+"""共享采集结果 MySQL 表结构。"""
 
-# v1 定义通用任务、文件、Dataset 和逐行记录表。
-SCHEMA_VERSION = 1
+# v2 将低敏请求指纹提升为显式索引列，避免缓存查询依赖 JSON 路径。
+SCHEMA_VERSION = 2
 
 # 建表语句按外键依赖顺序执行，并固定匹配 MySQL 8 的 utf8mb4 排序规则。
 SCHEMA_STATEMENTS = (
@@ -25,6 +25,8 @@ SCHEMA_STATEMENTS = (
         ingestion_mode VARCHAR(32) NOT NULL,
         collection_status VARCHAR(32) NOT NULL DEFAULT 'succeeded',
         request_params JSON NULL,
+        request_fingerprint CHAR(64) NULL,
+        cache_scope VARCHAR(128) NULL,
         parser_version VARCHAR(64) NOT NULL,
         source_row_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
         started_at DATETIME(6) NULL,
@@ -38,6 +40,10 @@ SCHEMA_STATEMENTS = (
         ),
         KEY ix_collection_runs_scenario_time (
             source_system, scenario, completed_at
+        ),
+        KEY ix_collection_runs_cache_lookup (
+            source_system, data_environment, scenario, site,
+            request_fingerprint, cache_scope, persistence_completed_at
         )
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
     """,

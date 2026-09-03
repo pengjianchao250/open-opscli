@@ -205,7 +205,7 @@ EnvironmentFile=/etc/opscli/mcp.env
 
 ## 5. MySQL schema 初始化
 
-当前 schema 版本为 `1`，包含：
+当前 schema 版本为 `2`，包含：
 
 ```text
 collection_schema_versions
@@ -229,9 +229,38 @@ FROM collection_schema_versions
 WHERE module_name = 'collector_storage';
 ```
 
-结果应为 `collector_storage / 1`。部署到新服务器不等于需要重新初始化数据库。
+结果应为 `collector_storage / 2`。部署到新服务器不等于需要重新初始化数据库。
 
-### 5.2 全新空库
+### 5.2 从 v1 升级到 v2
+
+v2 为 `collection_runs` 增加显式的 `request_fingerprint`、`cache_scope`
+和缓存查询索引。升级时先停止连接该共享数据库的两台 MCP 服务，只选择一台服务器
+临时切换迁移账号并设置：
+
+```ini
+OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=true
+```
+
+启动一次后，初始化逻辑会幂等增加字段、从已有 `request_params._cache` 回填索引值，
+并将版本更新为 `2`。完成后停止服务，恢复运行账号和
+`OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false`，再启动两台 MCP 服务。
+
+```sql
+SELECT module_name, schema_version
+FROM collection_schema_versions
+WHERE module_name = 'collector_storage';
+
+SHOW COLUMNS FROM collection_runs
+WHERE Field IN ('request_fingerprint', 'cache_scope');
+
+SHOW INDEX FROM collection_runs
+WHERE Key_name = 'ix_collection_runs_cache_lookup';
+```
+
+历史记录只有在 `request_params._cache` 已存在时才能自动回填；更早的任务没有稳定请求
+身份，保持空值，不应根据场景或 ASIN 猜测合并。
+
+### 5.3 全新空库
 
 仅全新空库使用迁移账号，并临时设置：
 
@@ -275,7 +304,8 @@ MySQL DDL 会自动提交。若只创建部分表，不要删除表或手工插�
 ```sql
 SELECT
     id, data_environment, source_system, source_job_id,
-    scenario, source_row_count, persistence_completed_at
+    scenario, request_fingerprint, cache_scope,
+    source_row_count, persistence_completed_at
 FROM collection_runs
 ORDER BY id DESC
 LIMIT 20;

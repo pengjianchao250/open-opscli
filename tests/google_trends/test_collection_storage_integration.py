@@ -5,8 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from opscli.google_trends.collection_storage_integration import (
+    GOOGLE_TRENDS_CACHE_SCOPE,
     GoogleTrendsCollectionReconciler,
     GoogleTrendsCollectionSubmitter,
+    build_google_trends_cache_identity,
 )
 from opscli.google_trends.domain.models import (
     GoogleTrendsScenarioRequest,
@@ -56,6 +58,8 @@ def test_google_trends_submitter_adds_mcp_environment(tmp_path: Path):
     assert submission.data_environment == "production"
     assert submission.ingestion_mode == "live"
     assert submission.result_path == Path(result.result_path).resolve()
+    assert submission.cache_key == build_google_trends_cache_identity(request)[1]
+    assert submission.cache_scope == GOOGLE_TRENDS_CACHE_SCOPE
 
 
 def test_google_trends_reconciler_returns_only_missing_successes(tmp_path: Path):
@@ -72,6 +76,25 @@ def test_google_trends_reconciler_returns_only_missing_successes(tmp_path: Path)
         root = output_dir / job_id
         root.mkdir(parents=True)
         result_path = root / "result.json"
+        params_path = root / "params.json"
+        params_path.write_text(
+            json.dumps(
+                {
+                    "request": {
+                        "scenario": "trends",
+                        "geo": "US",
+                        "params": {"q": "flashlight"},
+                        "export_format": "xls",
+                    },
+                    "normalized_params": {
+                        "q": "flashlight",
+                        "geo": "US",
+                        "data_type": "TIMESERIES",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
         result_path.write_text(
             json.dumps(
                 {
@@ -79,6 +102,8 @@ def test_google_trends_reconciler_returns_only_missing_successes(tmp_path: Path)
                     "scenario": "trends",
                     "geo": "US",
                     "result_path": str(result_path),
+                    "params_path": str(params_path),
+                    "row_count": 2,
                 }
             ),
             encoding="utf-8",
@@ -101,4 +126,7 @@ def test_google_trends_reconciler_returns_only_missing_successes(tmp_path: Path)
     assert submission.site == "US"
     assert submission.data_environment == "debug"
     assert submission.completed_at is not None
+    assert submission.cache_key
+    assert submission.cache_scope == GOOGLE_TRENDS_CACHE_SCOPE
+    assert submission.result_metadata["row_count"] == 2
     assert batch.next_cursor > 0
