@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# ops-apphub 模板基础镜像，包含 opscli、Python 3.11、Node.js 24、pnpm、uv 等运行环境。
+# ops-apphub 模板基础镜像，源码只在构建阶段临时挂载。
 
 ARG NODE_IMAGE=docker.io/library/node:24-bookworm-slim
 ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.12.0
@@ -27,7 +27,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     APP_DB_PATH=/data/app.db \
     PATH=/opt/venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Python 3.11 与编译工具用于构建 opscli，并支持模板应用安装缺少 wheel 的依赖。
+# 保留编译工具，支持模板应用安装缺少预编译 wheel 的依赖。
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -43,23 +43,24 @@ COPY --from=uv /uv /uvx /usr/local/bin/
 
 FROM system AS opscli-builder
 
-ENV OPSCLI_SKILL_PROFILE=internal
+ENV OPSCLI_SKILL_PROFILE=internal \
+    UV_CACHE_DIR=/root/.cache/uv
 
-WORKDIR /src
+WORKDIR /build
 
-# 使用锁文件构建当前提交，保证 Jenkins 产物与仓库版本一致。
-COPY pyproject.toml setup.py README.md MANIFEST.in uv.lock ./
-COPY opscli ./opscli
-RUN python3 -m venv "${VIRTUAL_ENV}" \
-    && uv sync --locked --no-editable \
+RUN python3 -m venv "${VIRTUAL_ENV}"
+
+# Jenkins 工作区源码只在本步骤挂载；SKIP_CYTHON 跳过线上二进制编译。
+RUN --mount=type=bind,source=.,target=/workspace,rw \
+    --mount=type=cache,id=opscli-uv-cache,target=/root/.cache/uv,sharing=locked \
+    cd /workspace \
+    && SKIP_CYTHON=1 uv pip install --python "${VIRTUAL_ENV}/bin/python" ".[dev]" \
     && opscli --version \
     && python -c "import opscli.app"
 
-# Cython 默认携带调试符号，剥离后显著减少内部基础镜像体积。
-RUN find "${VIRTUAL_ENV}" -type f -name '*.so' -exec strip --strip-unneeded {} +
-
 FROM system
 
+# 最终镜像只复制安装环境，不复制 Jenkins 工作区和源码目录。
 COPY --from=opscli-builder /opt/venv /opt/venv
 
 # pnpm 与模板 packageManager 保持一致，运行目录统一交给非 root 用户。
@@ -74,7 +75,9 @@ RUN mkdir -p "${COREPACK_HOME}" \
     && node --version \
     && pnpm --version \
     && uv --version \
-    && opscli --version
+    && opscli --version \
+    && test ! -e /workspace \
+    && test ! -e /src
 
 WORKDIR /app
 USER app
