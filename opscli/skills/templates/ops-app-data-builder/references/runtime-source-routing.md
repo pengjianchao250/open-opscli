@@ -1,13 +1,14 @@
 # 运行时数据源路由
 
-开发期验证和线上运行是两条不同路径。开发期可以使用对应 Skill 获取少量真实样本；线上站点只能使用项目中明确批准的后端运行时入口。
+开发期验证和线上运行是两条不同路径。开发期可以使用对应 Skill 获取少量真实样本；线上站点统一使用标准模板提供的 QueryGateway，不兼容旧数据层或自定义运行时适配器。
 
 ## 1. 总体数据流
 
 ```text
 浏览器
 → 当前站点 FastAPI /api
-→ client / service / repository
+→ Depends(get_query_gateway)
+→ QueryGateway / service / repository
 → 已批准的数据源运行时入口
 ```
 
@@ -24,24 +25,36 @@
 
 ### 2.2 运行期
 
-OPS 使用应用宿主注入的 `x-ops-token` 受信通道，默认模式为 `viewer-live`：
+OPS 使用标准模板的 `backend/core/auth.py` 和 `backend/clients/ops_query_client.py`。AppHub 线上由宿主注入 `X-Ops-Token`，默认模式为 `viewer-live`：
 
 ```text
 浏览器请求
 → 站点 FastAPI
-→ 项目实际提供的 OPS 应用运行时适配器
+→ Depends(get_query_gateway)
+→ ViewerQueryGateway
 → OPS data-metrics
 ```
 
-实现前必须在当前项目或正式模板中检查适配器的真实导入路径、构造参数、查询方法、错误类型和响应合同。规范文档将该能力称为 `OpsClient`，但不得仅根据名称生成未经验证的导入和方法调用。
+标准模板固定提供三种 Gateway：
+
+| 模式 | 触发条件 | Gateway | 用途 |
+| --- | --- | --- | --- |
+| viewer | `X-Ops-Token` 和宿主用户头 | `ViewerQueryGateway` | AppHub 线上正式运行 |
+| session | `X-Session-Id` 和可选 OPS JWT | `OpsQueryGateway` | 显式无状态开发或受控调用 |
+| local | 无上述 Header 且显式开启本地回退 | `LocalQueryGateway` | 仅本地开发 |
+
+业务 API 必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`，service 通过参数接收 Gateway。允许调用的模板合同为 `list_datasets`、`get_dataset_metadata`、`build_simple` 和 `build_simple_and_run`；不得绕过 Gateway 直接创建 `AuthClient`、`QueryManager` 或拼装 viewer 请求。
 
 约束：
 
-- token 只从批准的请求依赖读取，不从请求体接收。
-- 不使用 `AuthClient`、本地 opscli 登录态或个人 session 代替应用运行时通道。
+- token 和 session 只由 `backend/core/auth.py` 从批准的请求 Header 解析，不从请求体接收。
+- 线上业务只使用 `ViewerQueryGateway`，不使用 `AuthClient`、本地 opscli 登录态或个人 session 代替应用运行时通道。
+- `LocalQueryGateway` 只允许在本地开发且 `LOCAL_AUTH_FALLBACK_ENABLED=true` 时使用，生产必须关闭。
+- 每个正式 OPS 数据集必须加入 `app.yaml` 的 `opscli.datasets` 白名单。
+- 测试使用 FakeGateway 和 FastAPI dependency override，不构造真实 Gateway，不访问真实网络或本机凭证。
 - 不把完整 token 传给前端、日志、SQLite 或下游非 OPS 服务。
 - 默认不缓存或物化未按用户隔离的 viewer 结果。
-- 若适配器不存在或无法检查，生成 schema、Mock 和 data-spec，正式调用代码保持阻塞。
+- 缺少标准 QueryGateway 文件、类或方法时停止生成并提示重新执行标准模板初始化，不兼容旧适配器。
 
 ## 3. Keepa
 
@@ -96,7 +109,7 @@ Keepa 可以实时调用，也可以按业务新鲜度物化到 SQLite。物化�
 
 ### 4.2 第一阶段运行期
 
-当前正式 REST API 文档未声明 SellerSprite 端点，本轮也不修改 `opscli/app/sdk`。因此默认状态为 `blocked` 或 `mock-only`，不得生成伪造的正式调用代码。
+当前正式 REST API 文档未声明 SellerSprite 端点，标准模板也未提供 SellerSprite Gateway。因此默认状态为 `blocked` 或 `mock-only`，不得生成伪造的正式调用代码。
 
 禁止：
 
@@ -106,7 +119,7 @@ Keepa 可以实时调用，也可以按业务新鲜度物化到 SQLite。物化�
 - 固化 session、JWT 或个人账号。
 - 由前端直连 SellerSprite。
 
-如果当前项目已经存在经过批准且可检查的 SellerSprite 运行时适配器，可以复用其真实合同；否则保持阻塞并说明平台需要补齐的正式入口。
+不复用旧项目或私有 SellerSprite 适配器；保持阻塞并说明平台需要在标准模板或正式 REST API 中补齐运行时入口。
 
 ## 5. 混合来源
 

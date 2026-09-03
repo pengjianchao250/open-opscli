@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.1"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.1"}
+    assert frontmatter["metadata"]["version"] == "0.1.2"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.2"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -54,7 +54,7 @@ def test_ops_app_data_builder_has_narrow_project_scope():
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
-        "当前工作对象已通过 `opscli app create/init` 完成模板初始化",
+        "当前工作对象已通过 `opscli app create/init` 完成标准模板初始化",
         "只需要一次临时查询或导出",
         "只搭建静态页面、交互或样式",
         "只分析一次真实数据结果，不修改站点",
@@ -71,8 +71,8 @@ def test_ops_app_data_builder_has_narrow_project_scope():
         assert forbidden not in text
 
 
-def test_ops_app_data_builder_requires_initialized_project_identity():
-    """数据层生成前必须完成模板或已有项目初始化并校验 binding。"""
+def test_ops_app_data_builder_requires_standard_template_and_project_identity():
+    """数据层生成前必须完成标准模板初始化并校验 binding。"""
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
@@ -83,10 +83,21 @@ def test_ops_app_data_builder_requires_initialized_project_identity():
         "ops-app.config.appName",
         "binding 的 `slug`",
         "只有 binding 而没有模板代码",
-        "本 Skill 不自行拉取模板，也不生成替代脚手架",
+        "backend/clients/ops_query_client.py",
+        "backend/core/auth.py",
+        "backend/services/query_service.py",
+        "backend/api/v1/query.py",
+        "不兼容旧数据层结构",
+        "本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架",
         "$ops-app-build-spec",
     ):
         assert required in text
+
+    for forbidden in (
+        "符合 `ops-app-build-spec` 的已有项目",
+        "已有结构不同则复用现有命名",
+    ):
+        assert forbidden not in text
 
 
 def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
@@ -112,15 +123,22 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
 
     for required in (
         "viewer-live",
-        "x-ops-token",
-        "不得仅根据名称生成未经验证的导入和方法调用",
+        "X-Ops-Token",
+        "Depends(get_query_gateway)",
+        "ViewerQueryGateway",
+        "OpsQueryGateway",
+        "LocalQueryGateway",
+        "app.yaml",
+        "opscli.datasets",
+        "FakeGateway",
         "OPSCLI_API_BASE_URL",
         "OPSCLI_API_KEY",
         "/api/v1/keepa/scenarios",
         "/api/v1/keepa/run",
         "正式文档只声明 Keepa scenarios 和 run",
         "默认状态为 `blocked` 或 `mock-only`",
-        "不修改 `opscli/app/sdk`",
+        "不生成或引用 `opscli.app.sdk.OpsClient`",
+        "不兼容旧适配器",
         "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议",
     ):
         assert required in content
@@ -134,10 +152,12 @@ def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
 
     for required in (
         "docs/ops-app/data-spec.md",
-        "backend/app/clients/",
-        "backend/app/services/",
-        "backend/app/repositories/",
-        "backend/app/schemas/",
+        "backend/api/v1/",
+        "backend/clients/",
+        "backend/services/",
+        "backend/repositories/",
+        "backend/schemas/",
+        "migrations/",
         "frontend/src/api/",
         "frontend/src/types/",
         "网络请求在数据库事务外完成",
@@ -156,6 +176,8 @@ def test_ops_app_data_builder_contract_example_is_valid_json():
     assert example["product_key"] == "inventory_risk"
     assert example["source"] == "ops"
     assert example["execution_mode"] == "viewer-live"
+    assert example["runtime_gateway"] == "QueryGateway"
+    assert example["app_yaml_datasets"] == ["verified_dataset_alias"]
     assert example["site_api"].startswith("GET /api/")
     assert example["storage"] is None
 
@@ -171,7 +193,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.1"
+    assert templates[SKILL_NAME]["version"] == "v0.1.2"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

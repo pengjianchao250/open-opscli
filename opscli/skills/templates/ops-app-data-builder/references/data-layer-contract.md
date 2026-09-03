@@ -20,6 +20,8 @@
   "metrics": ["available_inventory", "turnover_days"],
   "filters": ["site", "snapshot_date"],
   "freshness": "request-time",
+  "runtime_gateway": "QueryGateway",
+  "app_yaml_datasets": ["verified_dataset_alias"],
   "site_api": "GET /api/inventory/risks",
   "storage": null,
   "limitations": []
@@ -51,6 +53,8 @@
 ### 3.2 查询与响应
 
 - 真实数据集或第三方场景。
+- 标准模板 `QueryGateway` 方法：`list_datasets`、`get_dataset_metadata`、`build_simple` 或 `build_simple_and_run`。
+- `app.yaml.opscli.datasets` 中与真实数据集一致的白名单项。
 - 请求参数、返回字段和嵌套结构。
 - 分页、截断、总量、超时和额度限制。
 - 自然键、幂等键和重复执行行为。
@@ -77,6 +81,8 @@
 - 上游失败、无权限、空数据和超时的 HTTP 状态与业务 code。
 
 路由只做协议转换。来源调用进入 client，业务组合进入 service，SQLite 进入 repository。
+
+OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway`。业务 service 通过参数接收 Gateway，不得自行解析 `X-Ops-Token`、`X-Session-Id`，也不得直接创建 `AuthClient`、`QueryManager` 或另一套 Viewer Client。
 
 ## 5. 二次加工合同
 
@@ -109,6 +115,8 @@
 至少覆盖：
 
 - client 请求合同和统一错误映射。
+- FastAPI dependency override 注入 FakeGateway，证明测试不访问真实 SDK、网络、本机登录态或用户数据库。
+- `app.yaml.opscli.datasets` 覆盖已验证 OPS 数据集。
 - service 加工、join、空值和部分失败。
 - repository 唯一约束、更新语义和迁移。
 - API 参数校验、权限、空数据、分页和截断。
@@ -124,13 +132,14 @@
 2. 数据源和验证证据
 3. 字段、粒度与业务口径
 4. 执行模式与身份边界
-5. 站点 API 与错误合同
-6. 二次加工规则
-7. SQLite 模型、迁移与清理
-8. 新鲜度、分页、额度与超时
-9. 环境变量与 Secret
-10. Mock 与测试
-11. 阻塞项和待接入能力
+5. QueryGateway 与 app.yaml 数据集白名单
+6. 站点 API 与错误合同
+7. 二次加工规则
+8. SQLite 模型、迁移与清理
+9. 新鲜度、分页、额度与超时
+10. 环境变量与 Secret
+11. Mock 与测试
+12. 阻塞项和待接入能力
 ```
 
 第一阶段只生成 Markdown 规范，不新增运行时 YAML。

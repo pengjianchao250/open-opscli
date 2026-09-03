@@ -11,14 +11,20 @@
     "references/runtime-source-routing.md"
   ],
   "required_skill_terms": [
-    "当前工作对象是通过 opscli app 创建或符合 `ops-app-build-spec` 的站点",
+    "当前工作对象已通过 `opscli app create/init` 完成标准模板初始化",
     "$ops-dataset-query",
     "$ops-query-wizard",
     "$ops-keepa",
     "$ops-seller-sprite",
     "viewer-live",
     "docs/ops-app/data-spec.md",
-    "不修改 `opscli/app/sdk`",
+    "backend/clients/ops_query_client.py",
+    "Depends(get_query_gateway)",
+    "ViewerQueryGateway",
+    "app.yaml",
+    "opscli.datasets",
+    "不生成或引用 `opscli.app.sdk.OpsClient`",
+    "不兼容旧适配器",
     "不让前端直连 OPS、opscli REST、Keepa 或 SellerSprite",
     "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议"
   ],
@@ -57,9 +63,11 @@
     }
   ],
   "success_criteria": [
-    "只在 opscli app 站点数据层构建或改造时使用",
+    "只在完成标准模板初始化的 opscli app 站点数据层构建时使用，不兼容旧数据层项目",
     "按数据源委托现有 Skill 验证真实合同，不猜测字段和场景",
-    "OPS 默认使用 viewer-live 且不写未隔离共享 SQLite",
+    "OPS 通过 Depends(get_query_gateway) 复用标准模板 QueryGateway，线上使用 ViewerQueryGateway",
+    "真实 OPS 数据集同步加入 app.yaml.opscli.datasets 白名单",
+    "测试使用 FakeGateway 和 dependency override，不访问真实 SDK、凭证或网络",
     "Keepa 只通过后端正式 opscli REST 和 Secret 调用",
     "SellerSprite 缺少正式运行时入口时只生成合同、Mock 和阻塞边界",
     "前端只调用当前站点 /api，跨来源加工进入 FastAPI service",

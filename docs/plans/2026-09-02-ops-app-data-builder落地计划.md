@@ -15,6 +15,9 @@
 6. 只生成 `docs/ops-app/data-spec.md`，暂不增加运行时 YAML。
 7. 不自动生成 OPS 无人值守同步任务。
 8. 删除并替换旧需求设计和旧落地计划。
+9. 2026-09-03 起只支持 `opscli app create/init` 拉取的标准模板，不兼容旧数据层项目。
+10. OPS 运行期统一复用模板 `QueryGateway`，不生成或引用 `opscli.app.sdk.OpsClient`。
+11. 真实 OPS 数据集必须进入 `app.yaml.opscli.datasets` 白名单，测试统一使用 FakeGateway 和 dependency override。
 
 ## 2. 职责分层
 
@@ -62,8 +65,10 @@ ops-app-data-builder
 ### OPS
 
 - 开发期使用 `ops-dataset-query` 或 `ops-query-wizard` 验证合同。
-- 运行期复用项目实际提供的 OPS 应用运行时适配器和 `x-ops-token` 通道。
-- 找不到可检查的适配器时只生成合同和 Mock，不猜测导入路径。
+- 运行期固定复用标准模板 `backend.core.auth.get_query_gateway` 和 `backend.clients.ops_query_client.QueryGateway`。
+- AppHub 线上由 `ViewerQueryGateway` 使用 `X-Ops-Token`；业务 API 通过 `Depends(get_query_gateway)` 注入 Gateway。
+- 缺少标准 QueryGateway 文件、类或方法时停止并提示重新执行模板初始化，不兼容旧适配器。
+- 真实数据集同步加入 `app.yaml.opscli.datasets`；测试使用 FakeGateway 和 dependency override。
 - 默认 `viewer-live`，不把未隔离 viewer 结果写入共享 SQLite。
 
 ### Keepa
@@ -76,7 +81,7 @@ ops-app-data-builder
 
 - 开发期使用 `ops-seller-sprite` 验证合同。
 - 第一阶段生成 schema、Mock、站点 API 合同、SQLite 设计和阻塞说明。
-- 没有经批准的项目运行时适配器时不生成线上调用。
+- 标准模板没有 SellerSprite Gateway，第一阶段不生成线上调用，也不复用旧项目私有适配器。
 
 ## 5. 验证顺序
 

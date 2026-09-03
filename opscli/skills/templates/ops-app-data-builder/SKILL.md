@@ -1,21 +1,21 @@
 ---
 name: ops-app-data-builder
-description: 用于 Codex 中为已经完成模板初始化或已有受支持结构的 opscli app 站点构建真实业务数据层；验证 OPS、Keepa 或 SellerSprite 数据合同，并生成或改造 FastAPI、前端 API、SQLite、测试和数据规范。未初始化空项目、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
+description: 用于 Codex 中为已经通过 opscli app create/init 拉取标准模板的站点构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未初始化项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.1
+  version: 0.1.2
 ---
 
 # OPS 应用数据层构建
 
-把自然语言页面需求转换为可审查、可测试、可部署的站点数据层。先验证真实数据合同，再按现有项目结构生成后端调用、业务加工、持久化、站点 API 和前端类型。
+把自然语言页面需求转换为可审查、可测试、可部署的站点数据层。先验证真实数据合同，再基于标准模板的 QueryGateway、FastAPI、SQLite 和前端结构生成业务调用、加工、持久化、站点 API 和类型。
 
-本 Skill 构建项目代码，不替代线上数据服务，不修改 `opscli/app/sdk`，也不让线上站点依赖 Skill 运行。
+本 Skill 构建项目代码，不替代线上数据服务，不重建模板已有的鉴权和 QueryGateway 基础设施，也不让线上站点依赖 Skill 运行。
 
 ## 触发边界
 
 使用本 Skill：
 
-- 当前工作对象已通过 `opscli app create/init` 完成模板初始化，或是已经绑定 AppHub 且符合 `ops-app-build-spec` 的已有项目。
+- 当前工作对象已通过 `opscli app create/init` 完成标准模板初始化。
 - 页面需要 OPS、Keepa、SellerSprite 或这些来源的组合数据。
 - 需求包含多个字段、跨来源组合、二次加工、数据新鲜度、SQLite 物化或站点专用 API。
 - 需要为现有页面补齐 FastAPI client/service/repository/schema/API、前端 API/types、迁移或测试。
@@ -28,7 +28,7 @@ metadata:
 - 只搭建静态页面、交互或样式：继续使用 `$ops-app-build-spec`。
 - 只分析一次真实数据结果，不修改站点：使用对应分析 Skill。
 - 创建、修改或分析当前 Dashboard 页面：使用 Dashboard 专用 Skill。
-- 当前后端不是 FastAPI，或数据库不是 SQLite：停止自动改造并按 `ops-app-build-spec` 提示联系 IT。
+- 当前项目缺少标准模板 QueryGateway、FastAPI 或 SQLite 结构：停止并提示重新执行标准初始化，不兼容旧数据层项目。
 
 不要为了触发本 Skill，把单次查询扩展成站点数据工程任务。
 
@@ -38,8 +38,9 @@ metadata:
 - 根目录 `.opscli/app.json` 和 `ops-app.config`，两者的 `app_id/slug` 与 `appId/appName` 必须一致。
 - 已确认的页面业务需求、筛选范围、刷新要求和使用者范围。
 - `docs/ops-app/project-spec.md`；存在时同时读取 assessment、migration-plan、development、deployment 和 data-spec。
+- 标准模板中的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py` 和 `backend/api/v1/query.py`。
+- `app.yaml` 中的 `opscli.datasets` 数据集白名单。
 - 现有前端页面及 API 封装、FastAPI 路由/service/schema、SQLite model/repository/migration 和测试。
-- 当前项目实际提供的 OPS 应用运行时适配器合同。
 
 缺少业务范围时只询问会改变数据合同、权限或存储方案的关键问题。缺少 FastAPI 后端时可以完成数据规范和前端 Mock 合同，但不得创建未经 `ops-app-build-spec` 允许的后端占位服务。
 
@@ -70,22 +71,24 @@ metadata:
 在写入 assessment、data-spec、前后端、SQLite、测试或部署文件前，先确认：
 
 1. 根目录存在 `.opscli/app.json`，项目已绑定 AppHub 应用和独立仓库。
-2. 项目存在模板拉取后的结构，或存在经 `ops-app-build-spec` 确认受支持的已有源码结构。
+2. 项目存在标准模板拉取后的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py`、`backend/api/v1/query.py` 和 `app.yaml`。
 3. `ops-app.config.appId` 等于 binding 的 `app_id`，`ops-app.config.appName` 等于 binding 的 `slug`。
 
-如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板，也不生成替代脚手架。
+如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码、缺少标准 QueryGateway 文件，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成或重新执行 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架。
 
 ### 1. 读取项目证据
 
-读取项目规范、前后端入口、API 调用、环境变量、数据库、迁移和测试，确认实际技术栈和现有数据边界。不得只凭目录名套用固定结构。
+读取项目规范、标准模板前后端入口、API 调用、环境变量、数据库、迁移和测试，确认 QueryGateway 基线完整且未被破坏。
 
 重点识别：
 
 - 浏览器是否直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - 是否有密钥进入 `VITE_*`、源码、静态产物或日志。
-- 后端是否已有可复用 client、service、repository 和错误信封。
+- `get_query_gateway` 是否仍按 `X-Ops-Token`、`X-Session-Id` 和本地开发回退选择 `ViewerQueryGateway`、`OpsQueryGateway`、`LocalQueryGateway`。
+- 业务路由是否通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway`，而不是自行解析凭证。
+- `app.yaml` 的 `opscli.datasets` 是否覆盖本次验证的数据集。
 - SQLite 是否为单写实例、是否有迁移、持久卷和清理策略。
-- 项目是否实际提供经过批准的 OPS 应用运行时适配器。
+- 生产配置是否关闭本机登录态回退，测试是否使用 FakeGateway 和 dependency override。
 
 将发现写入 `docs/ops-app/assessment.md`；保留其他工具或人员维护的内容。
 
@@ -134,31 +137,36 @@ metadata:
 
 ### 6. 生成或改造项目代码
 
-遵循项目现有结构，只创建有实际职责的文件。典型职责为：
+遵循标准模板结构，只创建有实际职责的文件：
 
 ```text
-backend/app/api/             FastAPI 路由和请求协议
-backend/app/clients/         已批准的 OPS/opscli API 调用封装
-backend/app/services/        跨来源编排和二次加工
-backend/app/repositories/    SQLite 访问
-backend/app/schemas/         Pydantic 请求与响应合同
-backend/app/models/          持久化模型
-backend/app/db/              连接和迁移
-backend/tests/               数据合同、接口和异常测试
+backend/api/v1/              FastAPI 路由和请求协议
+backend/clients/             模板 QueryGateway 与第三方 API Client
+backend/services/            跨来源编排和二次加工
+backend/repositories/        SQLite 访问；需要时创建
+backend/schemas/             Pydantic 请求与响应合同
+backend/models/              持久化模型
+migrations/                  Alembic 迁移
+tests/                       数据合同、接口和异常测试
 frontend/src/api/            当前站点 /api Client
 frontend/src/types/          与 Pydantic 对齐的前端类型
 ```
 
-简单项目可以合并空层；已有结构不同则复用现有命名，不为套模板做无关重构。
-
 后端路由只做协议转换、参数校验和错误映射；网络调用与业务加工进入 client/service；SQLite 访问进入 repository/db。跨来源组合必须在 service 完成，不得放到浏览器。
+
+OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`，service 通过参数接收 Gateway 并调用 `list_datasets`、`get_dataset_metadata`、`build_simple` 或 `build_simple_and_run`。不得在业务模块重新创建 `AuthClient`、`QueryManager`、`ViewerQueryGateway` 或第二套 Header 解析。
+
+每个真实 OPS 数据集必须同步加入 `app.yaml` 的 `opscli.datasets` 白名单。测试必须使用 FakeGateway 和 FastAPI dependency override，不访问真实网络、本机 opscli 登录态或用户数据库。
 
 ### 7. 验证
 
 从最小相关测试开始，再运行项目已有的类型检查、构建和后端测试。完成前确认：
 
 - 前端只调用当前站点 `/api`。
-- OPS 使用实际项目中经过批准的应用运行时身份适配器。
+- OPS 使用标准模板 `QueryGateway`，线上请求由 `ViewerQueryGateway` 携带 `X-Ops-Token`。
+- 业务路由通过 `Depends(get_query_gateway)` 注入 Gateway，未自行解析身份或创建 `AuthClient`。
+- `app.yaml.opscli.datasets` 已包含所有正式 OPS 数据集。
+- 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
 - Keepa API Key 只从后端 Secret 注入。
 - SellerSprite 未生成当前不存在的正式线上调用。
@@ -171,7 +179,9 @@ frontend/src/types/          与 Pydantic 对齐的前端类型
 
 ## 硬边界
 
-- 不修改 `opscli/app/sdk` 或新增 opscli REST 端点。
+- 不生成或引用 `opscli.app.sdk.OpsClient`，不新增 opscli REST 端点。
+- 不重写 `backend/clients/ops_query_client.py` 和 `backend/core/auth.py` 的鉴权基础设施。
+- 不在业务模块直接创建 `AuthClient`、`QueryManager` 或自行解析 `X-Ops-Token`、`X-Session-Id`。
 - 不让前端直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - 不在站点中执行 opscli CLI 子进程或临时连接 MCP 作为线上取数路径。
 - 不读取本机 opscli 登录态、Cookie、Keychain 或凭证文件。
@@ -185,8 +195,8 @@ frontend/src/types/          与 Pydantic 对齐的前端类型
 
 ## 阻塞规则
 
-- 实际项目没有可检查的 OPS 应用运行时适配器：记录合同和 Mock，阻止生成 OPS 正式调用代码，不根据文档名称猜导入路径或方法签名。
-- SellerSprite 没有项目既有且经批准的运行时适配器：只生成 schema、Mock、存储设计和站点 API 合同，状态标记为 `blocked`。
+- 项目缺少标准模板 QueryGateway 文件或签名不完整：停止数据层生成并提示重新执行标准模板初始化，不兼容旧适配器或旧数据层项目。
+- SellerSprite 第一阶段只生成 schema、Mock、存储设计和站点 API 合同，状态标记为 `blocked`，不复用旧项目私有适配器。
 - Keepa 需求需要正式文档未声明的任务状态或导出下载端点：不得猜测路径；改用已声明的同步能力或标记待平台补齐。
 - 依赖 Skill 或真实合同不可用：停止对应数据产品，不影响已验证数据产品继续交付。
 - 需要多写实例、跨服务共享数据库或高频持续写入：停止 SQLite 方案并提示联系 IT。
