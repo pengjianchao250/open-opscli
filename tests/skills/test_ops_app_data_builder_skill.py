@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.0"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.0"}
+    assert frontmatter["metadata"]["version"] == "0.1.1"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.1"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -54,7 +54,7 @@ def test_ops_app_data_builder_has_narrow_project_scope():
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
-        "当前工作对象是通过 opscli app 创建或符合 `ops-app-build-spec` 的站点",
+        "当前工作对象已通过 `opscli app create/init` 完成模板初始化",
         "只需要一次临时查询或导出",
         "只搭建静态页面、交互或样式",
         "只分析一次真实数据结果，不修改站点",
@@ -69,6 +69,24 @@ def test_ops_app_data_builder_has_narrow_project_scope():
         "dashboard-tools.v2",
     ):
         assert forbidden not in text
+
+
+def test_ops_app_data_builder_requires_initialized_project_identity():
+    """数据层生成前必须完成模板或已有项目初始化并校验 binding。"""
+    text = SKILL_MD.read_text(encoding="utf-8")
+
+    for required in (
+        "### 0. 模板初始化门禁",
+        ".opscli/app.json",
+        "ops-app.config.appId",
+        "binding 的 `app_id`",
+        "ops-app.config.appName",
+        "binding 的 `slug`",
+        "只有 binding 而没有模板代码",
+        "本 Skill 不自行拉取模板，也不生成替代脚手架",
+        "$ops-app-build-spec",
+    ):
+        assert required in text
 
 
 def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
@@ -153,7 +171,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.0"
+    assert templates[SKILL_NAME]["version"] == "v0.1.1"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

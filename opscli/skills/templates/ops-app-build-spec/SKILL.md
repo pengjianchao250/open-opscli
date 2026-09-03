@@ -1,6 +1,6 @@
 ---
 name: ops-app-build-spec
-description: 用于盘点未知 Web 项目、生成项目规范，并将受支持项目规范化为 Vite + React/Vue、FastAPI + SQLite 和 Docker Compose 部署结构；遇到不支持的技术栈时停止并提示联系 IT。
+description: 用于按模板先行流程创建全新 opscli app 站点，或盘点和规范化已有 Web 项目，并生成 Vite + React/Vue、FastAPI + SQLite 和 Docker Compose 项目规范；遇到不支持的技术栈时停止并提示联系 IT。
 ---
 
 # OPS 应用规范与部署初始化
@@ -24,13 +24,29 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 
 - 项目根目录。
 - 操作意图：`检查`、`初始化/迁移` 或 `发布检查`。用户未明确时，根据动词判断；仍有歧义才询问。
-- 应用名称。优先读取现有包名或仓库名；无法得到唯一 URL 安全名称时询问。
-- 应用 ID 仅在第一次发布时必需，初始化阶段允许为空。
+- 全新项目的站点显示名称。用户明确要求新建站点时可直接用于 `opscli app create`；无法确定时询问。
+- 已绑定项目的应用身份必须读取根目录 `.opscli/app.json`，不得从目录名、包名或用户描述猜测 `app_id` 和 `slug`。
 
-应用名称只允许小写字母、数字和连字符，且必须以字母或数字开头、结尾。
+binding 的 `slug` 和 `ops-app.config.appName` 只允许小写字母、数字和连字符，且必须以字母或数字开头、结尾。
 应用 ID 必须是非空 URL 安全单路径段，只允许字母、数字、连字符和下划线；禁止 `/`、`\\`、`.`、`..`、空白和 URL 编码路径分隔符。
 
+`ops-app.config.appName` 使用 binding 中的 `slug`，`ops-app.config.appId` 使用 binding 中的 `app_id`。
+
 ## 执行流程
+
+### 0. 新项目模板门禁
+
+在向项目根目录写入任何文件前，先只读判断项目状态：
+
+| 项目状态 | 处理方式 |
+| --- | --- |
+| 全新且未绑定 | 先执行或引导执行 `opscli app create <site_name> --path <root>`，再执行 `opscli app init <root>` |
+| 已绑定但仍为空 | 先执行 `opscli app init <root>` 拉取模板 |
+| 已有源码 | 进入已有项目盘点；后续 `app init` 必须跳过模板并保留源码 |
+
+全新项目在 `opscli app init` 成功并返回 `template_applied=true` 之前，不得创建或修改 README、需求文档、`docs/ops-app/assessment.md`、`ops-app.config`、前后端、测试或部署文件。用户尚未明确授权创建远端应用时，只在会话中整理需求并请求确认，不得用本地脚手架绕过 AppHub 创建流程。
+
+模板初始化完成后重新读取整个项目，以实际模板内容作为盘点证据。不得使用初始化前的空目录结论，也不得再运行 `create-vue`、复制本 Skill 的空项目脚手架或生成第二套基础工程。模板缺少本规范要求的关键结构时停止，记录缺失项并提示维护模板仓库。
 
 ### 1. 只读盘点
 
@@ -48,6 +64,7 @@ description: 用于盘点未知 Web 项目、生成项目规范，并将受支�
 
 | 当前项目 | 处理方式 |
 | --- | --- |
+| 全新 opscli app | 先执行 `app create → app init` 拉取模板，再按模板实际技术栈处理 |
 | Vite + React | 保留 React，按前端规范补齐 |
 | Vite + Vue 3 | 保留 Vue 3，按前端规范补齐 |
 | Next.js + React | 按迁移规范转换为 Vite + React |
@@ -79,7 +96,7 @@ docs/ops-app/
 ops-app.config
 ```
 
-空项目或后端尚未交付时只创建前端、文档和共享配置；不创建 `backend/`、生产 Dockerfile 或 Compose 占位服务。后端交付并提供启动、健康检查和构建契约后，才按部署规范生成后端与生产部署文件。
+全新 opscli app 必须在模板项目上改造，不自行创建另一套前端或后端脚手架。已有项目缺少后端且后端尚未交付时，只补齐前端、文档和共享配置；不创建 `backend/`、生产 Dockerfile 或 Compose 占位服务。后端交付并提供启动、健康检查和构建契约后，才按部署规范生成后端与生产部署文件。
 
 初始化部署时必须将 Skill 的 `assets/nginx.conf.template` 复制为项目的 `deployment/nginx.conf.template`。项目内 Nginx 必须使用该模板，不得另写会削弱部署路径、SPA 回退或缓存规则的配置。
 
@@ -97,7 +114,7 @@ ops-app.config
 
 ### 5. 项目配置
 
-根目录 `ops-app.config` 是应用 ID、应用名称和部署前缀的唯一配置源，使用 JSON 内容。初始化时复制 Skill 的 `assets/ops-app.config`，只修改实际字段值：
+根目录 `ops-app.config` 是构建和部署阶段的应用身份配置源，使用 JSON 内容。模板初始化项目必须保留模板中的该文件并从 `.opscli/app.json` 同步实际字段；已有项目迁移缺少该文件时才复制 Skill 的 `assets/ops-app.config`：
 
 ```json
 {
@@ -107,9 +124,7 @@ ops-app.config
 }
 ```
 
-初始化时不得伪造应用 ID。第一次发布时调用当前宿主提供的应用注册工具，验证返回值为 URL 安全单路径段后原子写回 `appId`。后续发布复用已有 ID；工具未提供、返回空值、格式非法或本地与远端归属冲突时停止。
-
-应用 ID 工具确定后，应在本 Skill 中补充真实工具名称、完整参数和示例。当前不得猜测命令或直接请求未定义接口。
+同步规则固定为：`.opscli/app.json.app_id` 写入 `ops-app.config.appId`，`.opscli/app.json.slug` 写入 `ops-app.config.appName`。写入前校验 binding 和配置格式，使用临时文件原子替换；配置已有非占位值但与 binding 不一致时停止，不得覆盖冲突身份。不得在第一次发布时再次注册应用，也不得调用未定义的应用 ID 工具。
 
 同时复制以下共享资产到项目 `deployment/`：
 
@@ -132,6 +147,8 @@ Vite 本地开发使用 `/`；`vite build` 调用 `loadOpsAppConfig(..., { requi
 ### 7. 部署与验收
 
 发布前必须确认：
+
+- `.opscli/app.json` 存在，`ops-app.config.appId/appName` 分别与 binding 的 `app_id/slug` 一致。
 
 - `deployment/Dockerfile`、`deployment/compose.yaml`、`deployment/nginx.conf.template`、`deployment/ops-app-config.mjs`、`deployment/ops-app-config.d.mts`、`deployment/render-nginx-config.mjs` 存在；Dockerfile 同时提供前端、后端构建 target，并通过共享配置模块和渲染脚本生成项目内 Nginx 配置。
 - 部署构建基线为 Linux 服务器：Compose 必须显式使用 `context: ..` 与 `dockerfile: deployment/Dockerfile`；本地宿主机兼容性问题只记录，不改变项目产物规范。

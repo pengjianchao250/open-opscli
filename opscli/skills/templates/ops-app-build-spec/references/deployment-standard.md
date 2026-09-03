@@ -128,7 +128,7 @@ Compose 官方生产建议包括移除源码卷绑定、设置重启策略并为
 
 按顺序检查：
 
-1. 读取并校验 `ops-app.config`；首次发布通过已提供工具取得应用 ID 并写回。
+1. 读取 `.opscli/app.json` 和 `ops-app.config`，校验 `appId/appName` 分别等于 binding 的 `app_id/slug`；不在首次发布阶段重新注册应用。
 2. 确认 Dockerfile、两个运行 target、Compose、Nginx 模板、共享配置模块和渲染脚本存在且被前端镜像引用。
 3. 检查 `.dockerignore` 没有排除构建必需文件，Dockerfile 没有无边界 `COPY . .`、`VOLUME` 或明文 secrets；Compose 前后端镜像名符合服务后缀和双 tag 约定。
 4. 执行前后端测试和生产构建。
@@ -136,7 +136,7 @@ Compose 官方生产建议包括移除源码卷绑定、设置重启策略并为
 6. 获得许可后再构建并启动容器。
 7. 从外层公开地址检查健康状态、部署前缀、嵌套路由刷新、API、缓存响应头和数据持久化。
 
-发布工具未定义时停在第 4 步，不猜测项目注册或发布命令。
+发布检查通过后使用 `opscli app push <root> --message <summary>`；不得猜测其他项目注册或发布命令。
 
 ## 完成标准
 
