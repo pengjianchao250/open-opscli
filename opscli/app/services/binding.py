@@ -23,10 +23,15 @@ class BindingStore:
         target = root / BINDING_RELATIVE_PATH
         if target.exists():
             current = self.load(root)
-            if current.site_id != binding.site_id:
+            is_v1_migration = (
+                current.schema_version == 1
+                and binding.schema_version == 2
+                and current.slug == binding.slug
+            )
+            if current.app_id != binding.app_id and not is_v1_migration:
                 raise AppProjectError(
                     "APP-ALREADY-BOUND",
-                    f"目录已绑定其他站点：{current.site_name} ({current.site_id})",
+                    f"目录已绑定其他站点：{current.site_name} ({current.app_id})",
                 )
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(".tmp")

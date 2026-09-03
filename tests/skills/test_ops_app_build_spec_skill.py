@@ -24,7 +24,7 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.2"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.3"}
 
 
 def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
@@ -80,35 +80,32 @@ def test_ops_app_build_spec_routes_supported_migrations_and_stops_others():
     assert "不得创建 FastAPI 占位服务" in content
 
 
-def test_ops_app_build_spec_defines_empty_project_initialization():
-    """空项目初始化必须有独立规范和最小前端示例。"""
+def test_ops_app_build_spec_enforces_template_first_initialization():
+    """全新项目必须先创建和拉取模板，再允许 Skill 写入项目文件。"""
     initialization = _read("references/initialization-standard.md")
     skill = _read("SKILL.md")
 
     for required in (
-        "空项目初始化规范",
-        "pnpm + create-vue",
-        "Vue 3",
-        "Vite",
-        "Element Plus",
-        "Axios",
-        "Vue Router",
-        "Pinia",
-        "JavaScript",
-        "最新稳定版本",
-        "Node.js 只要求主版本大于 22",
-        "不默认加入 TypeScript、Vitest、ESLint、Prettier",
-        "src/api/http.js",
-        "src/router/index.js",
-        "src/stores/app.js",
-        "views/HomeView.vue",
-        "后端由其他人员负责",
-        "不得创建 FastAPI 占位服务",
-        "pnpm install --frozen-lockfile",
+        "模板先行初始化规范",
+        'opscli app create "<站点显示名称>" --path <项目根目录>',
+        "opscli app init <项目根目录>",
+        "template_applied=true",
+        "模板是唯一基线",
+        "不得提前写入 `assessment.md`",
+        "不运行 `pnpm create vue`",
+        ".opscli/app.json.app_id",
+        ".opscli/app.json.slug",
+        "ops-app.config.appId",
+        "ops-app.config.appName",
+        "模板缺少 `ops-app.config`",
+        "已有项目边界",
     ):
         assert required in initialization
 
     assert "references/initialization-standard.md" in skill
+    assert "### 0. 新项目模板门禁" in skill
+    assert "template_applied=true" in skill
+    assert "pnpm create vue@latest frontend" not in initialization
 
 
 def test_ops_app_build_spec_keeps_app_id_and_deployment_gates():
@@ -139,12 +136,14 @@ def test_ops_app_build_spec_keeps_app_id_and_deployment_gates():
     ):
         assert required in content
 
-    assert "不得伪造应用 ID" in content
     assert "URL 安全单路径段" in content
     assert "禁止 `/`" in content
-    assert "不得猜测命令" in content
+    assert ".opscli/app.json.app_id" in content
+    assert ".opscli/app.json.slug" in content
+    assert "不在首次发布阶段重新注册应用" in content
+    assert "opscli app push <root> --message <summary>" in content
     assert "不启动容器" in content
-    assert "空项目或后端尚未交付时只创建前端" in content
+    assert "全新 opscli app 必须在模板项目上改造" in content
 
 
 def test_ops_app_build_spec_provides_required_nginx_template():
@@ -274,7 +273,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.2"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.3"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

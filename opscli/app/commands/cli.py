@@ -13,6 +13,14 @@ from opscli.app.services.manager import AppManager
 app = typer.Typer(help="创建并绑定 Codex 站点，初始化 Git 项目并推送源码")
 
 
+def _emit_release_event(event: dict) -> None:
+    if event.get("level") == "hidden":
+        return
+    message = event.get("message")
+    if message:
+        typer.echo(f"[release:{event.get('seq', '-')}] {message}")
+
+
 def _emit(payload: dict, *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -22,13 +30,19 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         if data.get("message"):
             typer.echo(data["message"])
         for key in (
-            "site_id",
+            "app_id",
             "site_name",
             "slug",
             "path",
             "repo_url",
+            "default_branch",
             "template_applied",
             "commit_sha",
+            "release_id",
+            "version",
+            "status",
+            "url",
+            "error_code",
         ):
             if data.get(key) is not None:
                 typer.echo(f"{key}: {data[key]}")
@@ -42,7 +56,9 @@ def _emit(payload: dict, *, json_output: bool) -> None:
 
 
 def _run(command: str, action, *, json_output: bool) -> None:
-    manager = AppManager()
+    manager = AppManager(
+        release_event_handler=None if json_output else _emit_release_event
+    )
     try:
         _emit(
             {"success": True, "command": command, "data": action(manager), "error": None},
@@ -104,7 +120,7 @@ def push(
     message: str = typer.Option(..., "--message", "-m", help="Codex 对当前修改的一句话总结"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """整体提交并普通推送站点源码，不执行站点内容校验。"""
+    """普通推送站点源码，并触发 AppHub release 与 SSE 跟踪。"""
     _run(
         "app push",
         lambda manager: manager.push(path, message=message),
