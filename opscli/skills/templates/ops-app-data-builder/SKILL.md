@@ -1,8 +1,8 @@
 ---
 name: ops-app-data-builder
-description: 用于 Codex 中为 opscli app 站点构建真实业务数据层；读取现有前后端项目，把页面需求拆成数据产品，验证 OPS、Keepa 或 SellerSprite 数据合同，并生成或改造 FastAPI 数据层、前端 API、SQLite 迁移、测试和数据规范。单次临时查询、普通页面搭建、经营分析、当前 Dashboard 编辑或分析不使用本 Skill。
+description: 用于 Codex 中为已经完成模板初始化或已有受支持结构的 opscli app 站点构建真实业务数据层；验证 OPS、Keepa 或 SellerSprite 数据合同，并生成或改造 FastAPI、前端 API、SQLite、测试和数据规范。未初始化空项目、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # OPS 应用数据层构建
@@ -15,7 +15,7 @@ metadata:
 
 使用本 Skill：
 
-- 当前工作对象是通过 opscli app 创建或符合 `ops-app-build-spec` 的站点。
+- 当前工作对象已通过 `opscli app create/init` 完成模板初始化，或是已经绑定 AppHub 且符合 `ops-app-build-spec` 的已有项目。
 - 页面需要 OPS、Keepa、SellerSprite 或这些来源的组合数据。
 - 需求包含多个字段、跨来源组合、二次加工、数据新鲜度、SQLite 物化或站点专用 API。
 - 需要为现有页面补齐 FastAPI client/service/repository/schema/API、前端 API/types、迁移或测试。
@@ -35,6 +35,7 @@ metadata:
 ## 必要输入
 
 - 项目根目录和当前 `AGENTS.md`。
+- 根目录 `.opscli/app.json` 和 `ops-app.config`，两者的 `app_id/slug` 与 `appId/appName` 必须一致。
 - 已确认的页面业务需求、筛选范围、刷新要求和使用者范围。
 - `docs/ops-app/project-spec.md`；存在时同时读取 assessment、migration-plan、development、deployment 和 data-spec。
 - 现有前端页面及 API 封装、FastAPI 路由/service/schema、SQLite model/repository/migration 和测试。
@@ -63,6 +64,16 @@ metadata:
 只获取足以验证合同的少量样本。真实结果、导出文件和凭证不得提交到站点源码。
 
 ## 工作流
+
+### 0. 模板初始化门禁
+
+在写入 assessment、data-spec、前后端、SQLite、测试或部署文件前，先确认：
+
+1. 根目录存在 `.opscli/app.json`，项目已绑定 AppHub 应用和独立仓库。
+2. 项目存在模板拉取后的结构，或存在经 `ops-app-build-spec` 确认受支持的已有源码结构。
+3. `ops-app.config.appId` 等于 binding 的 `app_id`，`ops-app.config.appName` 等于 binding 的 `slug`。
+
+如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板，也不生成替代脚手架。
 
 ### 1. 读取项目证据
 

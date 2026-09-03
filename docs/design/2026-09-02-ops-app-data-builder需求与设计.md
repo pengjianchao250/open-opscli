@@ -10,6 +10,8 @@
 
 当前业务流程为：用户安装 `aukeys-opscli`，通过 `opscli app create` 创建站点，通过 `opscli app init` 拉取包含前端、FastAPI 后端和 SQLite 能力的完整模板，在 Codex 中按 `ops-app-build-spec` 搭建业务页面，最后通过 `opscli app push` 推送并自动部署。
 
+全新项目必须严格按上述顺序执行：Codex 识别新建站点、新建看板或从零开发运营数据应用意图后，加载 `ops-app-build-spec` 作为统一入口；Skill 阶段 0 只确认站点名称和空目标目录并编排 `opscli app create/init`，模板拉取成功后同一个 Skill 才进入正式盘点和开发。`ops-app-data-builder` 只在模板初始化完成后进入，已有源码项目不套用模板。
+
 当前建站、Git 和发布主流程已经存在，本次要补齐的是：
 
 > 用户通过自然语言搭建依赖真实数据的页面时，Codex 如何识别数据需求、验证数据合同、生成后端取数和加工代码，并让线上站点通过合规方式持续取数。
@@ -458,7 +460,7 @@ opscli/skills/templates/ops-app-data-builder/
 - 不实现每用户第三方账号切换。
 - 不实现 AppHub 自动签发应用 API Key。
 - 不实现新的统一后台调度平台。
-- 不修改 `opscli app create/init/push` 命令流程。
+- 不修改 `opscli app create/init/push` 的命令数量和职责；通过 Skill 启动门禁确保全新项目先 `create/init` 拉取模板，再生成业务代码。
 - 不让 Skill 成为线上站点运行依赖。
 - 不在第一阶段引入新的运行时数据 YAML 权威源。
 

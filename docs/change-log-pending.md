@@ -1,3 +1,16 @@
+## 2026-09-03 skills - 合并 release 远端 AppHub 改动，解决 ops-app-build-spec 冲突
+
+**变更原因**：本地提交 ec7c0e88（按 Compose 模式补齐 FastAPI + SQLite 后端规范）与远端 11 个提交（ops-app-build-spec 改为 AppHub 单应用发布、新增 ops-app-data-builder）在 8 个文件产生冲突，且两边对后端入口、健康探针、依赖管理、迁移方式的约定互相矛盾。经用户确认以远端 AppHub 方向为准，保留本地新增的补充文档。
+**改动点**：
+- 7 个冲突文件的冲突块全部取远端（SKILL.md、backend/deployment/initialization/migration-standard.md、VERSION.json、契约测试）；`docs/change-log-pending.md` 两边记录全部保留。
+- 清理自动合并残留：删除 `backend-standard.md` 中本地的 uv/Alembic 技术栈表并恢复被错改的 `## SQLite` 标题；删除 `initialization-standard.md` 中指向已不存在的“后端规范落地”章节的段落。
+- 保留本地新增的 `references/sqlite-standard.md`、`backend-redlines.md`、`opscli-integration-standard.md` 与 `assets/backend/`；在 `SKILL.md` Reference 路由表补回引用，并在 `SKILL.md` 与 `backend-standard.md` 声明补充文档中 uv/Alembic/Compose/`/health`/`/ready` 描述与 AppHub 合同冲突时以 `backend-standard.md`、`deployment-standard.md` 为准。
+- `data/VERSION.json` 取 v0.0.4（两边各升一版）；本地新增的后端契约测试改为断言 AppHub 合同（`backend/app.py`、`/__apphub_healthz`、`APP_DB_PATH`、`requirements.txt`）与补充文档引用。
+**验证结果**：`uv run pytest --noconftest tests/skills/test_ops_app_build_spec_skill.py tests/skills/test_ops_app_data_builder_skill.py`：17 passed，6 failed。同一命令在纯 origin/release 临时 worktree 下为 14 passed，6 failed，失败集合完全相同（均为远端预存的 Compose 时代断言，如 `最新 Compose Specification`、nginx 模板等），本次合并未引入新失败，新增 3 个测试全部通过。
+**影响范围**：仅 ops-app-build-spec Skill 文档、版本与契约测试；未改动 opscli 运行时代码。遗留：`assets/backend/` 下的 CLAUDE.md 模板与全文规范内部仍按 uv/Alembic/Compose 编写，远端 SKILL.md 第 7 节仍残留 Compose/uv 检查项且对应 6 个测试预存失败，需后续单独校正。
+**回滚方式**：`git reset --hard ec7c0e88` 回到合并前本地提交。
+---
+
 # 待归档变更记录
 
 ## 2026-09-03 Skills - ops-app-build-spec 改用统一模板仓库
@@ -8313,6 +8326,8 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 ---
 ## 2026-08-31 AppHub - 新增 D9 Git 直连发布命令
 
+> 历史中间态：该命令形态已于 2026-09-01 被三指令方案取代，最终仓库与发布行为以 2026-09-03 的“一站点一仓库与正式发布闭环”为准。
+
 **变更原因**：用户在 Codex 中完成站点开发后，需要通过 opscli 将项目按 AppHub 当前 D9 架构推送到应用仓库，并显式创建 release、持续读取部署状态；原仓库没有 `opscli app` 命令和本地 Git/gitleaks/SSE 编排。
 
 **改动点**：新增 `opscli app publish [PATH] -m/--message`、`--resume`、`--json`，以及 `opscli app git status/bind/revoke`；严格同构校验 `app.yaml` 并在任何 Git 副作用前阻断 Codex Node/static 项目；实现 Git 2.30 前置检查、受控 credential helper、Windows ACL/POSIX 0600、gitleaks 工作区与领先提交双扫描、NOOP、普通 commit/非强制 push、AppHub 无 Cookie session 客户端、SSE 去重与 release id 双通道校验、原子发布句柄和断线续订。新增 PyYAML 直接依赖、使用指南和 `tests/app/` 专项回归。
@@ -8321,19 +8336,21 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **影响范围**：新增独立 `app` 命令组并在顶层注册，不改变现有 auth/query/skills 等模块；当前仅支持 AppHub MVP 的 streamlit/fastapi/gradio，Node/static Codex 站点会明确失败，不会产生 commit/push。
 
-**回滚方式**：移除 `opscli/app/`、`tests/app/`、顶层 `app` 注册、PyYAML 依赖、使用指南和本条变更记录；已签发凭据应先执行 `opscli app git revoke`，已产生的普通 Git commit/push 不自动回退。
+**回滚方式**：该历史中间态不再单独回滚；如需回退当前实现，应以 2026-09-03 最终条目的回滚边界为准，已经产生的普通 Git commit/push 不自动回退。
 
 ---
 
 ## 2026-09-01 AppHub - 精简为 create/init/push 三指令
 
-**变更原因**：Codex 站点当前只需要创建并绑定站点、初始化 Git 项目、整体推送源码。原 `opscli app` 的运行时 SDK、app.yaml 校验、gitleaks、release/SSE、版本运维和应用管理超出需求并增加维护成本。
+> 历史中间态：本条只记录用户命令面收敛过程；最终仓库地址、Git 凭据和 release/SSE 行为以 2026-09-03 条目为准。
 
-**改动点**：命令树收敛为 `opscli app create/init/push`；新增 `.opscli/app.json` 本地绑定；空目录从 GitLab `template` 分支获取模板，已有项目跳过模板且不覆盖源码；`push` 使用 GitLab 本机凭据执行 `git add -A`、普通 commit 和非强制 `HEAD:main` push，不触发部署。创建站点客户端暂用占位地址，并支持通过环境变量替换。删除旧发布、校验、扫描、迁移、SDK、凭据和运维模块及对应测试、契约资源和 SQLAlchemy 依赖。
+**变更原因**：Codex 站点面向用户只需要创建并绑定站点、初始化 Git 项目和一键推送发布。原 `opscli app` 暴露的运行时 SDK、校验、扫描、版本运维和应用管理命令超出第一阶段需求并增加维护成本。
+
+**改动点**：命令树收敛为 `opscli app create/init/push`；新增 `.opscli/app.json` 本地绑定；空目录获取模板，已有项目跳过模板且不覆盖源码；删除旧 `publish/run/validate/pull/versions/rollback/logs/git/env/secret/members/db` 等用户命令。该步骤形成的过渡实现随后于 2026-09-03 升级为 AppHub 独立仓库、受控 Git 凭据和由 `app push` 内部执行的 release/SSE 闭环。
 
 **影响范围**：这是 `opscli app` 的破坏性精简，旧 `publish/run/validate/pull/versions/rollback/logs/git/env/secret/members/db` 命令不再提供；其他 opscli 模块不受影响。
 
-**回滚方式**：恢复精简前的 `opscli/app/`、`tests/app/`、打包配置和 AppHub 文档；源码普通 Git commit/push 不自动回退。
+**回滚方式**：不恢复已经删除的旧用户命令；如需回退当前实现，应以 2026-09-03 最终条目的回滚边界为准，源码普通 Git commit/push 不自动回退。
 
 ---
 
@@ -8388,11 +8405,53 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ---
 
-## 2026-09-02 AppHub - 接入真实 Gitea 源码推送仓库
+## 2026-09-02 skills - ops-app-build-spec 按后端规范文档补齐 FastAPI + SQLite 规范与项目模板
 
-**变更原因**：AppHub 站点源码目标仓库已确定为 Gitea 仓库 `aukeys-admin/apphub`，原实现仅依赖创建站点服务响应中的 `repo_url`，无法保证源码推送到已确认的真实仓库。
-**改动点**：新增 `OPSCLI_APP_REPO_URL` 独立配置，默认使用 `http://10.1.13.143:3000/aukeys-admin/apphub.git`；创建站点服务与源码仓库配置解耦，创建响应不再强制返回 `repo_url`；`app init` 会同步绑定文件和 Git origin 到当前目标仓库；环境仓库发生变化但尚未重新初始化时，`app push` 会阻止误推并提示先执行 `opscli app init`；增加默认仓库地址锁定回归，避免后续误改成 Gitea 页面 URL 或旧 GitLab 地址。
-**验证结果**：`.venv\Scripts\python.exe -m pytest tests/app -q -p no:cacheprovider` 通过，`15 passed`；`compileall` 通过；使用测试账号对 `http://10.1.13.143:3000/aukeys-admin/apphub.git` 执行只读 `git ls-remote` 成功，仓库当前为首次推送前的空仓状态（0 refs）。
-**影响范围**：仅影响 `opscli app create/init/push` 的目标源码仓库解析，不改变模板仓库、创建站点 HTTP 地址、普通 commit 和非强制 push 行为。
-**回滚方式**：回退 `APP_TARGET_REPO_URL_*` 配置、AppManager 目标仓库同步逻辑、相关测试和文档；已修改的本地 Git origin 需按项目实际仓库手动恢复。
+**变更原因**：`ops-app-build-spec` 的 `references/backend-standard.md` 只有 65 行，目录结构（`app/db/`、`/api` 前缀）与团队新发布的《FastAPI后端开发通用规范》《SQLite数据库使用通用规范》《AI开发通用规范 CLAUDE.md/AGENTS.md》以及 OPSCLI SDK/API 规范不一致，AI 按 Skill 初始化后端时缺少可执行的规范依据与项目级 CLAUDE.md 模板。用户中途收窄范围：不做脚手架脚本与代码模板，只沉淀规范文档。
+**改动点**：
+- 重写 `references/backend-standard.md`（技术栈、目录、分层事务、API、异常日志、配置、定时任务、迁移、测试、容器、验收）；新增 `references/sqlite-standard.md`（路径、PRAGMA、`BEGIN IMMEDIATE`、单写者、Alembic batch、类型命名、备份恢复、安全）、`references/backend-redlines.md`（合并 26 条铁律 + FastAPI 附录 D + SQLite 硬规则，统一编号 62 条）、`references/opscli-integration-standard.md`（方式 B 每请求 Manager、cookie `polarisUserToken` / `X-Session-Id` 鉴权依赖、异常映射、REST 重试纪律）。
+- 小改 `initialization-standard.md`（`/health` 存活 + `/ready` 就绪、前缀 `/api/v1`、指向后端规范落地）、`deployment-standard.md`（`uv sync --locked --no-dev`、healthcheck 用 `/ready`）、`migration-standard.md`。
+- 新增 `assets/backend/`：`AGENTS.md`（路径固定，追加 4 份 OPSCLI 文档）、`CLAUDE.md`（基于用户提供模板做 SQLite/uv/ops-app 特化，新增 4.8 opscli 接入，保留项目特化 `〈…〉` 占位符）、`docs/开发指南/` 6 份全文（FastAPI、SQLite 来自用户文档；4 份 OPSCLI 文档复制自仓库 `docs/spec`、`docs/guide`，仅改写头部相对链接）。
+- `SKILL.md`：description、Reference 路由、`初始化后端` 意图、新增 4.1 后端规范落地流程、输出规范补充。
+- `data/VERSION.json` v0.0.1 → v0.0.2；`tests/skills/test_ops_app_build_spec_skill.py` 同步版本断言并新增 3 个测试（后端 references 契约、模板占位符状态、OPSCLI 文档漂移守卫）。
+**验证结果**：`pytest --noconftest tests/skills/test_ops_app_build_spec_skill.py`：12 passed（本机 .venv，Python 3.13）。`validate_release_manifest()` 返回空；`SkillsManager.install` 冒烟确认 `assets/backend/` 6 份文档与 2 份模板随安装复制。注意：`tests/skills/conftest.py` 依赖的 `ops-dataset-query/scripts/enum_cache.py` 在 release 分支不存在，整个 `tests/skills` 目录在不加 `--noconftest` 时全部 ERROR，为预存问题，与本次改动无关。长期记忆 MCP 本会话连接失败，未写入 MCP，恢复后补录。
+**影响范围**：仅 `ops-app-build-spec` Skill 内容与其契约测试；不涉及 opscli 运行时代码、打包配置与其他 Skill。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-app-build-spec tests/skills/test_ops_app_build_spec_skill.py` 并删除新增的 `assets/backend/` 与 3 份新 references。
+---
+
+## 2026-09-03 AppHub - 接入一站点一仓库与正式发布闭环
+
+**变更原因**：共享源码仓库无法满足“一站点一仓库”、独立权限、版本追踪和发布回滚要求；同时旧 `push` 只执行 Git 推送，没有形成 AppHub release 与 SSE 进度闭环。
+**改动点**：移除 `OPSCLI_APP_REPO_URL` 及固定共享仓库作为仓库事实源的逻辑；`POST /api/apphub/v1/apps` 创建或返回站点独立仓库，`GET /api/apphub/v1/apps/{slug}/git-config` 返回并刷新完整 `repo_url`；每个站点绑定独立的 `apps/{slug}` 和 `main`；`app push` 在普通 fast-forward Git push 成功后比较 release baseline，按需调用 AppHub release 并通过 SSE 跟踪进度；AppHub 服务根地址统一且仅使用 `OPSCLI_APPHUB_URL`；建站模板统一使用 `OPSCLI_APP_TEMPLATE_REPO` 与 `OPSCLI_APP_TEMPLATE_BRANCH`，当前地址为 `http://10.1.13.143:3000/aukeys-admin/template.git`、分支为 `main`。空项目按当前环境配置拉取模板，已有源码保留原模板元数据；模板 fetch 显式禁用 Git credential helper，避免复用站点仓库 token。预发布和生产当前暂定使用同一组 AppHub 与模板配置，正式域名确定后分别替换对应生产配置。
+**验证结果**：`python -m pytest tests/auth/test_config.py tests/app -q -p no:cacheprovider` 通过，`34 passed`；`python -m compileall -q opscli/app opscli/auth/config.py` 通过；AppYaml、binding v1 到 v2 迁移、独立 `repo_url`、模板配置优先级、空项目模板刷新、已有源码模板元数据保留、匿名模板 fetch、Git 凭据、origin/main 初始化、non-fast-forward 阻断、NOOP、release 与 SSE 续订均有专项覆盖。
+**影响范围**：影响 `opscli app create/init/push`、AppHub 与模板地址配置、站点本地 binding 和 Git origin；不增加新的用户命令，不增加同义环境变量，不在 opscli 中保存 Gitea 管理凭据。
+**回滚方式**：回退 AppHub 客户端、模板统一配置、binding v2、Git 凭据与发布编排相关改动；已经绑定到独立仓库的站点不得自动回退到共享仓库，需由管理员逐站点确认迁移策略。
+---
+
+## 2026-09-03 opscli app - 固化全新项目模板先行建站流程
+
+**变更原因**：全新项目如果先由 Codex 或 Skill 写入 assessment、README、前后端或部署文件，再执行 `opscli app init`，目录会被识别为已有源码并跳过模板，导致标准模板失去代码基线意义，并可能产生两套冲突脚手架。
+
+**改动点**：新增 `docs/design/2026-09-03-opscli-app模板先行建站流程需求定稿.md`；`ops-app-build-spec` 增加新项目模板门禁，要求全新项目在任何文件写入前执行 `opscli app create → opscli app init`，模板成功后重新盘点并在模板上开发，不再运行 `create-vue` 生成替代脚手架；应用身份统一从 `.opscli/app.json.app_id/slug` 同步并校验到 `ops-app.config.appId/appName`，首次发布不再调用未定义的注册工具；`ops-app-data-builder` 增加 binding、模板结构和项目身份前置检查，未初始化空项目不得生成数据层；同步两个 Skill 的 UI 元数据、版本、契约测试和使用文档。用户命令仍固定为 `create/init/push`，现有 AppHub API、模板拉取 Python 行为和 release/SSE 闭环不变。
+
+**验证结果**：`python -m pytest tests/auth/test_config.py tests/app -q -p no:cacheprovider` 通过，`34 passed`；`python -m pytest tests/skills/test_ops_app_build_spec_skill.py tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest` 通过，`20 passed`；两个 Skill 分别通过 skill-creator `quick_validate.py`。直接加载 `tests/skills/conftest.py` 的测试命令仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻塞，本次未修改该无关问题。
+
+**影响范围**：影响全新 opscli app 项目的 Codex/Skill 执行顺序、项目身份来源和数据层启动前置条件；不改变已有源码项目的保留策略，不修改 AppHub、Gitea 或发布服务。
+
+**回滚方式**：回退两个 Skill、版本、测试和对应流程文档；无需回滚 AppHub 应用、站点仓库、binding 或已经推送的源码。
+
+---
+
+## 2026-09-03 opscli app - 固化自然语言新建站点编排
+
+**变更原因**：用户在 Codex 中通常通过“新建站点”“新建看板”“从零开发运营数据应用”等自然语言表达建站意图。最新同步的 `ops-app-build-spec` 仍允许自行初始化空项目并运行 `create-vue`，可能在 `opscli app init` 前写入文件，导致标准模板被跳过。
+
+**改动点**：新增 `docs/design/2026-09-03-opscli-app自然语言建站编排需求定稿.md`；`ops-app-build-spec` 升级到 `v0.0.4`，作为自然语言建站的统一入口并增加新项目模板门禁；阶段 0 只编排 `opscli app create → opscli app init`，首次初始化确认 `template_applied=true` 后，同一个 Skill 才进入正式盘点和开发；`initialization-standard.md` 改为模板先行规范，不再运行 `pnpm create vue` 或复制第二套脚手架；已有源码项目继续保留现有代码并跳过模板。同步 AppHub 使用指南、开发规范、数据层需求文档、既有模板先行定稿、Skill 版本和契约测试。`opscli app` Python 行为、三个用户命令、AppHub API、环境配置和 release/SSE 闭环均未修改。
+
+**验证结果**：模板先行元数据、初始化门禁和安装契约测试 `3 passed`；`ops-app-data-builder` 回归 `10 passed`；`tests/app` 回归 `21 passed`；Skill Creator 使用 Python UTF-8 模式校验通过。`ops-app-build-spec` 全量契约当前为 `5 passed, 5 failed`，剩余失败来自 Git 同步后既有的 Compose/Nginx 旧测试与当前 Nixpacks 单应用内容不一致，以及既有“无后端”迁移断言，不属于本次自然语言模板先行范围。
+
+**影响范围**：影响 Codex 对全新站点意图的执行顺序和 `ops-app-build-spec` 的空项目入口；不影响已有项目、`opscli app` 运行时代码、AppHub、Gitea 或已发布站点。
+
+**回滚方式**：回退 `ops-app-build-spec` 的模板门禁、初始化 Reference、版本与相关文档测试；无需回滚应用、仓库、binding 或发布记录。
+
 ---
