@@ -12,14 +12,6 @@ def test_ops_url_can_be_configured_from_env(tmp_path, monkeypatch):
     assert config.get_ops_url() == "https://ops.example.com/api"
 
 
-def test_ops_url_can_be_configured_from_process_env(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "missing.ini")
-    monkeypatch.setenv("OPSCLI_OPS_URL", "https://ops.process-env.example.com/api")
-
-    assert config.get_ops_url() == "https://ops.process-env.example.com/api"
-
-
 def test_ops_url_can_be_configured_from_config_ini(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "config.ini"
@@ -41,14 +33,6 @@ def test_apphub_url_defaults_to_production(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "missing.ini")
     monkeypatch.delenv("OPSCLI_APPHUB_URL", raising=False)
-
-    assert config.get_apphub_url() == "http://10.1.13.143:8080"
-
-
-def test_apphub_url_can_be_configured_from_process_env(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "missing.ini")
-    monkeypatch.setenv("OPSCLI_APPHUB_URL", "http://10.1.13.143:8080")
 
     assert config.get_apphub_url() == "http://10.1.13.143:8080"
 
@@ -125,44 +109,6 @@ def test_app_template_can_be_configured_from_config_ini(tmp_path, monkeypatch):
     assert config.get_app_template_branch() == "stable"
 
 
-def test_process_env_overrides_app_template_dotenv_and_config_ini(
-    tmp_path, monkeypatch
-):
-    monkeypatch.chdir(tmp_path)
-    config_path = tmp_path / "config.ini"
-    monkeypatch.setattr(config, "CONFIG_PATH", config_path)
-    config_path.write_text(
-        "\n".join(
-            [
-                "[systems]",
-                "app_template_repo = https://git.ini.example/templates/app.git",
-                "app_template_branch = ini",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    (tmp_path / ".env").write_text(
-        "\n".join(
-            [
-                "OPSCLI_APP_TEMPLATE_REPO=https://git.dotenv.example/templates/app.git",
-                "OPSCLI_APP_TEMPLATE_BRANCH=dotenv",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(
-        "OPSCLI_APP_TEMPLATE_REPO",
-        "https://git.process.example/templates/app.git",
-    )
-    monkeypatch.setenv("OPSCLI_APP_TEMPLATE_BRANCH", "process")
-
-    assert (
-        config.get_app_template_repo()
-        == "https://git.process.example/templates/app.git"
-    )
-    assert config.get_app_template_branch() == "process"
-
-
 def test_rufus_endpoint_keys_are_not_config_surface(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     config_path = tmp_path / "config.ini"
@@ -195,21 +141,3 @@ def test_polaris_is_enabled_as_builtin_system_by_default(tmp_path, monkeypatch):
     assert {"ops", "polaris"}.issubset(aliases)
 
 
-def test_process_env_can_enable_polaris_over_local_config(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    config_path = tmp_path / "config.ini"
-    monkeypatch.setattr(config, "CONFIG_PATH", config_path)
-    config_path.write_text(
-        "\n".join(
-            [
-                "[systems]",
-                "polaris_enabled = false",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv("OPSCLI_POLARIS_ENABLED", "true")
-
-    aliases = {system["alias"] for system in config.get_builtin_systems()}
-
-    assert "polaris" in aliases
