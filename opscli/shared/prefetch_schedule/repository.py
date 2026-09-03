@@ -184,6 +184,100 @@ class PrefetchScheduleRepository:
             raise ValueError(f"预取计划不存在或无权访问：{schedule_id}")
         return self.get_schedule(schedule_id=schedule_id, created_by=created_by)
 
+    def set_schedules_enabled(
+        self,
+        *,
+        schedule_ids: Iterable[int],
+        created_by: str,
+        enabled: bool,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """在一个事务中批量启用或禁用当前用户的计划。"""
+        ids = tuple(dict.fromkeys(int(value) for value in schedule_ids))
+        if not ids:
+            raise ValueError("至少提供一个预取计划 ID")
+        if len(ids) > 100:
+            raise ValueError("单次最多启停 100 个预取计划")
+        if any(value <= 0 for value in ids):
+            raise ValueError("预取计划 ID 必须为正整数")
+
+        placeholders = ", ".join("%s" for _ in ids)
+        current = _utc_naive(now)
+        changed_count = 0
+        connection = self._connect_factory()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT id, run_time, timezone, enabled, next_run_at
+                    FROM collection_prefetch_schedules
+                    WHERE created_by = %s AND id IN ({placeholders})
+                    FOR UPDATE
+                    """,
+                    (created_by, *ids),
+                )
+                rows = cursor.fetchall() or []
+                found_ids = {int(row["id"]) for row in rows}
+                if found_ids != set(ids):
+                    missing = ", ".join(
+                        str(value) for value in ids if value not in found_ids
+                    )
+                    raise ValueError(f"预取计划不存在或无权访问：{missing}")
+
+                for row in rows:
+                    currently_enabled = bool(row.get("enabled"))
+                    if enabled and not currently_enabled:
+                        next_run_at = next_daily_run(
+                            _time_text(row.get("run_time")),
+                            str(row.get("timezone") or "Asia/Shanghai"),
+                            after=current.replace(tzinfo=timezone.utc),
+                        )
+                        cursor.execute(
+                            """
+                            UPDATE collection_prefetch_schedules
+                            SET enabled = 1, next_run_at = %s
+                            WHERE id = %s AND created_by = %s
+                            """,
+                            (next_run_at, int(row["id"]), created_by),
+                        )
+                        changed_count += 1
+                    elif not enabled and currently_enabled:
+                        cursor.execute(
+                            """
+                            UPDATE collection_prefetch_schedules
+                            SET enabled = 0
+                            WHERE id = %s AND created_by = %s
+                            """,
+                            (int(row["id"]), created_by),
+                        )
+                        changed_count += 1
+
+                cursor.execute(
+                    f"""
+                    SELECT id, schedule_name, source_system, scenario, request_json,
+                           cadence, run_time, timezone, enabled, next_run_at,
+                           created_by, created_at, updated_at
+                    FROM collection_prefetch_schedules
+                    WHERE created_by = %s AND id IN ({placeholders})
+                    """,
+                    (created_by, *ids),
+                )
+                updated_rows = cursor.fetchall() or []
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+        schedules_by_id = {
+            int(row["id"]): _schedule_row(row) for row in updated_rows
+        }
+        return {
+            "changed_count": changed_count,
+            "schedules": [schedules_by_id[value] for value in ids],
+        }
+
     def delete_schedule(self, *, schedule_id: int, created_by: str) -> None:
         """删除当前用户拥有的计划及其级联运行历史。"""
         connection = self._connect_factory()

@@ -317,6 +317,174 @@ def test_enqueue_due_copies_schedule_request_snapshot():
     assert connection.committed is True
 
 
+def test_bulk_enable_is_atomic_and_recalculates_only_disabled_schedules():
+    """批量启用应锁定全部计划，只重算从禁用切换为启用的记录。"""
+
+    class Cursor:
+        def __init__(self):
+            self.calls = []
+            self.results = iter(
+                (
+                    [
+                        {
+                            "id": 1,
+                            "run_time": "06:00:00",
+                            "timezone": "Asia/Shanghai",
+                            "enabled": 0,
+                            "next_run_at": datetime(2026, 9, 2, 22, 0),
+                        },
+                        {
+                            "id": 2,
+                            "run_time": "07:00:00",
+                            "timezone": "Asia/Shanghai",
+                            "enabled": 1,
+                            "next_run_at": datetime(2026, 9, 3, 23, 0),
+                        },
+                    ],
+                    [
+                        {
+                            "id": 1,
+                            "schedule_name": "one",
+                            "source_system": "seller_sprite",
+                            "scenario": "keyword-reverse",
+                            "request_json": '{"params":{"asin":"B0ONE"}}',
+                            "cadence": "daily",
+                            "run_time": "06:00:00",
+                            "timezone": "Asia/Shanghai",
+                            "enabled": 1,
+                            "next_run_at": datetime(2026, 9, 3, 22, 0),
+                            "created_by": "owner@example.com",
+                        },
+                        {
+                            "id": 2,
+                            "schedule_name": "two",
+                            "source_system": "keepa",
+                            "scenario": "product",
+                            "request_json": '{"params":{"asin":"B0TWO"}}',
+                            "cadence": "daily",
+                            "run_time": "07:00:00",
+                            "timezone": "Asia/Shanghai",
+                            "enabled": 1,
+                            "next_run_at": datetime(2026, 9, 3, 23, 0),
+                            "created_by": "owner@example.com",
+                        },
+                    ],
+                )
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, sql, params=None):
+            self.calls.append((" ".join(sql.split()), params))
+            return 1
+
+        def fetchall(self):
+            return next(self.results)
+
+    class Connection:
+        def __init__(self):
+            self.cursor_instance = Cursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cursor_instance
+
+        def commit(self):
+            self.committed = True
+
+        def rollback(self):
+            raise AssertionError("不应回滚")
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    repository = PrefetchScheduleRepository(
+        settings=MySqlSettings(),
+        connect_factory=lambda: connection,
+    )
+
+    result = repository.set_schedules_enabled(
+        schedule_ids=[2, 1],
+        created_by="owner@example.com",
+        enabled=True,
+        now=datetime(2026, 9, 3, 8, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["changed_count"] == 1
+    assert [schedule["id"] for schedule in result["schedules"]] == [2, 1]
+    update_calls = [
+        call for call in connection.cursor_instance.calls if call[0].startswith("UPDATE")
+    ]
+    assert update_calls == [
+        (
+            "UPDATE collection_prefetch_schedules SET enabled = 1, "
+            "next_run_at = %s WHERE id = %s AND created_by = %s",
+            (datetime(2026, 9, 3, 22, 0), 1, "owner@example.com"),
+        )
+    ]
+    assert connection.committed is True
+
+
+def test_bulk_enable_rolls_back_when_any_schedule_is_inaccessible():
+    """任一计划不存在或无权访问时，批量启用不得部分提交。"""
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def execute(self, _sql, _params=None):
+            return 1
+
+        def fetchall(self):
+            return [
+                {
+                    "id": 1,
+                    "run_time": "06:00:00",
+                    "timezone": "Asia/Shanghai",
+                    "enabled": 0,
+                }
+            ]
+
+    class Connection:
+        def __init__(self):
+            self.rolled_back = False
+
+        def cursor(self):
+            return Cursor()
+
+        def commit(self):
+            raise AssertionError("不应提交")
+
+        def rollback(self):
+            self.rolled_back = True
+
+        def close(self):
+            pass
+
+    connection = Connection()
+    repository = PrefetchScheduleRepository(
+        settings=MySqlSettings(),
+        connect_factory=lambda: connection,
+    )
+
+    with pytest.raises(ValueError, match="不存在或无权访问：2"):
+        repository.set_schedules_enabled(
+            schedule_ids=[1, 2],
+            created_by="owner@example.com",
+            enabled=True,
+        )
+
+    assert connection.rolled_back is True
+
+
 def test_delete_schedule_rejects_active_runs():
     """存在排队或运行任务时不得级联删除计划及执行记录。"""
 

@@ -60,6 +60,8 @@ class PrefetchMcpRuntime:
             self.prefetch_schedule_create,
             self.prefetch_schedule_list,
             self.prefetch_schedule_update,
+            self.prefetch_schedule_enable,
+            self.prefetch_schedule_disable,
             self.prefetch_schedule_delete,
             self.prefetch_schedule_run_now,
             self.prefetch_schedule_runs,
@@ -290,6 +292,16 @@ class PrefetchMcpRuntime:
             return _err(exc, tool="MCP → prefetch_schedule_update(...)")
 
     @_prefetch_catalog_tool
+    async def prefetch_schedule_enable(self, schedule_ids: list[int]) -> dict:
+        """审核通过后批量启用计划，并重算下一次每日执行时间。"""
+        return await self._set_schedules_enabled(schedule_ids, enabled=True)
+
+    @_prefetch_catalog_tool
+    async def prefetch_schedule_disable(self, schedule_ids: list[int]) -> dict:
+        """批量禁用后续每日执行，不取消已经排队或运行的任务。"""
+        return await self._set_schedules_enabled(schedule_ids, enabled=False)
+
+    @_prefetch_catalog_tool
     async def prefetch_schedule_delete(self, schedule_id: int) -> dict:
         """删除当前用户的预取计划及其运行历史。"""
         from opscli.mcp.tools.helpers import _err, _ok
@@ -390,6 +402,49 @@ class PrefetchMcpRuntime:
             cache_environment=self.google_runtime.cache_environment,
             cache_mode="live",
         )
+
+    async def _set_schedules_enabled(
+        self,
+        schedule_ids: list[int],
+        *,
+        enabled: bool,
+    ) -> dict:
+        from opscli.mcp.tools.helpers import _err, _ok
+
+        tool_name = (
+            "prefetch_schedule_enable"
+            if enabled
+            else "prefetch_schedule_disable"
+        )
+        try:
+            result = await self._to_thread(
+                self._require_repository().set_schedules_enabled,
+                schedule_ids=schedule_ids,
+                created_by=self._require_owner(),
+                enabled=enabled,
+            )
+            schedules = result["schedules"]
+            for schedule in schedules:
+                schedule["execution_runtime"] = _execution_runtime(
+                    str(schedule["source_system"])
+                )
+            return _ok(
+                {
+                    "enabled": enabled,
+                    "requested_count": len(schedule_ids),
+                    "changed_count": int(result["changed_count"]),
+                    "schedules": schedules,
+                    "active_runs_unchanged": True,
+                }
+            )
+        except ValueError as exc:
+            return _err(
+                exc,
+                tool=f"MCP → {tool_name}(...)",
+                auto_feedback=False,
+            )
+        except Exception as exc:
+            return _err(exc, tool=f"MCP → {tool_name}(...)")
 
     def _require_repository(self) -> PrefetchScheduleRepository:
         """拒绝在共享采集 MySQL 未启用时读写计划。"""

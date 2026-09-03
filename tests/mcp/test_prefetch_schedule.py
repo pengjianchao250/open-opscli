@@ -11,6 +11,7 @@ class _FakeRepository:
 
     def __init__(self):
         self.created = None
+        self.enabled_change = None
 
     def create_schedule(self, **kwargs):
         self.created = kwargs
@@ -23,6 +24,21 @@ class _FakeRepository:
             "run_time": kwargs["run_time"],
             "timezone": kwargs["timezone_name"],
             "enabled": kwargs["enabled"],
+        }
+
+    def set_schedules_enabled(self, **kwargs):
+        self.enabled_change = kwargs
+        return {
+            "changed_count": 2,
+            "schedules": [
+                {
+                    "id": schedule_id,
+                    "schedule_name": f"schedule-{schedule_id}",
+                    "source_system": "seller_sprite",
+                    "enabled": kwargs["enabled"],
+                }
+                for schedule_id in kwargs["schedule_ids"]
+            ],
         }
 
 
@@ -76,3 +92,33 @@ def test_create_schedule_rejects_secret_before_repository_write():
     assert result["success"] is False
     assert "feedback" not in result
     assert runtime.repository.created is None
+
+
+def test_enable_schedules_is_a_convenient_bulk_review_action():
+    runtime = _runtime()
+
+    result = asyncio.run(runtime.prefetch_schedule_enable([3, 7]))
+
+    assert result["success"] is True
+    assert result["data"]["enabled"] is True
+    assert result["data"]["changed_count"] == 2
+    assert result["data"]["active_runs_unchanged"] is True
+    assert runtime.repository.enabled_change == {
+        "schedule_ids": [3, 7],
+        "created_by": "owner@example.com",
+        "enabled": True,
+    }
+    assert all(
+        schedule["execution_runtime"] == "collector"
+        for schedule in result["data"]["schedules"]
+    )
+
+
+def test_disable_schedules_uses_same_bulk_action():
+    runtime = _runtime()
+
+    result = asyncio.run(runtime.prefetch_schedule_disable([3, 7]))
+
+    assert result["success"] is True
+    assert result["data"]["enabled"] is False
+    assert runtime.repository.enabled_change["enabled"] is False

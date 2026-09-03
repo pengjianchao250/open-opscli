@@ -44,6 +44,8 @@ def test_mcp_exposes_expected_tools():
     assert "prefetch_schedule_create" in names
     assert "prefetch_schedule_list" in names
     assert "prefetch_schedule_update" in names
+    assert "prefetch_schedule_enable" in names
+    assert "prefetch_schedule_disable" in names
     assert "prefetch_schedule_delete" in names
     assert "prefetch_schedule_run_now" in names
     assert "prefetch_schedule_runs" in names

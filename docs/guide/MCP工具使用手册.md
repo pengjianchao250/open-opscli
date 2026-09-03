@@ -1547,6 +1547,8 @@ prefetch_schedule_create(
 | `prefetch_schedule_create` | 创建每日计划 |
 | `prefetch_schedule_list` | 查看当前用户计划与通用 MCP 调度状态 |
 | `prefetch_schedule_update` | 修改参数、时间或启停状态 |
+| `prefetch_schedule_enable` | 审核通过后批量启用计划 |
+| `prefetch_schedule_disable` | 批量禁用后续每日执行 |
 | `prefetch_schedule_delete` | 删除没有排队或运行任务的计划 |
 | `prefetch_schedule_run_now` | 立即追加一次运行，不改变每日时间 |
 | `prefetch_schedule_runs` | 查看最近执行状态和来源 `job_id` |
@@ -1640,6 +1642,7 @@ prefetch_schedule_create(
 | 技能广场 | `skills_marketplace_info` | `opscli skills marketplace info/versions` |
 | 技能广场 | `skills_record_usage` | （CLI 无直接对应，自动异步触发） |
 | 预取计划 | `prefetch_schedule_create` / `prefetch_schedule_update` | （CLI 无直接对应） |
+| 预取计划 | `prefetch_schedule_enable` / `prefetch_schedule_disable` | （CLI 无直接对应） |
 | 预取计划 | `prefetch_schedule_list` / `prefetch_schedule_runs` | （CLI 无直接对应） |
 | 预取计划 | `prefetch_schedule_run_now` / `prefetch_schedule_delete` | （CLI 无直接对应） |
 | Knowledge | `search` | （CLI 无直接对应） |
