@@ -1,5 +1,33 @@
 # 待归档变更记录
 
+## 2026-09-02 AppHub - 模板基础镜像内置 opscli
+
+**变更原因**：AppHub 模板基础镜像需要直接提供当前仓库版本的内部 `opscli`，让模板构建和运行无需再次从外部包源安装。
+
+**改动点**：新增 `opscli/docker/template.dockerfile` 和专用 Docker ignore 文件；使用 `uv.lock` 多阶段安装非 editable 的内部版 `opscli`，保留内部 Skill 模板，并执行版本与 `opscli.app` 导入检查。合并远端三指令客户端后，锁文件按当前 `pyproject.toml` 重新生成，不再包含已删除的 SQLAlchemy 依赖。
+
+**验证结果**：`uv lock --check` 通过；合并前 Podman 完整构建曾验证非 root 用户、`/app`、`/data` 写入和工具版本，合并后的镜像构建仍需重新执行。
+
+**影响范围**：后续基于该文件构建的模板基础镜像将内置当前提交对应的 `opscli` 默认依赖，不包含 Playwright 等可选扩展。
+
+**回滚方式**：删除新增的两个 Docker 文件，还原 `uv.lock` 和本条变更记录。
+
+---
+
+## 2026-09-02 Skills - 保留 AppHub 单应用发布合同改动
+
+**变更原因**：`ops-app-build-spec` 需要生成 `app.yaml`、Nixpacks、根级 Dockerfile 和单 FastAPI 进程的 AppHub 发布结构。
+
+**改动点**：保留 `app.yaml`、`nixpacks.toml`、Dockerfile、依赖清单和 root-v1 参考文档等已暂存改动；未暂存的 App 完整客户端、Runner、SDK 和对应测试按远端三指令版本清理。
+
+**验证结果**：合并检查发现 Skill 仍使用 `python -m opscli.app.migrate`，但远端已删除该模块；远端版 Skill 测试也未包含本次暂存合同的断言。该部分当前存在兼容阻塞，不能视为完整验收通过。
+
+**影响范围**：仅影响 `ops-app-build-spec` 的安装内容和生成规则；在迁移入口完成对齐前，不应据此发布新模板应用。
+
+**回滚方式**：还原本次暂存的 Skill 文档、版本和资产文件，并删除本条变更记录。
+
+---
+
 ## 2026-08-26 query - 修复宽泛销售问法误识别为销售人员维度
 
 **变更原因**：规划器将“这个月销售怎么样”等短口语问法识别为销售人员维度，

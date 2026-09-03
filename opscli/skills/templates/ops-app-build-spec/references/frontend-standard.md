@@ -1,6 +1,6 @@
 # 前端项目规范
 
-本规范适用于 Vite + React 和 Vite + Vue 3。普通 HTML/CSS/JS 的固定迁移目标为 Vite + Vue 3 + Element Plus；`element-ui` 属于 Vue 2 生态，不作为新项目依赖。发现 Vue 2 或 Vue 2 专用 Vite 插件时停止并联系 IT，不做隐式主版本升级。
+本规范适用于 Vite + React 和 Vite + Vue 3。普通 HTML/CSS/JS 的固定迁移目标为 Vite + Vue 3 + Element Plus；发现 Vue 2 或 Vue 2 专用插件时停止并联系 IT，不做隐式主版本升级。
 
 ## 技术栈
 
@@ -11,9 +11,7 @@
 | 现有 Vue 3 | Vite + Vue 3，保留原语言和已验证工具链 |
 | 普通 HTML/CSS/JS | Vite + Vue 3 + Element Plus，默认保留 JavaScript |
 
-已有 Vite 项目保留当前 React/Vue 方向和已使用的组件库；不得为了统一外观而重写无关页面。普通 HTML 迁移使用 Element Plus 实现表单、表格、对话框、反馈和导航等通用组件，业务布局与展示样式可保留原 CSS。
-
-保留现有包管理器，只保留与它匹配的一个锁文件。不得无依据升级全部依赖或切换包管理器。
+已有 Vite 项目保留当前 React/Vue 方向和组件生态。保留现有包管理器，只保留匹配的一个锁文件；不得无依据升级全部依赖。
 
 ## 目录
 
@@ -24,82 +22,57 @@ frontend/
 │   ├── api/
 │   ├── assets/
 │   ├── components/
-│   ├── pages/
+│   ├── pages/ | views/
 │   ├── router/
 │   ├── styles/
 │   ├── App.tsx | App.vue
 │   └── main.tsx | main.ts | main.js
 ├── index.html
 ├── package.json
-├── tsconfig.json
-└── vite.config.ts
+├── pnpm-lock.yaml | package-lock.json | yarn.lock
+└── vite.config.ts | vite.config.js
 ```
 
-只创建实际使用的目录。页面负责路由级组合，组件负责可复用界面，`api/` 统一封装后端请求。
+只创建实际需要的目录和组件。迁移必须保持页面、路由、表单、上传下载、错误状态和权限表现，不以构建成功代替行为等价。
 
-## 部署基路径
+## 相对路径合同
 
-项目必须把 Skill 的 `assets/ops-app-config.mjs` 和 `assets/ops-app-config.d.mts` 复制到 `deployment/`。`vite.config.ts` 必须导入该共享模块读取根目录 `ops-app.config`，并按命令区分路径：
+当前 AppHub 路由合同为 `root-v1`。平台移除公开前缀后，应用只处理根路径请求。
 
-- 开发服务器：`/`
-- 构建：`/ops-app/{appId}/{appName}/`
+Vite 配置固定：
 
-构建时 `appId` 为空、`appName` 非法或配置无法解析，立即失败。不要提供无 ID 的部署兜底路径。
-
-```ts
-import { resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+```js
 import { defineConfig } from 'vite'
-import {
-  getOpsAppDeployBase,
-  loadOpsAppConfig,
-} from '../deployment/ops-app-config.mjs'
 
-const projectRoot = fileURLToPath(new URL('..', import.meta.url))
-const configPath = resolve(projectRoot, 'ops-app.config')
-
-export default defineConfig(({ command }) => ({
-  base:
-    command === 'build'
-      ? getOpsAppDeployBase(
-          loadOpsAppConfig(configPath, { requireAppId: true }),
-        )
-      : '/',
-}))
+export default defineConfig({
+  base: './',
+  build: {
+    outDir: 'dist',
+  },
+})
 ```
 
-已有 Vite 插件和其他配置必须保留并合并到返回对象，不能用示例覆盖。禁止从 `.env`、Compose 或 Docker build args 再读取应用 ID和应用名称。
+- React Router 或 Vue Router 使用 `import.meta.env.BASE_URL`，不得写死平台公开路径。
+- Axios 基础地址使用 `./api`；业务调用继续使用相对端点。
+- WebSocket 从 `window.location` 派生相对 `./ws`，并按页面协议选择 `ws:` 或 `wss:`。
+- 动态资源优先使用模块 import 或 `new URL(..., import.meta.url)`，不要从域名根拼接 `/assets`。
+- 禁止读取平台身份、公开前缀或转发头来二次改写浏览器地址。
 
-React Router 的 `basename`、Vue Router 的 history base 使用 `import.meta.env.BASE_URL`。代码动态拼接静态资源时同样使用 `import.meta.env.BASE_URL`；普通 import、CSS `url()` 和 HTML 资源交给 Vite 改写。
+## FastAPI 托管边界
 
-前端 API 默认访问 `/api` 或部署环境明确提供的 API 地址。静态资源前缀只服务前端文件，不得生成 `/ops-app/{id}/{name}/api`。
+生产环境不启动独立前端服务器。Vite 只负责构建，`frontend/dist` 由 FastAPI 托管：
 
-## React 约束
+- API、WebSocket 与 `/__apphub_healthz` 路由先注册。
+- `/assets` 静态目录在 API 之后挂载。
+- SPA fallback 最后注册，只响应非 API 的页面路径。
+- 缺少 `frontend/dist/index.html` 时启动或请求必须返回明确错误，不静默返回空页面。
+- 开发期可分别启动 Vite 与 FastAPI，但联调请求仍使用相对 URL，并通过 Vite proxy 指向后端。
 
-- 使用函数组件和 Hooks，保持现有状态管理方案。
-- Next.js 路由迁移为显式客户端路由；页面参数、查询参数和 404 行为必须逐项核验。
-- `next/image`、`next/link` 等框架组件替换为 Vite/React 可用实现，并保留可访问性和资源路径。
-- Next.js 服务端能力按迁移规范处理，不得在浏览器端复制服务端密钥或逻辑。
+## 构建与验收
 
-## Vue 与 Element Plus 约束
-
-- 使用 Vue 3 Composition API 和 `<script setup>`；已有 TypeScript 项目保留 `<script setup lang="ts">`。
-- 普通 HTML 迁移默认使用 Vue Router；只有单页且没有导航状态时可不引入路由。
-- Element Plus 优先使用直接组件导入；只有组件数量足以产生明确收益时才增加自动导入插件。
-- 使用 `@element-plus/icons-vue` 中的图标，不用 emoji 代替功能图标。
-- 将原 DOM 事件、全局变量和手工选择器转换为响应式状态、组件属性和事件；不得把整页 HTML 原样塞入一个组件。
-
-## 接口与环境变量
-
-- 只有 `VITE_` 前缀变量能进入浏览器，禁止存放密钥。
-- 提供 `.env.example`，只写变量名和安全示例。
-- 请求封装统一处理基础地址、JSON、超时和业务错误；鉴权方式以现有项目或平台契约为准，不自行发明。
-- 前后端数据结构变化时同步 TypeScript 类型和 FastAPI schema。
-
-## 验收
-
-- 安装、类型检查、测试和 `vite build` 通过。
-- 开发环境根路径可用，构建资源路径包含完整部署前缀。
-- 直接访问和刷新嵌套路由不返回 404。
-- 页面、表单、交互、错误状态和响应式布局与迁移前业务行为一致。
-- 浏览器中无资源 404、路由基路径错误、密钥泄漏或阻断性控制台错误。
+- 使用锁文件对应的冻结安装命令。
+- 生产构建输出必须位于 `frontend/dist`。
+- HTML、JS、CSS、图片和字体引用均为相对 URL。
+- 根页面、嵌套路由刷新、404、加载、空、错误状态通过测试。
+- 相对 API 与 WebSocket 在本地代理和 FastAPI 托管产物下行为一致。
+- 不把 Token、真实账号、内部地址或数据集结果写入静态产物。

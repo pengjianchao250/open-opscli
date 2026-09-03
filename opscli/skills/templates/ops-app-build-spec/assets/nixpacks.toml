@@ -1,0 +1,28 @@
+# AppHub 发布使用 Node 构建 Vite，并由 Python 运行 FastAPI。
+providers = ["node", "python"]
+
+# 两个 provider 使用同一归档，避免运行库版本漂移。
+[phases.setup]
+nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
+
+[phases."python:setup"]
+nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
+
+[phases.install]
+cmds = [
+  "...",
+  "corepack enable && pnpm --dir frontend install --frozen-lockfile",
+]
+
+[phases."python:install"]
+cmds = [
+  "...",
+  "python -c \"import opscli.app\"",
+]
+
+[phases.build]
+cmds = ["pnpm --dir frontend run build"]
+dependsOn = ["install", "python:install"]
+
+[start]
+cmd = "python -m opscli.app.migrate && uvicorn backend.app:app --host 0.0.0.0 --port 8000"

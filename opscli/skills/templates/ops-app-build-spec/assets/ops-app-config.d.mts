@@ -14,7 +14,7 @@ export function loadOpsAppConfig(
   options?: LoadOpsAppConfigOptions,
 ): OpsAppConfig;
 
-/** 从已校验配置派生唯一部署前缀。 */
+/** 从已校验配置派生唯一公开 URL 前缀。 */
 export function getOpsAppDeployBase(config: OpsAppConfig): string;
 
 /** 派生前后端镜像名；仓库部分统一转为小写。 */
