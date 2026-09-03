@@ -1,7 +1,7 @@
 """共享采集结果 MySQL 表结构。"""
 
-# v2 将低敏请求指纹提升为显式索引列，避免缓存查询依赖 JSON 路径。
-SCHEMA_VERSION = 2
+# v3 增加手动维护的预取计划与独立执行队列，支持跨宿主租约领取。
+SCHEMA_VERSION = 3
 
 # 建表语句按外键依赖顺序执行，并固定匹配 MySQL 8 的 utf8mb4 排序规则。
 SCHEMA_STATEMENTS = (
@@ -80,6 +80,60 @@ SCHEMA_STATEMENTS = (
         KEY ix_mcp_call_events_operation_time (operation, occurred_at),
         KEY ix_mcp_call_events_role_time (runtime_role, occurred_at),
         KEY ix_mcp_call_events_occurred_at (occurred_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS collection_prefetch_schedules (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        schedule_name VARCHAR(191) NOT NULL,
+        source_system VARCHAR(64) NOT NULL,
+        scenario VARCHAR(128) NOT NULL,
+        request_json JSON NOT NULL,
+        cadence VARCHAR(32) NOT NULL DEFAULT 'daily',
+        run_time TIME NOT NULL,
+        timezone VARCHAR(64) NOT NULL,
+        enabled TINYINT(1) NOT NULL DEFAULT 1,
+        next_run_at DATETIME(6) NOT NULL,
+        created_by VARCHAR(254) NOT NULL,
+        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            ON UPDATE CURRENT_TIMESTAMP(6),
+        KEY ix_prefetch_schedules_due (
+            source_system, enabled, next_run_at
+        ),
+        KEY ix_prefetch_schedules_owner (created_by, updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS collection_prefetch_runs (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+        schedule_id BIGINT UNSIGNED NOT NULL,
+        source_system VARCHAR(64) NOT NULL,
+        scenario VARCHAR(128) NOT NULL,
+        request_json JSON NOT NULL,
+        trigger_type VARCHAR(32) NOT NULL,
+        scheduled_for DATETIME(6) NOT NULL,
+        status VARCHAR(32) NOT NULL DEFAULT 'queued',
+        execution_owner VARCHAR(191) NULL,
+        lease_expires_at DATETIME(6) NULL,
+        source_job_id VARCHAR(191) NULL,
+        error_code VARCHAR(128) NULL,
+        error_message VARCHAR(500) NULL,
+        started_at DATETIME(6) NULL,
+        completed_at DATETIME(6) NULL,
+        created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+        updated_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+            ON UPDATE CURRENT_TIMESTAMP(6),
+        CONSTRAINT fk_prefetch_runs_schedule
+            FOREIGN KEY (schedule_id) REFERENCES collection_prefetch_schedules(id)
+            ON DELETE CASCADE,
+        UNIQUE KEY uq_prefetch_scheduled_run (
+            schedule_id, trigger_type, scheduled_for
+        ),
+        KEY ix_prefetch_runs_claim (
+            source_system, status, scheduled_for, lease_expires_at
+        ),
+        KEY ix_prefetch_runs_schedule_time (schedule_id, created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci
     """,
     """

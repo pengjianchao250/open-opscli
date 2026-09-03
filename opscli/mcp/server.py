@@ -6,16 +6,21 @@ import importlib
 import logging
 from contextlib import asynccontextmanager
 
+from opscli.api import wrap_mcp_app
+from opscli.google_trends.mcp_runtime import GoogleTrendsMcpRuntime
+from opscli.keepa.mcp_runtime import KeepaMcpRuntime
 from opscli.mcp.app_factory import (
     InstrumentedMcpProxy,
     _generate_api_key,
-    _load_or_create_api_key as _load_service_api_key,
     build_dual_endpoint_app,
     create_mcp_app,
     run_mcp_app,
 )
-from opscli.api import wrap_mcp_app
+from opscli.mcp.app_factory import (
+    _load_or_create_api_key as _load_service_api_key,
+)
 from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
+from opscli.mcp.prefetch import PrefetchMcpRuntime
 from opscli.mcp.tool_catalog import get_catalog
 from opscli.mcp.upstream import UpstreamMcpRuntime
 
@@ -40,8 +45,6 @@ from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite_proxy as _seller_sprite_proxy_tools
 from opscli.mcp.tools import skills as _skills_tools
 from opscli.mcp.tools import yingyan_proxy as _yingyan_proxy_tools
-from opscli.google_trends.mcp_runtime import GoogleTrendsMcpRuntime
-from opscli.keepa.mcp_runtime import KeepaMcpRuntime
 from opscli.shared.collection_storage import (
     build_collection_storage_runtime,
     collection_storage_lifespan,
@@ -101,10 +104,16 @@ def _build_server():
     keepa_runtime = KeepaMcpRuntime()
     upstream_runtime = UpstreamMcpRuntime()
     storage_runtime = build_collection_storage_runtime("mcp")
+    prefetch_runtime = PrefetchMcpRuntime(
+        storage_runtime,
+        keepa_runtime,
+        google_trends_runtime,
+    )
     registrars = (
         *_REGISTRARS_BEFORE_KEEPA,
         google_trends_runtime.register,
         keepa_runtime.register,
+        prefetch_runtime.register,
         *_REGISTRARS_AFTER_KEEPA,
         *(
             ()
@@ -119,8 +128,9 @@ def _build_server():
         async with collection_storage_lifespan(storage_runtime):
             async with google_trends_runtime.lifespan(storage_runtime):
                 async with keepa_runtime.lifespan(storage_runtime):
-                    async with upstream_runtime.lifespan():
-                        yield {}
+                    async with prefetch_runtime.lifespan():
+                        async with upstream_runtime.lifespan():
+                            yield {}
 
     server = create_mcp_app(
         name="opscli",

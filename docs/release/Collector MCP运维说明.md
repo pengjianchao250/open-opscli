@@ -91,6 +91,15 @@ OPSCLI_COLLECTION_MYSQL_DATABASE=<测试库名>
 OPSCLI_COLLECTION_MYSQL_USER=<测试运行账号>
 OPSCLI_COLLECTION_MYSQL_PASSWORD=<由 Secret 注入>
 OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false
+
+# 显式启用每日预取计划调度；两台服务器都配置，运行时只领取各自来源。
+OPSCLI_PREFETCH_SCHEDULER_ENABLED=true
+OPSCLI_PREFETCH_POLL_INTERVAL_SECONDS=15
+OPSCLI_PREFETCH_LEASE_SECONDS=1800
+
+# SellerSprite 预取必须使用 Collector 服务账号的 CredentialStore 作用域。
+OPSCLI_PREFETCH_SERVICE_CREDENTIAL_SCOPE=default
+OPSCLI_PREFETCH_SERVICE_USER_EMAIL=collector-service@example.com
 ```
 
 测试库未配置 CA 仅适用于受控内网。后续统一数据库可被内外网访问时，必须使用证书域名并配置 `OPSCLI_COLLECTION_MYSQL_SSL_CA`，同时把环境切换为 `production`。
@@ -133,6 +142,14 @@ OPSCLI_COLLECTION_MYSQL_PASSWORD="由部署 Secret 注入"
 
 OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false
 OPSCLI_COLLECTOR_MCP_URL=https://collector-mcp.internal.example.com/mcp
+
+OPSCLI_PREFETCH_SCHEDULER_ENABLED=true
+OPSCLI_PREFETCH_POLL_INTERVAL_SECONDS=15
+OPSCLI_PREFETCH_LEASE_SECONDS=1800
+
+# Keepa 未配置 OPSCLI_KEEPA_API_KEY 时需要通用 MCP 服务账号；Google Trends 上传也会复用。
+OPSCLI_PREFETCH_SERVICE_CREDENTIAL_SCOPE=default
+OPSCLI_PREFETCH_SERVICE_USER_EMAIL=mcp-service@example.com
 ```
 
 两台服务器上的主机、账号和密码必须分别替换。`OPSCLI_COLLECTION_MYSQL_SSL_CA` 可选；配置后会验证 MySQL 服务端证书和主机身份，并应使用证书匹配的域名。未配置时不启用 TLS 验证，仅适用于受控内网数据库。
@@ -205,11 +222,13 @@ EnvironmentFile=/etc/opscli/mcp.env
 
 ## 5. MySQL schema 初始化
 
-当前 schema 版本为 `2`，包含：
+当前 schema 版本为 `3`，包含：
 
 ```text
 collection_schema_versions
 collection_runs
+collection_prefetch_schedules
+collection_prefetch_runs
 collection_artifacts
 collection_datasets
 collection_records
@@ -229,21 +248,42 @@ FROM collection_schema_versions
 WHERE module_name = 'collector_storage';
 ```
 
-结果应为 `collector_storage / 2`。部署到新服务器不等于需要重新初始化数据库。
+结果应为 `collector_storage / 3`。部署到新服务器不等于需要重新初始化数据库。
 
-### 5.2 从 v1 升级到 v2
+### 5.2 从 v2 升级到 v3
+
+v3 新增 `collection_prefetch_schedules` 与 `collection_prefetch_runs`，不修改既有采集结果。
+升级时先停止连接共享数据库的两台 MCP 服务，再使用迁移账号执行仓库内的
+`scripts/migrate_collection_storage_v1_to_v3.sql`。脚本可从 v1 或 v2 重跑，且只在所需
+字段、索引和表均存在后才将版本更新为 `3`。确认结果后再部署并启动新版服务。
+
+```bash
+mysql --default-character-set=utf8mb4 \
+  --host=<host> --user=<migration_user> --password \
+  <database> < scripts/migrate_collection_storage_v1_to_v3.sql
+```
+
+```sql
+SELECT module_name, schema_version
+FROM collection_schema_versions
+WHERE module_name = 'collector_storage';
+
+SHOW TABLES LIKE 'collection_prefetch_%';
+```
+
+两台服务均设置 `OPSCLI_PREFETCH_SCHEDULER_ENABLED=true` 时不会重复执行：通用 MCP 仅领取
+Keepa 与 Google Trends，Collector MCP 仅领取 SellerSprite，运行表租约负责同类多实例互斥。
+上线前应先创建计划但保持禁用，验证服务凭证后再启用并调用
+`prefetch_schedule_run_now` 做单条冒烟。
+
+### 5.3 从 v1 升级到 v3
 
 v2 为 `collection_runs` 增加显式的 `request_fingerprint`、`cache_scope`
 和缓存查询索引。升级时先停止连接该共享数据库的两台 MCP 服务，只选择一台服务器
-临时切换迁移账号并设置：
-
-```ini
-OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=true
-```
-
-启动一次后，初始化逻辑会幂等增加字段、从已有 `request_params._cache` 回填索引值，
-并将版本更新为 `2`。完成后停止服务，恢复运行账号和
-`OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false`，再启动两台 MCP 服务。
+使用迁移账号执行 `scripts/migrate_collection_storage_v1_to_v3.sql`。脚本会幂等增加字段、
+从已有 `request_params._cache` 回填索引值，并继续创建 v3 预取表；执行结束时
+`migration_ready` 必须为 `1`，版本必须为 `3`。随后保持生产配置
+`OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=false`，部署并启动两台新版 MCP 服务。
 
 ```sql
 SELECT module_name, schema_version
@@ -260,7 +300,13 @@ WHERE Key_name = 'ix_collection_runs_cache_lookup';
 历史记录只有在 `request_params._cache` 已存在时才能自动回填；更早的任务没有稳定请求
 身份，保持空值，不应根据场景或 ASIN 猜测合并。
 
-### 5.3 全新空库
+新增列均允许 `NULL`，使用显式列名的既有 SQL 不会因字段增加而改变语义；依赖
+`SELECT *` 列位置的外部程序需要单独检查。迁移不是无影响在线操作：`ALTER TABLE`、
+历史回填和复合索引创建可能造成元数据锁、行锁及 IO/redo 压力，应在维护窗口停服执行。
+Schema 版本更新到 `3` 后，仍要求旧版本号的 MCP 进程会拒绝该数据库，因此必须先停旧
+进程、完成迁移，再启动新版进程，不能新旧版本混跑。
+
+### 5.4 全新空库
 
 仅全新空库使用迁移账号，并临时设置：
 
@@ -268,7 +314,7 @@ WHERE Key_name = 'ix_collection_runs_cache_lookup';
 OPSCLI_COLLECTION_STORAGE_AUTO_CREATE_SCHEMA=true
 ```
 
-选择一台受控服务器使用迁移账号启动一次 Collector，确认五张表和版本行存在。随后停止服务，切换运行账号，并将配置恢复为 `false`；不要让两台服务器同时执行初始化。
+选择一台受控服务器使用迁移账号启动一次 Collector，确认全部采集表和版本行存在。随后停止服务，切换运行账号，并将配置恢复为 `false`；不要让两台服务器同时执行初始化。
 
 ```sql
 SELECT table_name

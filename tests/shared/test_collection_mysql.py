@@ -88,17 +88,34 @@ def test_schema_includes_unified_mcp_call_events_table():
     assert "ix_mcp_call_events_service_endpoint_time" in telemetry_schema
 
 
-def test_schema_v2_includes_indexed_cache_identity_columns():
+def test_schema_v3_includes_cache_identity_and_prefetch_tables():
     runs_schema = next(
         statement
         for statement in SCHEMA_STATEMENTS
         if "CREATE TABLE IF NOT EXISTS collection_runs" in statement
     )
 
-    assert SCHEMA_VERSION == 2
+    schedule_schema = next(
+        statement
+        for statement in SCHEMA_STATEMENTS
+        if "CREATE TABLE IF NOT EXISTS collection_prefetch_schedules" in statement
+    )
+    run_schema = next(
+        statement
+        for statement in SCHEMA_STATEMENTS
+        if "CREATE TABLE IF NOT EXISTS collection_prefetch_runs" in statement
+    )
+
+    assert SCHEMA_VERSION == 3
     assert "request_fingerprint CHAR(64) NULL" in runs_schema
     assert "cache_scope VARCHAR(128) NULL" in runs_schema
     assert "ix_collection_runs_cache_lookup" in runs_schema
+    assert "next_run_at DATETIME(6) NOT NULL" in schedule_schema
+    assert "created_by VARCHAR(254) NOT NULL" in schedule_schema
+    assert "lease_expires_at DATETIME(6) NULL" in run_schema
+    assert "source_system VARCHAR(64) NOT NULL" in run_schema
+    assert "request_json JSON NOT NULL" in run_schema
+    assert "FOR UPDATE" not in run_schema
 
 
 def test_mysql_repository_replaces_one_run_in_a_single_transaction(tmp_path):

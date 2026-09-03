@@ -41,6 +41,12 @@ def test_mcp_exposes_expected_tools():
     assert "query_chart" in names
     assert "dashboard_data_analysis_spec_must_read" in names
     assert "dashboard_ai_bridge_spec_must_read" in names
+    assert "prefetch_schedule_create" in names
+    assert "prefetch_schedule_list" in names
+    assert "prefetch_schedule_update" in names
+    assert "prefetch_schedule_delete" in names
+    assert "prefetch_schedule_run_now" in names
+    assert "prefetch_schedule_runs" in names
     assert "mcp_user_list" not in names
 
 

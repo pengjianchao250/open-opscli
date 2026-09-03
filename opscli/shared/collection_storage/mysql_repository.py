@@ -93,6 +93,7 @@ class MySqlCollectionRepository:
                 )
                 row = cursor.fetchone()
                 self._check_cache_identity_schema(cursor)
+                self._check_prefetch_schema(cursor)
             version = _schema_version(row)
             if version != SCHEMA_VERSION:
                 raise CollectionSchemaError(
@@ -608,6 +609,22 @@ class MySqlCollectionRepository:
             detail = ", ".join(missing) if missing else "缓存查询索引"
             raise CollectionSchemaError(f"采集数据 MySQL Schema v2 不完整：缺少 {detail}")
 
+    @staticmethod
+    def _check_prefetch_schema(cursor: Any) -> None:
+        """确认 v3 预取计划和运行队列表均已创建。"""
+        missing = [
+            name
+            for name in (
+                "collection_prefetch_schedules",
+                "collection_prefetch_runs",
+            )
+            if not _schema_table_exists(cursor, name)
+        ]
+        if missing:
+            raise CollectionSchemaError(
+                "采集数据 MySQL Schema v3 不完整：缺少 " + ", ".join(missing)
+            )
+
     def _insert_artifacts(
         self, cursor: Any, run_id: int, document: ParsedCollection
     ) -> None:
@@ -749,6 +766,21 @@ def _schema_index_exists(cursor: Any, index_name: str) -> bool:
         LIMIT 1
         """,
         ("collection_runs", index_name),
+    )
+    return cursor.fetchone() is not None
+
+
+def _schema_table_exists(cursor: Any, table_name: str) -> bool:
+    """检查当前数据库是否存在指定采集表。"""
+    cursor.execute(
+        """
+        SELECT 1 AS found
+        FROM information_schema.TABLES
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = %s
+        LIMIT 1
+        """,
+        (table_name,),
     )
     return cursor.fetchone() is not None
 

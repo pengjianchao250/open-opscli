@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-03 MCP采集 - 增加手动预取计划任务
+
+**变更原因**：高频采集请求需要在业务使用前主动刷新共享结果缓存，现有系统只有即时调用和结果沉淀，缺少可由用户手动维护的每日计划任务。
+**改动点**：共享采集 Schema 升级到 v3，新增预取计划定义表和独立运行队列表；增加可重跑的 v1/v2→v3 MySQL 迁移 SQL，幂等补齐缓存身份字段和索引、回填已有 JSON 指纹，并在完整性检查通过后最后发布 v3 版本号；通用 MCP 新增创建、列表、更新、删除、立即运行和执行历史六个管理 Tool，并按已验证用户邮箱隔离所有权；每日时间使用 IANA 时区计算并统一保存 UTC `next_run_at`，到期和手动运行均复制来源、场景及请求快照；通用 MCP 只领取 Keepa/Google Trends，Collector MCP 只领取 SellerSprite，使用 `FOR UPDATE SKIP LOCKED`、执行租约、心跳续租和确定性来源任务 ID 防止多实例重复执行；计划请求递归拒绝凭证字段，SellerSprite 仅允许服务 CredentialStore 作用域下共享账号池的可重放场景，排除 `listing-analysis`；普通成功任务仍只沉淀结果和缓存指纹，不会自动升级为计划任务；基于历史调用、生产 MySQL 精确参数补导和本地只读任务队列增加默认禁用的 06:00 SellerSprite 灰度名单及候选分析报告，生产名单保持历史 `xls` 格式以匹配缓存指纹。
+**验证结果**：预取计划、试点名单、共享 Schema/Runtime、MCP 注册、Keepa 存储和 Collector 接线目标回归 `54 passed`；本次追加的迁移 SQL、共享 Schema 和 MCP 目标回归 `30 passed`；扩展共享存储相关回归 `155 passed, 1 failed`，唯一失败为仓库既有 Windows `file_lock` 不创建父目录问题，与本次改动无关；试点 JSON 格式校验、目标模块 `compileall`、Ruff E9/F63/F7/F82/I 和 `git diff --check` 均通过。直接执行 `uv run pytest` 仍会触发仓库既有 editable-build/Cython 编译错误，本次验证使用现有 `.venv` 的 `uv run --no-sync` 执行。
+**影响范围**：共享采集 MySQL Schema、通用 MCP 和 Collector MCP 的后台生命周期及六个新增管理 Tool；生产需先使用迁移账号完成 v2→v3 升级，并显式启用调度器和配置服务凭证作用域。计划定义不保存 JWT、Session、API Key、Cookie、账号密码或其他 Token。
+**回滚方式**：回退预取计划模块和宿主接线；两张新增表在确认没有新版进程使用后可保留或由 DBA 单独清理。
+
+---
+
 ## 2026-09-03 MCP采集 - 修复缓存指纹沉淀和对账恢复
 
 **变更原因**：共享结果缓存最初仅将缓存键写入 `request_params._cache`，MySQL 查询依赖 JSON 路径且缺少专用索引；Keepa 和 Google Trends 的宕机对账提交也没有携带缓存身份，导致恢复任务继续以空指纹入库，无法稳定统计重复请求或复用结果。
