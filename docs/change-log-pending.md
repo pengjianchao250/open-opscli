@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-03 skills/docs - ops-app-data-builder 统一标准模板 QueryGateway
+
+**变更原因**：`ops-app-data-builder` 原规范仍以抽象 `OpsClient` 和“项目实际适配器”描述 OPS 运行时，相关 SDK 文档还引用当前不可导入的 `opscli.app.sdk.OpsClient`。正式建站模板已经提供 `QueryGateway`、三种 Gateway 模式、FastAPI 依赖注入、数据集白名单和测试替身，继续保留抽象或旧项目兼容会导致生成重复鉴权代码或错误导入。
+
+**改动点**：Skill 升级到 `v0.1.2`，仅支持通过 `opscli app create/init` 拉取的标准模板，不兼容旧数据层项目；OPS 业务统一通过 `Depends(get_query_gateway)` 和 `QueryGateway`，线上使用 `ViewerQueryGateway`，显式 Session 和本地开发分别使用模板的 `OpsQueryGateway`、`LocalQueryGateway`；真实 OPS 数据集必须同步加入 `app.yaml.opscli.datasets`，测试必须使用 FakeGateway 和 dependency override。同步更新 Reference、静态 eval、契约测试、需求设计、落地计划及 SDK 规范/指南，删除运行时 `OpsClient` 旧表述。
+
+**影响范围**：只影响 `ops-app-data-builder` 的站点数据层生成规则和相关文档，不修改 `opscli app create/init/push`、AppHub Client 或标准模板源码。非标准模板和旧数据层项目现在会被明确阻断并提示重新初始化。
+
+**验证结果**：`SKIP_CYTHON=1 uv run pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest` 通过，`10 passed`；`PYTHONUTF8=1 python .../skill-creator/scripts/quick_validate.py opscli/skills/templates/ops-app-data-builder` 返回 `Skill is valid!`；发布清单校验返回 `release manifest valid`；旧 `opscli/app/sdk/ops_client.py`、运行时 `OpsClient` 和 `backend/app/` 描述扫描零残留。直接加载 `tests/skills/conftest.py` 仍受仓库既有缺失 `ops-dataset-query/scripts/enum_cache.py` 阻断，按既有基线使用 `--noconftest` 验证。
+
 ## 2026-08-26 query - 修复宽泛销售问法误识别为销售人员维度
 
 **变更原因**：规划器将“这个月销售怎么样”等短口语问法识别为销售人员维度，
