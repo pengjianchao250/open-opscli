@@ -1,78 +1,28 @@
-# 前端项目规范
+# 前端开发简要规范
 
-本规范适用于 Vite + React 和 Vite + Vue 3。普通 HTML/CSS/JS 的固定迁移目标为 Vite + Vue 3 + Element Plus；发现 Vue 2 或 Vue 2 专用插件时停止并联系 IT，不做隐式主版本升级。
+本文件只定义跨项目最低要求。目录细节、依赖版本、脚本命令和已有封装以目标项目的 `AGENTS.md`、`README.md` 与实际代码为准。
 
-## 技术栈
+## 技术与结构
 
-| 场景 | 标准 |
-| --- | --- |
-| 空项目 | Vite + Vue 3 + Element Plus + Axios + Vue Router + Pinia |
-| 现有 React 或 Next.js | Vite + React，保留原语言和已验证工具链 |
-| 现有 Vue 3 | Vite + Vue 3，保留原语言和已验证工具链 |
-| 普通 HTML/CSS/JS | Vite + Vue 3 + Element Plus，默认保留 JavaScript |
+- 沿用项目从模板继承的 Vue 3、Vite、Element Plus、Axios、Pinia 和 Vue Router，不重新搭脚手架或随意替换技术栈。
+- 页面放在现有 views 体系，可复用 UI 放组件目录，请求集中在 `src/api`；只有跨页面共享状态才进入 Pinia。
+- 优先复用项目现有组件、请求客户端、类型和样式变量，不复制第二套基础设施。
 
-已有 Vite 项目保留当前 React/Vue 方向和组件生态。保留现有包管理器，只保留匹配的一个锁文件；不得无依据升级全部依赖。
+## 页面行为
 
-## 目录
+- 使用 Element Plus 和项目已有图标库；功能图标不得用 emoji 代替。
+- 异步页面必须处理 loading、空数据、失败和成功状态；提交操作必须有 pending/disabled 防重复机制。
+- 表单必须校验用户输入，并展示可理解的业务错误；不得把原始堆栈或敏感字段显示给用户。
+- 桌面与移动端不得出现内容遮挡、横向溢出或关键操作不可达。
 
-```text
-frontend/
-├── public/
-├── src/
-│   ├── api/
-│   ├── assets/
-│   ├── components/
-│   ├── pages/ | views/
-│   ├── router/
-│   ├── styles/
-│   ├── App.tsx | App.vue
-│   └── main.tsx | main.ts | main.js
-├── index.html
-├── package.json
-├── pnpm-lock.yaml | package-lock.json | yarn.lock
-└── vite.config.ts | vite.config.js
-```
+## API 调用
 
-只创建实际需要的目录和组件。迁移必须保持页面、路由、表单、上传下载、错误状态和权限表现，不以构建成功代替行为等价。
+- 浏览器只使用相对 URL，并通过项目统一 Axios 客户端请求；不得硬编码 AppHub 域名、内部服务地址或平台前缀。
+- 除健康检查外，按模板统一信封 `{code,msg,data}` 判断业务成功；HTTP 200 仍可能是业务失败。
+- 错误归一化时保留服务端 `code` 和必要的 `data`，供页面做稳定分支，不依赖错误文案判断。
+- 前端不得保存密钥、JWT、Cookie 或直连内部取数服务。涉及真实业务数据时同时读取 `data-access-standard.md`。
 
-## 相对路径合同
+## 验证
 
-当前 AppHub 路由合同为 `root-v1`。平台移除公开前缀后，应用只处理根路径请求。
-
-Vite 配置固定：
-
-```js
-import { defineConfig } from 'vite'
-
-export default defineConfig({
-  base: './',
-  build: {
-    outDir: 'dist',
-  },
-})
-```
-
-- React Router 或 Vue Router 使用 `import.meta.env.BASE_URL`，不得写死平台公开路径。
-- Axios 基础地址使用 `./api`；业务调用继续使用相对端点。
-- WebSocket 从 `window.location` 派生相对 `./ws`，并按页面协议选择 `ws:` 或 `wss:`。
-- 动态资源优先使用模块 import 或 `new URL(..., import.meta.url)`，不要从域名根拼接 `/assets`。
-- 禁止读取平台身份、公开前缀或转发头来二次改写浏览器地址。
-
-## FastAPI 托管边界
-
-生产环境不启动独立前端服务器。Vite 只负责构建，`frontend/dist` 由 FastAPI 托管：
-
-- API、WebSocket 与 `/__apphub_healthz` 路由先注册。
-- `/assets` 静态目录在 API 之后挂载。
-- SPA fallback 最后注册，只响应非 API 的页面路径。
-- 缺少 `frontend/dist/index.html` 时启动或请求必须返回明确错误，不静默返回空页面。
-- 开发期可分别启动 Vite 与 FastAPI，但联调请求仍使用相对 URL，并通过 Vite proxy 指向后端。
-
-## 构建与验收
-
-- 使用锁文件对应的冻结安装命令。
-- 生产构建输出必须位于 `frontend/dist`。
-- HTML、JS、CSS、图片和字体引用均为相对 URL。
-- 根页面、嵌套路由刷新、404、加载、空、错误状态通过测试。
-- 相对 API 与 WebSocket 在本地代理和 FastAPI 托管产物下行为一致。
-- 不把 Token、真实账号、内部地址或数据集结果写入静态产物。
+- 修改请求、store、表单或关键交互时补充相关测试，覆盖行为和状态变化，不只断言文案或 CSS 类名。
+- 按目标项目命令执行相关前端测试；用户允许构建时再执行生产构建，并如实报告未执行项。

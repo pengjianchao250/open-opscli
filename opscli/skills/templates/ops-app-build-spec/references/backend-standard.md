@@ -1,83 +1,30 @@
-# 后端项目规范
+# 后端开发简要规范
 
-自动初始化和改造范围限定为 FastAPI + SQLite。发现其他后端框架或任何非 SQLite 数据库时停止并联系 IT，不做自动框架或数据库转换。
+本文件只定义跨项目最低要求。目录细节、依赖版本、数据库实现、迁移命令和已有辅助函数以目标项目的 `AGENTS.md`、`backend/CLAUDE.md` 与实际代码为准。
 
-## 目录
+## 结构与复用
 
-```text
-backend/
-├── __init__.py
-├── app.py
-├── api/
-├── db/
-├── models/
-├── schemas/
-└── services/
-migrations/
-tests/
-requirements.txt
-```
+- 保持 `backend/app.py` 为部署入口薄壳，应用装配、路由、服务和数据访问沿用模板现有分层。
+- 路由只处理鉴权、参数校验和协议转换；业务逻辑进入 service，外部系统调用进入现有 client/gateway。
+- 复用项目现有响应信封、异常、配置、数据库 session 和依赖注入，不创建第二套实现。
 
-只创建有实际职责的模块。简单项目可以合并空层，避免为了目录结构拆分一次性函数。Python 依赖清单固定在仓库根目录 `requirements.txt`。
+## API 合同
 
-## FastAPI 入口
+- 业务 API 使用项目约定的 `/api/v1` 路径，并声明 `response_model`、返回类型和必要的鉴权依赖。
+- 除健康检查外，响应遵循模板统一信封 `{code,msg,data}`；业务错误使用稳定错误码，不让调用方依赖文案。
+- 访问用户资源时必须校验归属；无权限和资源不存在统一返回 404，避免泄露资源是否存在。
+- 列表接口必须分页并显式排序；客户端可控的排序、筛选和字段只能使用白名单。
+- 对外部系统产生副作用的接口必须可幂等，并设置明确超时。
 
-`app.yaml` 的 `entrypoint` 固定指向 `backend/app.py`。模块必须导出 `app = FastAPI(...)`，并按以下顺序注册：
+## 异步、事务与安全
 
-1. `/__apphub_healthz`。
-2. `/api/*` 业务路由。
-3. WebSocket 路由。
-4. `/assets` 静态目录。
-5. SPA fallback。
+- async 路径不得直接执行阻塞 IO；同步 SDK 或 CLI 调用使用项目已有异步适配方式。
+- service 只 `flush`，由请求处理器或任务保留单一 `commit` 点；失败时回滚。
+- 不拼接用户输入生成 SQL，不在响应或日志中输出密钥、Token、Cookie、连接串或完整堆栈。
+- 配置进入项目统一 Settings，新增运行依赖必须声明在项目依赖文件中。
 
-健康检查必须快速返回 200，不执行迁移、外部请求或业务查询。业务路由只处理协议转换、参数校验和响应；业务逻辑放在 service，持久化放在 db/repository 边界。
+## 变更与验证
 
-FastAPI 直接处理根路径，不读取平台公开前缀，不设置框架子路径参数。错误响应保持稳定结构和合适 HTTP 状态码，不向客户端暴露堆栈、SQL、文件路径或密钥。
-
-## Vite 产物托管
-
-- 构建目录固定为 `frontend/dist`。
-- 使用 `StaticFiles` 托管 `frontend/dist/assets`。
-- 根页面和 SPA fallback 使用 `FileResponse` 返回 `frontend/dist/index.html`。
-- fallback 不得吞掉 `/api/*`、`/__apphub_healthz` 或 WebSocket。
-- 生产只运行当前 FastAPI 进程，不再启动额外 Web 服务。
-
-## SQLite
-
-- 数据库路径只从 `APP_DB_PATH` 读取；本地开发默认指向仓库内已忽略的 `.data/app.db`，平台在启用 SQLite 时注入 `/data/app.db`。
-- 测试必须指向 `tmp_path` 或其他临时目录，不复用本地开发数据库。
-- 优先复用 `opscli.app.get_engine()`；启用外键约束和合理的 busy timeout。
-- `.data/` 和数据库文件不得提交、复制到镜像或写入前端目录。
-- 已有数据的表结构变化放在 `migrations/*.sql`，启动前由 `python -m opscli.app.migrate` 顺序执行。
-- 需要多副本、高写入并发、跨服务共享数据库时停止并联系 IT 评估数据库迁移。
-
-## 依赖与安全
-
-根目录 `requirements.txt` 中的普通第三方依赖使用 `==` 精确锁定，平台 SDK 使用最低兼容版本，至少包含：
-
-```text
-fastapi==0.141.1
-uvicorn==0.46.0
-aukeys-opscli>=0.0.129
-```
-
-`aukeys-opscli` 必须从正式包源安装，构建阶段执行 `python -c "import opscli.app"`。若当前最低版本尚未包含该模块，先发布兼容正式版本并更新最低版本，再发布应用。禁止在项目中创建本地 `opscli/` 包、同名模块或可编辑路径依赖。
-
-密钥、Token、真实账号和生产地址不得进入源码、镜像或文档。文件上传限制大小和类型；所有外部输入在信任边界校验，SQL 使用参数化查询或 ORM 表达式。
-
-## 启动与验收
-
-平台启动命令固定为：
-
-```text
-python -m opscli.app.migrate && uvicorn backend.app:app --host 0.0.0.0 --port 8000
-```
-
-验收项：
-
-- 依赖安装、静态检查和测试通过。
-- `/__apphub_healthz`、核心 API、校验错误和异常响应通过测试。
-- 根页面、静态资源和 SPA fallback 由 FastAPI 返回。
-- API 与 WebSocket 路由不被 fallback 吞掉。
-- `APP_DB_PATH` 指向临时文件时，迁移和 SQLite 读写通过。
-- 日志中不出现密钥、完整鉴权头或敏感请求体。
+- API 合同变化时按项目命令更新 OpenAPI 文件，并同步前端调用和相关测试。
+- 修改路由、service、任务、权限或事务行为时补充相关测试；数据库迁移步骤只按目标项目文档执行。
+- 用户未授权时，不启动服务、不执行数据库写入或迁移，也不安装依赖。

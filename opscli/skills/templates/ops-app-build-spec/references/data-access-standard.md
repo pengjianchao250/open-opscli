@@ -54,6 +54,7 @@
 ```
 
 - 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite。
+- 前端不得持有 API Key、JWT、Cookie 或完整鉴权头。
 - 跨来源组合和二次加工在 service 完成。
 - SQLite 只保存允许共享或明确隔离的数据。
 - 网络调用不得放在 SQLite 写事务内。
@@ -64,7 +65,7 @@
 
 - 开发期通过 `ops-dataset-query` 或 `ops-query-wizard` 验证真实合同。
 - 运行期复用当前项目实际提供的 OPS 应用运行时适配器和 `x-ops-token` 受信通道。
-- 默认 `viewer-live`，不把未隔离结果写入共享 SQLite。
+- 默认按访问者实时取数（`viewer-live`），不把未隔离结果写入共享 SQLite。
 - 找不到真实适配器时阻止生成正式调用，不猜导入路径。
 
 ### Keepa
@@ -98,6 +99,7 @@
 - OPS 身份不来自请求体，viewer 数据未写入未隔离共享库。
 - Keepa 只使用正式 REST 端点和后端 Secret。
 - SellerSprite Mock 未被当作真实线上接入。
+- Mock、测试替身和本地回退不得被描述成线上真实接入。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。
