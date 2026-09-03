@@ -10,6 +10,15 @@
 
 ---
 
+## 2026-09-03 Skill - 以运营案例替代 Commerce Playbooks 规划器
+
+**变更原因**：代码规划器只把大模型能够直接执行的运营案例重复建模为 Python、JSON 和 CLI，当前没有非 Agent 调用方、状态恢复或确定性执行需求；同时运营反馈表明 `competitor-lookup` 按 ASIN 查询主要是指定商品及变体，不应解释为竞品发现。
+**改动点**：回退 `commerce_playbooks` Python 模块、`commerce-playbook` CLI、JSON 配方、package-data 和对应代码测试；保留轻量 `ops-commerce-playbooks` Skill，按渐进披露拆分“如何找竞品”“Listing 关键词差距”“多竞品关键词库”三个案例；从 ASIN 找竞品改为商品基线、流量词反查、关键词候选、关联关系和 `ops-amazon-stylesnap` 视觉搜索组合，并要求父子变体归并和候选证据分层；同步修正 `ops-seller-sprite` 的场景映射与 ASIN 筛选语义，版本提升至 `v0.0.21`。
+**验证结果**：`ops-commerce-playbooks` 与修改后的 `ops-seller-sprite` 均通过 Skill Creator `quick_validate.py`；轻量 Skill、三份案例路由、ASIN 筛选语义、模板安装和发版清单定向测试共 13 项通过，叠加普通 SellerSprite CLI 回归共 19 项通过；发版 manifest 检查确认新 Skill 进入 source、wheel、binary 和 binary_full；顶级 Typer 帮助冒烟退出码为 0，确认 `seller-sprite` 仍存在且已回退的 `commerce-playbook` 不再注册；`git diff --check` 通过。扩展执行 `test_cli_split.py` 时仍有 2 个仓库既有 `seller-sprite-debug` 根命令未注册失败，其余 24 项通过，与本次 Skill 修改无关。
+**影响范围**：Agent 对卖家精灵数据的运营案例引导，以及 `competitor-lookup` 按 ASIN 查询的解释；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的执行实现、参数、额度与鉴权。
+**回滚方式**：删除 `ops-commerce-playbooks` 模板和对应测试，移除 manifest 条目，并回退 `ops-seller-sprite` 的 ASIN 竞品语义说明与版本号。
+---
+
 ## 2026-09-01 MCP采集 - 增加共享 MySQL 结果缓存基础合同
 
 **变更原因**：Keepa、Google Trends 和 SellerSprite 的成功结果已经沉淀到共享 MySQL，相同业务请求仍会重复调用上游并消耗额度，需要提供默认一天的新鲜结果复用能力。

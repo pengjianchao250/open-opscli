@@ -239,6 +239,14 @@
       "tier": "internal",
       "reason": "新增 Skill，Skill 创建治理工具，依赖内部访谈流程和团队规范，暂不进入公开发版产物"
     },
+    "ops-commerce-playbooks": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "运营问题导向的轻量 Agent 案例 Skill，复用卖家精灵、StyleSnap、Keepa 与 Google Trends 现有能力"
+    },
     "ops-skills-sync": {
       "source": true,
       "wheel": true,
