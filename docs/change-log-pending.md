@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-03 文档 - 完善卖家精灵运营案例研究资料
+
+**变更原因**：官网场景记录、行业方法调研和教程设计草案具有后续案例扩展价值，但部分表述仍混淆官网功能名称与实际数据语义，设计草案也保留了已回退的结构化配方引擎方向；同时本地反馈和 REST E2E 文件属于执行产物，不应进入版本库。
+**改动点**：为官网调研补充代码快照、`competitor-lookup` ASIN 查询与变体边界，以及 Listing Analysis 默认单模块和全景分析额度口径；将行业调研和设计草案统一到轻量 `ops-commerce-playbooks` Skill、Markdown 案例和现有数据能力直接执行的第一版方案；在 `.gitignore` 忽略 `output/feedback/` 与日期化 SellerSprite REST E2E 目录，并移除已跟踪的历史反馈 JSON。
+**验证结果**：官网调研中的 16 个场景与当前 `SellerSpriteScenario` 注册表逐项一致；三份文档的本地 Markdown 引用均有效，未发现尾随空白或超过 240 字符的普通段落；`output/feedback/` 与日期化 SellerSprite REST E2E 忽略规则已通过 `git check-ignore` 验证，目标执行产物已清空；`git diff --check` 通过。
+**影响范围**：卖家精灵调研资料、第一版功能边界和本地执行产物管理；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的运行逻辑。
+**回滚方式**：回退三份调研文档、`.gitignore`、历史反馈 JSON 和本条记录即可；被清理的未跟踪执行产物需从原执行流程重新生成。
+
+---
+
 ## 2026-09-02 SellerSprite - 增加通用 FastAPI 异步任务网关
 
 **变更原因**：Keepa 已有产品化 FastAPI 场景入口，但 SellerSprite 独立部署在 Collector MCP，网站和内部系统无法使用普通 HTTP 合同提交和查询任务；同时不能为了 REST 直接在通用 MCP 进程启动第二套 SellerSprite 队列、账号池和浏览器 Runtime。
