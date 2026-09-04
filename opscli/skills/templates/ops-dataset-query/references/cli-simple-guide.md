@@ -31,9 +31,17 @@ description: CLI 模式 — 查询命令详解（opscli query simple / opscli qu
   --payload TEXT       简化查询 JSON 文件路径（与 --json 二选一）
   --json TEXT          简化查询 JSON 字符串（与 --payload 二选一）
   --output TEXT        将 payload 写入指定文件
+  --global-currency TEXT  全局币种（仅 USD/GBP/CAD/EUR/JPY/CNY），由服务端换算金额指标
   --run                构造后立即执行查询
   --pretty             格式化 JSON 输出
 ```
+
+> **币种是换算参数，不是字段**：`--global-currency` 写在请求上由服务端换算，元数据里没有 `currency` 字段属正常，不要去字段清单里找、也不要塞进 `filters`。识别到币种意图才传，未识别时不传（服务端回退用户默认配置）。多币种 = 逐币种各执行一次，除该参数外其余完全一致：
+>
+> ```bash
+> opscli query simple --table-id 1 --json '<同一份 payload>' --global-currency USD --run
+> opscli query simple --table-id 1 --json '<同一份 payload>' --global-currency EUR --run
+> ```
 
 > **【强制】`--payload` 与 `--json` 互斥**：两者只能使用其中一个，不可同时传入。
 > - `--payload`：从文件读取 JSON（适合复杂/多行查询）
