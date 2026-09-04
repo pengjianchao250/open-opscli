@@ -227,6 +227,40 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
         """返回进程存活状态。"""
         return {"status": "live"}
 
+    @app.post("/api/v1/auth/ensure", tags=["auth"])
+    async def auth_ensure() -> JSONResponse:
+        """校验并预热当前 API Key 隔离的 OPS 凭据，不返回敏感凭证。"""
+        from opscli.mcp.ops_credentials import (
+            OpsCredentialBindingError,
+            ensure_ops_credentials,
+        )
+        from opscli.mcp.tools.helpers import _get_authenticated_user_email
+
+        if not _get_authenticated_user_email():
+            return _error_response(
+                code="authentication_required",
+                message="请先完成 opscli 账号授权",
+                status_code=401,
+            )
+        try:
+            binding = await ensure_ops_credentials(require_jwt=True)
+        except OpsCredentialBindingError as exc:
+            return _error_response(
+                code=exc.code,
+                message=str(exc) or "OPS 凭据建立失败，请稍后重试",
+                status_code=502,
+            )
+        return JSONResponse(
+            {
+                "success": True,
+                "data": {
+                    "authenticated": True,
+                    "refreshed": binding.refreshed,
+                },
+                "error": None,
+            }
+        )
+
     @app.post("/api/v1/query/flow", tags=["query"])
     async def query_flow(payload: QueryFlowRequest, _request: Request) -> JSONResponse:
         """执行一次自然语言取数规划，并在可执行时返回查询结果。"""

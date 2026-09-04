@@ -22,6 +22,7 @@ from opscli.keepa.api.scenarios import (
     telemetry_dimensions as _keepa_telemetry_dimensions,
 )
 from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
+from opscli.mcp.ops_credentials import ensure_ops_credentials
 from opscli.mcp.quota import get_quota_limiter
 from opscli.shared.collection_storage.result_cache import (
     CacheMode,
@@ -54,13 +55,6 @@ def _load_keepa_settings():
     from opscli.keepa.config import load_settings
 
     return load_settings()
-
-
-async def _try_auto_mcp_login() -> dict:
-    """在 HTTP/SSE MCP 模式下尝试一步登录并缓存 session。"""
-    from .auth import auth_mcp_login
-
-    return await auth_mcp_login()
 
 
 async def keepa_spec_must_read() -> dict:
@@ -234,18 +228,16 @@ async def _keepa_run_impl(
             mark_cache_hit()
             return response
 
-        sid, jw = _get_auth_pair("ops", session_id, jwt)
         keepa_settings = _load_keepa_settings()
-        if not sid and not keepa_settings.api_key:
-            login_result = await _try_auto_mcp_login()
-            if login_result.get("success"):
-                sid, jw = _get_auth_pair("ops", session_id, jwt)
-            if not sid:
-                login_error = (login_result.get("error") or {}).get("message")
-                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
-                if login_error:
-                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
-                raise ValueError(message)
+        if keepa_settings.api_key:
+            sid, jw = _get_auth_pair("ops", session_id, jwt)
+        else:
+            binding = await ensure_ops_credentials(
+                provided_session=session_id,
+                provided_jwt=jwt,
+                require_jwt=True,
+            )
+            sid, jw = binding.session_id, binding.jwt
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter

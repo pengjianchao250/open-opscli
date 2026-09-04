@@ -105,6 +105,58 @@ def test_keepa_run_requires_authenticated_user(monkeypatch):
     assert response.json()["error"]["code"] == "authentication_required"
 
 
+def test_auth_ensure_requires_authenticated_user(monkeypatch):
+    """凭据预热接口必须建立在已验证 API Key 身份之上。"""
+    from opscli.api import create_api_app
+
+    monkeypatch.setattr(
+        "opscli.mcp.tools.helpers._get_authenticated_user_email",
+        lambda: None,
+    )
+
+    response = TestClient(create_api_app()).post("/api/v1/auth/ensure")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "authentication_required"
+
+
+def test_auth_ensure_returns_status_without_credentials(monkeypatch):
+    """凭据预热接口只返回状态，不得暴露 Session 或 JWT。"""
+    from opscli.api import app as api_module
+    from opscli.mcp.ops_credentials import OpsCredentialBinding
+
+    monkeypatch.setattr(
+        "opscli.mcp.tools.helpers._get_authenticated_user_email",
+        lambda: "user@example.com",
+    )
+
+    async def fake_ensure(*, require_jwt):
+        assert require_jwt is True
+        return OpsCredentialBinding(
+            credential_scope="isolated-scope",
+            user_email="user@example.com",
+            session_id="secret-session",
+            jwt="secret-jwt",
+            refreshed=True,
+        )
+
+    monkeypatch.setattr(
+        "opscli.mcp.ops_credentials.ensure_ops_credentials",
+        fake_ensure,
+    )
+
+    response = TestClient(api_module.create_api_app()).post("/api/v1/auth/ensure")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "success": True,
+        "data": {"authenticated": True, "refreshed": True},
+        "error": None,
+    }
+    assert "secret-session" not in response.text
+    assert "secret-jwt" not in response.text
+
+
 def test_keepa_scenarios_returns_public_definitions(monkeypatch):
     """网站可先读取 Keepa 场景注册表，避免硬编码场景参数。"""
     from opscli.api import create_api_app

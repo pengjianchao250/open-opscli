@@ -9050,3 +9050,11 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅 CI 构建脚本。
 **回滚方式**：`git checkout -- .github/workflows/build-and-publish.yml`
 ---
+## 2026-09-04 MCP 认证 - 统一 OPS 凭据自愈与预热接口
+
+**变更原因**：Keepa 首次请求遇到本地未过期但 OPS 已拒绝的 Session 时，JWT 换取返回 401，必须手工调用 `auth_mcp_login` 后才能恢复；各业务模块也不应分别维护登录分支。
+**改动点**：增强共享 `ensure_ops_credentials` 入口，统一处理 JWT 建立、认证拒绝后的凭据失效、single-flight 静默重登与持久化，并统一返回 `OPS_CREDENTIAL_ENSURE_FAILED` 错误码；`TokenFetchError` 保留 HTTP 状态供统一逻辑精确识别 401/403，非认证类 JWT 获取失败不会清凭据或重登；Keepa 改为复用该入口，并新增不返回 Session/JWT 的 `POST /api/v1/auth/ensure` 诊断预热接口。同步补充陈旧 Session、并发重登、错误分类、Keepa 委托和 REST 脱敏合同测试，并更新线上 API 使用指南中的默认认证流程、接口说明和历史验收记录。
+**验证结果**：认证 TokenManager、共享凭据、Keepa、REST API 和卖家精灵远端凭据兼容定向回归共 `63 passed`；卖家精灵整文件 `94 passed, 1 failed`，唯一失败为仓库既有 Skill 版本断言仍期望 `v0.0.20`、当前模板已为 `v0.0.21`，与本次改动无关。目标模块 `compileall`、文档 18 个 JSON 示例解析、代码围栏/尾随空白/敏感示例检查及 `git diff --check` 均通过。当前虚拟环境和系统均未安装 Ruff，因此未执行 Ruff 检查。
+**影响范围**：HTTP/SSE 多用户模式下的 OPS 凭据建立、Keepa 场景请求和新增认证诊断接口；卖家精灵继续复用同一凭据入口，默认不强制预取 JWT。
+**回滚方式**：回退共享凭据模块、Keepa 接入、REST 路由、对应测试、使用指南及本条记录。
+---

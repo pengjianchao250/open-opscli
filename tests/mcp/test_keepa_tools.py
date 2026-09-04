@@ -243,20 +243,33 @@ def test_keepa_run_returns_mysql_cache_before_auth(monkeypatch):
     assert result["data"]["export"]["url"].startswith("https://")
 
 
-def test_keepa_run_auto_logins_when_session_missing(monkeypatch):
+def test_keepa_run_ensures_shared_ops_credentials(monkeypatch):
+    from opscli.mcp.ops_credentials import OpsCredentialBinding
+
     DummyManager.last_request = None
     DummyManager.init_kwargs = None
-    auth_calls = []
-    auth_pairs = iter([(None, None), ("sid-auto", "jwt-auto")])
+    ensure_calls = []
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: next(auth_pairs))
     monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
-    monkeypatch.setattr(
-        keepa_tools,
-        "_try_auto_mcp_login",
-        lambda: _async_return(_record_and_return(auth_calls, {"success": True, "data": {"session_id": "sid-auto"}})),
-    )
+
+    async def fake_ensure(*, provided_session, provided_jwt, require_jwt):
+        ensure_calls.append(
+            {
+                "provided_session": provided_session,
+                "provided_jwt": provided_jwt,
+                "require_jwt": require_jwt,
+            }
+        )
+        return OpsCredentialBinding(
+            credential_scope="isolated-scope",
+            user_email="user@example.com",
+            session_id="sid-auto",
+            jwt="jwt-auto",
+            refreshed=True,
+        )
+
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", fake_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -267,30 +280,30 @@ def test_keepa_run_auto_logins_when_session_missing(monkeypatch):
     )
 
     assert result["success"] is True
-    assert auth_calls == [{"success": True, "data": {"session_id": "sid-auto"}}]
+    assert ensure_calls == [
+        {
+            "provided_session": None,
+            "provided_jwt": None,
+            "require_jwt": True,
+        }
+    ]
     assert DummyManager.init_kwargs == {"jwt": "jwt-auto", "session_id": "sid-auto"}
     assert DummyManager.last_request.params == {"asin": "B0088PUEPK"}
 
 
-def test_keepa_run_returns_auth_error_when_auto_login_fails(monkeypatch):
+def test_keepa_run_returns_shared_auth_error(monkeypatch):
+    from opscli.mcp.ops_credentials import OpsCredentialBindingError
+
     DummyManager.last_request = None
     DummyManager.init_kwargs = None
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
     monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
-    monkeypatch.setattr(
-        keepa_tools,
-        "_try_auto_mcp_login",
-        lambda: _async_return(
-            {
-                "success": False,
-                "error": {
-                    "message": "auth_mcp_login 仅适用于 HTTP/SSE 模式（需携带 X-MCP-API-Key）。",
-                },
-            }
-        ),
-    )
+
+    async def failed_ensure(**kwargs):
+        raise OpsCredentialBindingError("自动建立 OPS 登录态失败")
+
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", failed_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -301,8 +314,8 @@ def test_keepa_run_returns_auth_error_when_auto_login_fails(monkeypatch):
     )
 
     assert result["success"] is False
-    assert "无 session_id" in result["error"]["message"]
-    assert "auth_mcp_login" in result["error"]["message"]
+    assert result["error"]["code"] == "OPS_CREDENTIAL_ENSURE_FAILED"
+    assert "自动建立 OPS 登录态失败" in result["error"]["message"]
     assert DummyManager.last_request is None
 
 
@@ -312,15 +325,19 @@ def test_keepa_run_skips_auto_login_when_env_api_key_present(monkeypatch):
     auto_login_called = False
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: (None, None),
+    )
     monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key="env-key"))
 
-    def _unexpected_auto_login():
+    async def _unexpected_ensure(**kwargs):
         nonlocal auto_login_called
         auto_login_called = True
-        return {"success": True, "data": {"session_id": "sid-auto"}}
+        raise AssertionError("环境 Keepa API Key 不应建立 OPS 凭证")
 
-    monkeypatch.setattr(keepa_tools, "_try_auto_mcp_login", _unexpected_auto_login)
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", _unexpected_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -575,12 +592,3 @@ def test_keepa_history_normalizes_site_and_scenario_param_aliases(monkeypatch):
 def test_keepa_history_site_aliases_treat_gb_and_uk_as_one_domain():
     assert set(keepa_tools._history_site_aliases("UK")) == {"GB", "2"}
     assert set(keepa_tools._history_site_aliases("GB")) == {"UK", "2"}
-
-
-def _record_and_return(storage, value):
-    storage.append(value)
-    return value
-
-
-async def _async_return(value):
-    return value

@@ -3,7 +3,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch
 from opscli.auth import AuthClient
 from opscli.auth.core.token_manager import TokenManager
-from opscli.auth.exceptions import NotAuthenticatedError
+from opscli.auth.exceptions import NotAuthenticatedError, TokenFetchError
 from opscli.config import __version__
 
 BUILTINS = [
@@ -207,3 +207,20 @@ def test_get_token_by_session_forwards_mcp_api_key(store, reg, monkeypatch):
         assert captured["headers"]["X-MCP-API-Key"] == "mcp_key_session"
     finally:
         mcp_request_ctx.reset(token)
+
+
+def test_get_token_by_session_preserves_http_status(store, reg, monkeypatch):
+    """JWT 换取失败应保留状态码，供上层精确判断是否需要重新登录。"""
+    import httpx
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        request = httpx.Request("POST", url)
+        return httpx.Response(401, json={"message": "unauthorized"}, request=request)
+
+    monkeypatch.setattr("opscli.auth.core.token_manager.httpx.post", fake_post)
+    tm = TokenManager(store=store, registry=reg)
+
+    with pytest.raises(TokenFetchError) as exc_info:
+        tm.get_token_by_session("stale-session", "ops")
+
+    assert exc_info.value.status_code == 401
