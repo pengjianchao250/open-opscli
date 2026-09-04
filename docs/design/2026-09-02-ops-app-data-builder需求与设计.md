@@ -31,7 +31,7 @@
 
 - `opscli/skills/templates/ops-app-build-spec/SKILL.md`
 - `opscli/skills/templates/ops-app-build-spec/references/frontend-standard.md`
-- `opscli/skills/templates/ops-app-build-spec/references/backend-standard.md`
+- `opscli/skills/templates/ops-app-build-spec/references/backend-redlines.md`
 - `opscli/skills/templates/ops-app-build-spec/references/deployment-standard.md`
 - `docs/spec/API调用规范.md`
 - `docs/spec/SDK调用规范.md`

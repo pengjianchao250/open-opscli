@@ -57,7 +57,7 @@ Rufus Skill 的完整链路分为三条：Skill 编排链、MCP 后端获取链�
   -> 调用 amazon_rufus_get
   -> 必要时执行回答质量判断和问题改写重试
   -> 必要时执行一次登录恢复
-  -> 返回本次 report_path
+  -> 返回本次 report_path + report_url
 ```
 
 节点说明：
@@ -69,11 +69,11 @@ Rufus Skill 的完整链路分为三条：Skill 编排链、MCP 后端获取链�
 5. 授权偏好节点：调用 `amazon_rufus_remote_consent_status(country)`；`unknown/invalid` 时询问用户允许或拒绝，随后调用 `amazon_rufus_remote_consent_set(...)` 保存偏好。
 6. 登录态检查节点：`allowed` 时调用 `amazon_rufus_login_status(country)`；`can_get_backend=false` 或 `status=missing/invalid` 时进入登录采集。
 7. 登录采集节点：任何分支准备调用 `amazon_rufus_watch_login` 前都必须检查 `watch_login_attempted=false`，并在调用前设置为 `watch_login_attempted=true`；工具打开或连接 Chrome，等待用户登录并捕获 `/rufus/cl/streaming`。
-8. Rufus 获取节点：按原问题来源调用 `amazon_rufus_get`；成功后只使用本次返回的 `report_path`。
+8. Rufus 获取节点：按原问题来源调用 `amazon_rufus_get`；成功后只使用本次返回的 `report_path` 和 `report_url`，两者必须来自同一次调用。
 9. 回答质量判断节点：读取本次 `report_path`，对 `answer_count=0`、拒答、答非所问或复杂问题退化为商品详情的题目执行问题改写重试。
 10. 子 agent 改写节点：固定提示词为 `重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`，只改写未达到上限的不合格问题，使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 10 次。
 11. 登录恢复节点：`RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR`、`RUFUS_HEADLESS_REQUEST_ERROR` 仅在 `login_recovery_attempted=false` 且 `watch_login_attempted=false` 时最多触发一次 `amazon_rufus_logout -> amazon_rufus_watch_login -> amazon_rufus_get`。
-12. 输出节点：最终回复只展示本次 `report_path`，不得读取历史 ASIN 报告兜底。
+12. 输出节点：本次 `report_path` 只用于质量判断，最终回复固定使用 `Rufus 报告：<report_url>`，不得读取历史 ASIN 报告或 URL 兜底。
 
 ### 2. MCP 后端获取链
 
@@ -89,6 +89,7 @@ amazon_rufus_get
   -> 复用或捕获 streaming seed
   -> HeadlessRufusClient.query(...)
   -> AnswerReportWriter.write(...)
+  -> 上传本次 Markdown 报告
   -> MCP-safe 摘要响应
 ```
 
@@ -103,8 +104,8 @@ amazon_rufus_get
 7. cURL 解析节点：`RufusCurlParser` 从 cURL 命令解析 streaming URL、headers、Cookie header 和 payload template；如果没有历史 `seed_request` 摘要，服务层从 payload 的 `pageContext` 和 streaming URL 的 `tabId` 合成内部 seed。
 8. seed 选择节点：同 ASIN、同国家且可复用时使用保存的 streaming seed；否则用 headless 链路重新捕获 `/rufus/cl/streaming`。
 9. Rufus 请求节点：`HeadlessRufusClient.query(...)` 按问题逐题请求 Rufus SSE 并解析答案。
-10. 报告写入节点：`AnswerReportWriter.write(...)` 写入 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`。
-11. MCP 安全响应节点：只返回本次 `report_path` 和脱敏摘要，不返回 content、cookie、headers、payload、seed request、upload payload 或 cURL 命令。
+10. 报告写入节点：`AnswerReportWriter.write(...)` 写入 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 防止同一 ASIN 的并发请求互相覆盖，随后上传该文件。
+11. MCP 安全响应节点：返回本次 `report_path`、`report_url` 和脱敏摘要，不返回 content、cookie、headers、payload、seed request、upload payload 或 cURL 命令。
 
 ### 3. CLI fallback 链
 
@@ -115,7 +116,8 @@ CLI fallback 触发
   -> opscli amazon-rufus get-backend <ASIN> <COUNTRY> ...
   -> RufusManager.get_backend(...)
   -> 写入报告
-  -> 返回本次 report_path
+  -> 上传报告
+  -> 返回本次 report_path + report_url
 ```
 
 节点说明：
@@ -125,7 +127,9 @@ CLI fallback 触发
 3. CLI 登录采集节点：`can_get_backend=false` 或状态为 `missing/invalid` 时执行 `opscli amazon-rufus watch-login <ASIN> <COUNTRY> --close-browser --pretty`。
 4. CLI 获取节点：按原问题来源执行 `get-backend`；单题传一次 `-q`，多题重复 `-q`，默认题库传 `--skills-dir ".agents/skills"`。
 5. 共享服务节点：CLI `get-backend` 仍复用 `RufusManager.get_backend(...)`、`RufusBackendSecretProvider`、headless client 和报告写入逻辑。
-6. 输出节点：CLI fallback 成功后只返回本次报告路径；失败时直接返回错误，不切回 MCP，也不扩大 fallback 范围。
+6. 输出节点：CLI fallback 成功后返回本次 `report_path` 和 `report_url`；本地路径只用于质量判断，最终只展示 URL。失败时直接返回错误，不切回 MCP，也不扩大 fallback 范围。
+
+`--no-upload-payload` 只关闭旧 Rufus `upload_payload`，不关闭 Markdown 报告上传；带该参数的 `get-backend` 成功时仍必须返回 `report_url`。
 
 ## CLI fallback 指令
 
@@ -153,8 +157,8 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 8. 状态为 `allowed` 时，调用 `amazon_rufus_login_status(country)`。
 9. 如果亚马逊 Rufus 登录态缺失，且 `watch_login_attempted=false`，设置为 true 后调用 `amazon_rufus_watch_login(asin, country, close_browser=true)` 完成登录采集，再次检查登录态。
 10. 如果返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，且 `watch_login_attempted=false`，设置为 true 后调用 `amazon_rufus_watch_login(asin, country, close_browser=true)`，采集后按原问题来源调用 `amazon_rufus_get`。
-11. 调用 `amazon_rufus_get` 获取 Rufus 回答并写入报告。
-12. 读取本次 `report_path` 做回答质量判断；如果 `answer_count=0`、拒答、答非所问，或问题不止商品详情但回答只是商品详情，开启子 agent 改写不合格问题。
+11. 调用 `amazon_rufus_get` 获取 Rufus 回答，写入并上传报告，成功返回本次 `report_path` 和 `report_url`。
+12. 读取本次 `report_path` 做回答质量判断，并保留同次返回的 `report_url`；如果 `answer_count=0`、拒答、答非所问，或问题不止商品详情但回答只是商品详情，开启子 agent 改写不合格问题。
 13. 子 agent 固定提示词为：`重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`
 14. 用改写结果替换原问题位置，按完整问题列表重新请求 Rufus；使用 `answer_rewrite_attempts_by_question` 按问题分别记录，每个问题最多 10 次，多问题仍保持同一个 Rufus 对话。
 15. 如果命中 `RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_HEADLESS_REQUEST_ERROR`，本次 Skill 调用尚未触发登录恢复且 `watch_login_attempted=false` 时，按 `amazon_rufus_logout -> amazon_rufus_watch_login -> amazon_rufus_get` 恢复一次。
@@ -191,7 +195,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 
 ## 报告新鲜度
 
-最终回复只允许使用本次 `amazon_rufus_get` 或 CLI `get-backend` 返回的 `report_path`。不得返回历史 ASIN 报告，不得按 ASIN 在 `output/amazon-rufus/` 中自行挑选旧报告作为本次结果。
+每次成功调用返回的 `report_path` 和 `report_url` 是不可拆分的一对：`report_path` 只用于读取正文和质量判断，最终回复固定使用 `Rufus 报告：<report_url>`。登录恢复或回答质量重试成功后，必须用最新响应中的路径和 URL 成对替换旧值；当前调用或重试失败时直接返回错误，不得返回历史 ASIN 报告或历史 URL，也不得按 ASIN 在 `output/amazon-rufus/` 中自行挑选旧报告作为本次结果。
 
 ## 文件边界
 

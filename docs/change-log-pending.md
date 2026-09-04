@@ -1,3 +1,31 @@
+## 2026-09-03 Skills - 统一 ops-app-build-spec 前后端合同
+
+**变更原因**：Skill 将普通后端开发路由到简要摘要，后端红线只在评审阶段读取；前端又独立声明 API 语义，迁移用 `backend/CLAUDE.md` 仍保留旧 Nginx、Compose 和 `app/main.py` 设计，导致同一应用存在多套规范。
+
+**改动点**：普通后端开发和前端合同变更统一读取 `backend-redlines.md`；前端只消费后端路由、Pydantic Schema 和 OpenAPI；将 `backend-standard.md` 的独有 AppHub 约束并入红线后删除；把迁移用 `backend/CLAUDE.md` 收缩为项目合同入口并修正 `AGENTS.md` 文档路径；清理 SQLite 和 opscli 接入摘要中的旧 Compose、固定 session 与硬编码依赖清单；版本升至 v0.0.6，重写专项契约测试和外部设计文档引用。
+
+**验证结果**：`PYTHONUTF8=1` 下 Skill quick validate 通过；专项测试文件编译通过，并直接执行 13 个契约检查全部通过，其中包含发布清单、正式安装、有效规范树旧合同扫描和 OPSCLI 文档全文件镜像校验；迁移复制后的 10 个文档链接全部可解析；版本与发布清单 JSON 可解析；scoped `git diff --check` 通过。当前 `.venv` 未安装 pytest，未新增依赖，因此未通过 pytest runner 执行。
+
+**影响范围**：仅影响 `ops-app-build-spec` 的规范路由、迁移用后端规范模板、版本、专项测试及引用该后端规范的数据构建设计文档；不修改 AppHub 模板项目，不启动服务、不执行迁移、不提交或推送。
+
+**回滚方式**：还原本条记录及本次 `ops-app-build-spec`、专项测试和设计文档改动，并恢复 `references/backend-standard.md`。
+
+---
+
+## 2026-09-03 Skills - 收敛 ops-app-build-spec 模板与项目规范合同
+
+**变更原因**：拉取 release 后，`ops-app-build-spec` 同时存在 clone 与 `app create/init` 两套模板获取流程、单 FastAPI 与 Compose/Nginx 双服务两套发布合同，并引用缺失的初始化和根级 assets；专项测试也因合并残留无法编译。
+
+**改动点**：新项目统一改为 clone 模板，`opscli app create/init/push` 只用于首次源码交付和后续推送；保留由 Skill 维护的前端、后端、SQLite、opscli 接入、真实取数、迁移、交付和后端红线规范；`assets/backend/` 只保存迁移项目可同步的项目规范，不再承担脚手架；后端规范资产按当前模板的 `backend/app.py`、单 FastAPI、viewer/session 网关和 lifespan/Alembic 合同对齐；删除主入口中的旧 Compose、Nginx、3.11 和 `opscli.app.migrate` 描述；版本升至 v0.0.5，并重写专项契约测试。
+
+**验证结果**：项目 `.venv` 直接执行专项文件内 11 项合同检查全部通过，其中包含正式安装清单和 opscli 文档镜像一致性；Skill quick validate、测试文件编译、发布清单 JSON 和 scoped `git diff --check` 通过。当前环境未安装 pytest，未新增依赖，因此没有通过 pytest runner 执行。
+
+**影响范围**：仅调整 `ops-app-build-spec` 的规范、项目规范资产、版本、发布清单描述和专项测试；不修改模板项目，不启动服务、不执行数据库迁移、不提交或推送当前未完成 merge。
+
+**回滚方式**：还原本条记录及本次 `ops-app-build-spec`、manifest 和专项测试改动。
+
+---
+
 ## 2026-09-03 skills - 合并 release 远端 AppHub 改动，解决 ops-app-build-spec 冲突
 
 **变更原因**：本地提交 ec7c0e88（按 Compose 模式补齐 FastAPI + SQLite 后端规范）与远端 11 个提交（ops-app-build-spec 改为 AppHub 单应用发布、新增 ops-app-data-builder）在 8 个文件产生冲突，且两边对后端入口、健康探针、依赖管理、迁移方式的约定互相矛盾。经用户确认以远端 AppHub 方向为准，保留本地新增的补充文档。

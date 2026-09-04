@@ -1027,7 +1027,7 @@ def test_cli_help_exposes_backend_and_login_entries_without_legacy_get():
     assert "--remote-rufus" not in root_help.stdout
 
 
-def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tmp_path: Path):
+def test_cli_get_backend_calls_backend_manager_publishes_report_with_payload_disabled(monkeypatch, tmp_path: Path):
     captured = {}
 
     class DummyManager:
@@ -1052,7 +1052,17 @@ def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tm
                 },
             }
 
+    class DummyFileUploadClient:
+        def upload(self, path: Path, **kwargs):
+            captured["upload_path"] = Path(path)
+            captured["upload_kwargs"] = kwargs
+            return types.SimpleNamespace(url="https://files.example/rufus-report.md")
+
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.setattr(
+        "opscli.amazon_rufus.services.answer_report_publisher.FileUploadClient",
+        DummyFileUploadClient,
+    )
     monkeypatch.chdir(tmp_path)
 
     result = runner.invoke(
@@ -1065,26 +1075,95 @@ def test_cli_get_backend_calls_backend_manager_and_writes_report(monkeypatch, tm
             "这是什么商品？",
             "-q",
             "这个商品评价如何？",
+            "--no-upload-payload",
         ],
     )
     report_path, report_text = _read_single_rufus_report(tmp_path)
 
     assert result.exit_code == 0
     assert "Rufus 答案报告已保存：" in result.stdout
-    assert report_path.name.startswith("B0TEST1234-")
-    assert captured == {
+    assert "Rufus 答案报告地址：https://files.example/rufus-report.md" in result.stdout
+    assert re.fullmatch(r"B0TEST1234-\d{8}-\d{6}-[0-9a-f]{32}\.md", report_path.name)
+    assert {key: captured[key] for key in (
+        "asin",
+        "country",
+        "question",
+        "questions",
+        "skills_dir",
+        "timeout_seconds",
+        "include_upload_payload",
+        "submit_upload",
+    )} == {
         "asin": "B0TEST1234",
         "country": "US",
         "question": None,
         "questions": ["这是什么商品？", "这个商品评价如何？"],
         "skills_dir": None,
         "timeout_seconds": 180,
-        "include_upload_payload": True,
+        "include_upload_payload": False,
         "submit_upload": False,
     }
+    assert captured["upload_path"].resolve() == report_path.resolve()
+    assert captured["upload_kwargs"] == {
+        "purpose": "amazon_rufus_report",
+        "folder": "amazon-rufus/reports",
+        "filename": report_path.name,
+        "metadata": {
+            "asin": "B0TEST1234",
+            "country": "US",
+            "question_count": 2,
+            "answer_count": 2,
+            "format": "markdown",
+        },
+    }
+    assert "public" not in captured["upload_kwargs"]
     assert "这是什么商品" in report_text
     assert "storage_state" not in report_text
     assert "cookie" not in report_text.lower()
+
+
+def test_cli_get_backend_returns_upload_error_and_keeps_local_report(monkeypatch, tmp_path: Path):
+    class DummyManager:
+        def get_backend(self, **kwargs):
+            return {
+                "asin": kwargs["asin"],
+                "country": kwargs["country"],
+                "page_url": "https://www.amazon.com/dp/B0TEST1234",
+                "question_count": 1,
+                "questions": [kwargs["question"]],
+                "answers": [{"text": "适合", "isSuccess": True, "summaryText": ""}],
+            }
+
+    class FailingFileUploadClient:
+        def upload(self, path: Path, **kwargs):
+            raise RuntimeError("remote sensitive response")
+
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
+    monkeypatch.setattr(
+        "opscli.amazon_rufus.services.answer_report_publisher.FileUploadClient",
+        FailingFileUploadClient,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        app,
+        ["get-backend", "B0TEST1234", "US", "-q", "这个商品适合送礼吗？", "--no-upload-payload"],
+    )
+    report_path, _ = _read_single_rufus_report(tmp_path)
+    payload = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    assert payload == {
+        "success": False,
+        "command": "amazon-rufus get-backend",
+        "data": None,
+        "error": {
+            "code": "RUFUS_REPORT_UPLOAD_ERROR",
+            "message": "Rufus 报告上传失败，已保留本地文件",
+            "report_path": report_path.relative_to(tmp_path).as_posix(),
+        },
+    }
+    assert "remote sensitive response" not in result.stdout
 
 
 def test_cli_remote_consent_status_and_set_are_safe(monkeypatch, tmp_path: Path):

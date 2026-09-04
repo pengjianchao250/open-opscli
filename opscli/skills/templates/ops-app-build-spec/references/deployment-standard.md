@@ -16,8 +16,9 @@
 
 ## 当前 opscli 流程
 
-- `opscli app create`：创建或绑定 AppHub 应用。
-- `opscli app init`：同步本地绑定和应用源码仓库 remote，不覆盖已有业务源码。
+- 新项目源码已经通过统一模板仓库 clone，不再通过 `opscli app init` 获取模板。
+- `opscli app create`：首次交付前创建或绑定 AppHub 应用。
+- `opscli app init`：将已克隆项目绑定到应用源码仓库并同步 remote，不覆盖已有业务源码。
 - `opscli app push`：整体暂存、提交并普通推送 `HEAD:main`，不执行强制推送。
 
 执行会修改 Git 或远端状态的命令前：

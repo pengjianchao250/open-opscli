@@ -2,7 +2,7 @@
 
 ## 适用范围
 
-本文描述 `ops-amazon-rufus` 的 MCP-first 获取规则，包括 MCP 鉴权、bounded CLI fallback、remote-consent 授权偏好、登录态检查、Amazon 登录采集、Rufus 获取、错误恢复和报告路径输出。
+本文描述 `ops-amazon-rufus` 的 MCP-first 获取规则，包括 MCP 鉴权、bounded CLI fallback、remote-consent 授权偏好、登录态检查、Amazon 登录采集、Rufus 获取、错误恢复和报告路径与地址输出。
 
 题库维护见 `references/question-templates.md`。报告格式与拒答改写见 `references/rufus-report-formatting.md`。
 
@@ -97,7 +97,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 10. 如果 `amazon_rufus_login_status` 返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，且 `watch_login_attempted=false`，设置 `watch_login_attempted=true` 后调用 `amazon_rufus_watch_login(asin, country, close_browser=true)`；本分支不允许 CLI fallback。
 11. 如果 `can_get_backend=false` 或 `status=missing/invalid`，说明没有可用亚马逊 Rufus 登录态；仅当 `watch_login_attempted=false` 时，设置 `watch_login_attempted=true` 并调用 `amazon_rufus_watch_login(asin, country, close_browser=true)` 完成登录采集并关闭本次由工具启动的调试浏览器。
 12. 登录采集成功后，再次调用 `amazon_rufus_login_status(country)` 确认可用。
-13. 调用 `amazon_rufus_get` 获取 Rufus 回答。
+13. 调用 `amazon_rufus_get` 获取 Rufus 回答，成功时接收本次 `report_path` 和 `report_url`。
 14. 每次 Skill 调用开始时记录 `login_recovery_attempted=false`，用于限制本轮最多触发一次登录恢复。
 15. 每次 Skill 调用开始时记录 `watch_login_attempted=false`，用于限制同一次 Skill 调用最多触发一次 `watch_login`。
 16. 每次 Skill 调用开始时记录 `answer_rewrite_attempts_by_question={}`，用于按问题分别限制回答质量重试；每个问题最多 10 次。
@@ -212,7 +212,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 
 ## 回答质量判断与问题重写重试
 
-每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须读取本次 `report_path` 做回答质量判断。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
+每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须读取本次 `report_path` 做回答质量判断，并保留同次返回的 `report_url`。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
 
 ### 不合格判断
 
@@ -247,7 +247,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 5. 保持原 ASIN、国家站点和已取得的亚马逊 Rufus 登录态，不得因为问题改写触发 `amazon_rufus_logout`。
 6. `answer_rewrite_attempts_by_question` 按问题分别记录次数；每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数，每个问题最多 10 次。
 7. 回答质量重试与登录恢复相互独立，不得重置 `login_recovery_attempted` 或 `watch_login_attempted`，不得扩大 CLI fallback 范围。
-8. 某题达到 10 次后仍不合格时停止重试该题，其他不合格题目仍可按各自上限继续；最终回复只展示最新一次 `report_path` 并说明对应题目已达到回答质量重试上限。
+8. 某题达到 10 次后仍不合格时停止重试该题，其他不合格题目仍可按各自上限继续；最终回复只展示最新一次成功调用的 `report_url`，并说明对应题目已达到回答质量重试上限。
 
 ## MCP 登录采集入口
 
@@ -374,17 +374,21 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 
 CLI fallback 不读取、不展示、不记录 cookie、localStorage、`storage_state`、headers、payload、seed request 或 upload payload。CLI fallback 失败时直接返回错误，不切回 MCP，也不扩大 fallback 范围。
 
+`--no-upload-payload` 只关闭旧 Rufus `upload_payload`，不关闭 Markdown 报告上传；带该参数的 `get-backend` 成功时仍必须返回 `report_url`。
+
 ## 输出要求
 
-MCP 工具或 CLI 获取成功时返回 `report_path`。完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md`。
+MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` 和 `report_url`。完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 用于隔离同一 ASIN 的并发请求，随后上传并返回远程地址。
 
 ### 报告新鲜度约束
 
-最终回复用户时只展示本次 `report_path`。如需正文，只读取本次工具返回的 `report_path` 指向的 Markdown 文件。
+最终回复用户时固定使用 `Rufus 报告：<report_url>`。本地 `report_path` 只用于读取正文和回答质量判断，不向用户展示。
 
 禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果。
 
-登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 成功时，必须使用重试成功响应中的最新 `report_path` 覆盖旧路径；如果无法确认本次 `report_path`，直接报错，不用历史报告兜底。
+登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须使用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不得混用不同调用的路径和 URL。
+
+当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。
 
 除非用户明确要求排障，不输出：
 

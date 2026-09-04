@@ -155,7 +155,7 @@ async def amazon_rufus_get(
     skills_dir: str | None = None,
     timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
 ) -> dict:
-    """获取指定 ASIN 的 Rufus 回答并写入本地报告。
+    """获取指定 ASIN 的 Rufus 回答，发布报告并返回本地路径与远端地址。
 
     Args:
         asin: 目标 ASIN

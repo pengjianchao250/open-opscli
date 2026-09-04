@@ -9,7 +9,7 @@ from opscli.skills.packaging import validate_release_manifest
 from opscli.skills.services.manager import SkillsManager
 
 
-ROOT = Path(__file__).parents[2]
+ROOT = Path(__file__).resolve().parents[2]
 SKILL_DIR = ROOT / "opscli" / "skills" / "templates" / "ops-app-build-spec"
 
 
@@ -18,21 +18,26 @@ def _read(relative_path: str) -> str:
     return (SKILL_DIR / relative_path).read_text(encoding="utf-8")
 
 
-def test_ops_app_build_spec_has_consistent_scope():
-    """Skill 只携带动态规范，不再打包项目资产。"""
+def _rewrite_bundled_links(content: str, replacements: dict[str, str]) -> str:
+    """只改写复制到同目录后失效的文档链接。"""
+    for source, target in replacements.items():
+        content = content.replace(source, target)
+    return content
+
+
+def test_ops_app_build_spec_has_consistent_metadata() -> None:
+    """Skill 名称、版本和后端规范入口必须一致。"""
     skill = _read("SKILL.md")
     version = json.loads(_read("data/VERSION.json"))
-    files = sorted(path.relative_to(SKILL_DIR).as_posix() for path in SKILL_DIR.rglob("*") if path.is_file())
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.5"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.6"}
+    assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
-def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
-    """真实业务数据需求必须进入独立规范和数据层构建 Skill。"""
+def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
+    """普通后端开发和前端合同变更必须读取同一后端红线。"""
     skill = _read("SKILL.md")
-    standard = _read("references/data-access-standard.md")
-    content = "\n".join((skill, standard))
 
     for required in (
         "references/data-access-standard.md",
@@ -51,11 +56,21 @@ def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
         "pending `job_id`",
         "XLS/XLSX",
         "第一阶段不增加运行时数据 YAML",
-    ): 
-        assert required in content
+        "以后端实现为事实源",
+        "生成的 OpenAPI 和实际路由共同定义前后端合同",
+        "修改前端请求、错误处理或前后端共享类型",
+        "修改 FastAPI API、服务、任务或配置",
+        "references/backend-redlines.md",
+        "无论新项目还是已绑定项目",
+        "不得用前端兼容分支掩盖后端合同漂移",
+    ):
+        assert required in skill
 
-def test_ops_app_build_spec_clones_and_recognizes_the_template():
-    """新项目克隆模板，已绑定业务远端的项目按合同识别。"""
+    assert "references/backend-standard.md" not in skill
+
+
+def test_ops_app_build_spec_clones_and_recognizes_template() -> None:
+    """新项目必须克隆模板，已有项目按 AppHub 合同识别。"""
     skill = _read("SKILL.md")
 
     for required in (
@@ -64,70 +79,90 @@ def test_ops_app_build_spec_clones_and_recognizes_the_template():
         "不能只根据 remote 判断",
         "app.yaml",
         "backend/app.py",
+        "docs/apphub-contract.md",
         "合同缺失时读取迁移规范",
     ):
         assert required in skill
 
-    assert "create-vue" not in skill
-    assert "assets/app.yaml" not in skill
+    for obsolete in ("create-vue", "assets/app.yaml", "ops-app.config"):
+        assert obsolete not in skill
 
 
-def test_ops_app_build_spec_separates_template_and_release_updated_rules():
-    """项目实现规则归模板，动态限制归当前 Skill。"""
-    skill = _read("SKILL.md")
-
-    for required in (
-        "模板项目负责目录结构、具体开发命令、依赖版本、数据库实现和本地运行说明",
-        "当前 Skill 负责跨项目最低开发规范",
-        "前后端底线、取数、凭证、安全、AppHub 平台和源码交付限制以当前 Skill 为准",
-        "前后端参考只保留跨项目强制规则",
-        "references/frontend-standard.md",
-        "references/backend-standard.md",
-    ):
-        assert required in skill
-
-    assert "references/initialization-standard.md" not in skill
-
-
-def test_ops_app_build_spec_keeps_concise_frontend_rules():
-    """前端只保留模板之上的跨项目底线。"""
+def test_ops_app_build_spec_frontend_follows_backend_contract() -> None:
+    """前端只能消费后端路由、Schema 和 OpenAPI。"""
     frontend = _read("references/frontend-standard.md")
 
     for required in (
-        "Vue 3、Vite、Element Plus、Axios、Pinia 和 Vue Router",
-        "功能图标不得用 emoji 代替",
-        "loading、空数据、失败和成功状态",
-        "pending/disabled 防重复机制",
-        "浏览器只使用相对 URL",
-        "HTTP 200 仍可能是业务失败",
+        "API 合同以后端为主",
+        "backend-redlines.md",
+        "实际路由和 Pydantic Schema",
+        "前端不得维护第二套口径",
+        "具体 API 前缀、响应形状、成功语义和业务失败表达只从目标项目后端合同读取",
+        "是否存在 HTTP 200 内的业务失败，只按目标项目合同判断",
+        "先由后端更新路由、Schema、相关测试和 OpenAPI",
+        "不新增前端兼容分支掩盖漂移",
         "前端不得保存密钥、JWT、Cookie",
-        "data-access-standard.md",
     ):
         assert required in frontend
 
 
-def test_ops_app_build_spec_keeps_concise_backend_rules():
-    """后端只保留模板之上的跨项目底线。"""
-    backend = _read("references/backend-standard.md")
+def test_ops_app_build_spec_backend_redlines_use_current_apphub_design() -> None:
+    """后端红线必须包含当前 AppHub 基线并移除旧设计。"""
+    redlines = _read("references/backend-redlines.md")
 
     for required in (
+        "普通后端开发、前后端合同变更和后端评审的强制入口",
         "backend/app.py",
-        "路由只处理鉴权、参数校验和协议转换",
-        "response_model",
-        "无权限和资源不存在统一返回 404",
-        "列表接口必须分页并显式排序",
-        "async 路径不得直接执行阻塞 IO",
-        "service 只 `flush`",
-        "数据库迁移步骤只按目标项目文档执行",
+        "docs/apphub-contract.md",
+        "Pydantic Schema 和生成的 OpenAPI",
+        "路由只做鉴权、参数校验、协议转换和事务收口",
+        "单个 FastAPI 进程托管 API 和前端构建产物",
+        "目标项目现有依赖清单",
+        "AppHub SQLite 应用保持单写实例",
+        "viewer、session 或 local 网关",
+        "用户未授权时",
+        "--autogenerate",
+        "alembic_version",
     ):
-        assert required in backend
+        assert required in redlines
+
+    for obsolete in (
+        "backend/docs/开发指南/",
+        "Compose 固定单副本",
+        "必须写进 `pyproject.toml`",
+        "服务端一律显式传入 `session_id` / `jwt`",
+        "AI开发通用规范",
+    ):
+        assert obsolete not in redlines
 
 
-def test_ops_app_build_spec_keeps_data_access_constraints():
-    """真实取数限制必须保留并随 opscli 发版更新。"""
-    skill = _read("SKILL.md")
-    data_access = _read("references/data-access-standard.md")
-    content = skill + data_access
+def test_ops_app_build_spec_active_references_do_not_restore_legacy_deployment() -> None:
+    """强制读取的 references 不得重新引入旧双服务合同。"""
+    content = "\n".join(
+        _read(relative_path)
+        for relative_path in (
+            "references/backend-redlines.md",
+            "references/frontend-standard.md",
+            "references/sqlite-standard.md",
+            "references/opscli-integration-standard.md",
+            "references/data-access-standard.md",
+            "references/deployment-standard.md",
+        )
+    )
+
+    for obsolete in (
+        "Compose 中 SQLite 服务固定单副本",
+        "Compose 管理的持久卷",
+        "app/main.py",
+        "ops-app.config.appId",
+        "/ops-app/{appId}/{appName}/",
+    ):
+        assert obsolete not in content
+
+
+def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
+    """真实取数必须保留后端代理和凭证隔离边界。"""
+    content = _read("SKILL.md") + _read("references/data-access-standard.md")
 
     for required in (
         "$ops-app-data-builder",
@@ -140,8 +175,28 @@ def test_ops_app_build_spec_keeps_data_access_constraints():
         assert required in content
 
 
-def test_ops_app_build_spec_keeps_only_generic_migration_rules():
-    """迁移保留通用流程，不复制数据库实现细节。"""
+def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
+    """opscli 接入必须支持项目网关并按请求隔离凭证。"""
+    integration = _read("references/opscli-integration-standard.md")
+
+    for required in (
+        "viewer、session、local",
+        "X-Ops-Token",
+        "X-Session-Id",
+        "LOCAL_AUTH_FALLBACK_ENABLED",
+        "每个请求构造",
+        "asyncio.to_thread",
+        "跨请求缓存凭证",
+        "userEmail",
+    ):
+        assert required in integration
+
+    for obsolete in ("polarisUserToken", "ops-app.config", "/ops-app/{appId}/{appName}/"):
+        assert obsolete not in integration
+
+
+def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
+    """迁移规范只负责迁移流程，不复制实现细节。"""
     migration = _read("references/migration-standard.md")
 
     for required in (
@@ -150,6 +205,7 @@ def test_ops_app_build_spec_keeps_only_generic_migration_rules():
         "只迁移业务代码与必要配置",
         "取数能力按当前 `data-access-standard.md` 重新核对",
         "无法确认行为等价时停止",
+        "assets/backend/",
     ):
         assert required in migration
 
@@ -157,245 +213,127 @@ def test_ops_app_build_spec_keeps_only_generic_migration_rules():
         assert duplicated_detail not in migration
 
 
-def test_ops_app_build_spec_enforces_template_first_initialization():
-    """全新项目必须先创建和拉取模板，再允许 Skill 写入项目文件。"""
-    initialization = _read("references/initialization-standard.md")
-    skill = _read("SKILL.md")
-
-    for intent in ("新建站点", "新建看板", "从零开发运营数据应用"):
-        assert intent in skill
-
-    for required in (
-        "模板先行初始化规范",
-        'opscli app create "<站点显示名称>" --path <项目根目录>',
-        "opscli app init <项目根目录>",
-        "template_applied=true",
-        "模板是唯一基线",
-        "不得提前写入 `assessment.md`",
-        "不运行 `pnpm create vue`",
-        ".opscli/app.json.app_id",
-        ".opscli/app.json.slug",
-        "ops-app.config.appId",
-        "ops-app.config.appName",
-        "模板缺少 `ops-app.config`",
-        "已有项目边界",
-    ):
-        assert required in initialization
-
-    assert "references/initialization-standard.md" in skill
-    assert "### 0. 新项目模板门禁" in skill
-    assert "本 Skill 作为统一建站入口" in skill
-    assert "template_applied=true" in skill
-    assert "不进入后续写文件步骤" in skill
-    assert "pnpm create vue@latest frontend" not in initialization
-
-
-def test_ops_app_build_spec_keeps_app_id_and_deployment_gates():
-    """首次发布、路径和 Compose 产物必须形成同一合同。"""
-    skill = _read("SKILL.md")
-    frontend = _read("references/frontend-standard.md")
-    deployment = _read("references/deployment-standard.md")
-    content = "\n".join((skill, frontend, deployment))
-
-    for required in (
-        "ops-app.config",
-        '"appId": null',
-        "/ops-app/{appId}/{appName}/",
-        "deployment/Dockerfile",
-        "deployment/compose.yaml",
-        "deployment/nginx.conf.template",
-        "deployment/ops-app-config.mjs",
-        "deployment/render-nginx-config.mjs",
-        "frontend-runtime",
-        "backend-runtime",
-        "精确 `COPY` 分层",
-        "BuildKit 缓存",
-        "Dockerfile 不声明 `VOLUME`",
-        "Nginx 以非 root 用户监听 `8080`",
-        "根目录 `.dockerignore`",
-        "docker compose -f deployment/compose.yaml config",
-        "SQLite 使用持久卷",
-    ):
-        assert required in content
-
-    assert "URL 安全单路径段" in content
-    assert "禁止 `/`" in content
-    assert ".opscli/app.json.app_id" in content
-    assert ".opscli/app.json.slug" in content
-    assert "不在首次发布阶段重新注册应用" in content
-    assert "opscli app push <root> --message <summary>" in content
-    assert "不启动容器" in content
-    assert "全新 opscli app 必须在模板项目上改造" in content
-
-
-def test_ops_app_build_spec_provides_required_nginx_template():
-    """项目内 Nginx 必须使用固定路径、回退和缓存合同。"""
-    template = _read("assets/nginx.conf.template")
+def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
+    """源码交付必须保持当前 AppHub 单应用合同。"""
     deployment = _read("references/deployment-standard.md")
 
     for required in (
         "apiVersion: apps.aukeys/v1",
         'python: "3.12"',
+        "entrypoint: backend/app.py",
         "uvicorn backend.app:app --host 0.0.0.0 --port 8000",
+        "单应用进程合同",
         "opscli app create",
         "opscli app init",
         "opscli app push",
         "整体暂存当前项目改动",
-        "业务代码推回统一模板仓库",
         "push 成功只表示源码到达远端",
         "不得报告“部署成功”",
         "ops-feedback",
+        "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
     ):
         assert required in deployment
 
-    assert "python -m opscli.app.migrate" not in deployment
-    assert "nginx.conf.template" not in deployment
+    for obsolete in ("python -m opscli.app.migrate", "ops-app.config"):
+        assert obsolete not in deployment
 
 
-def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
-    """精简后的动态规范必须通过正式安装流程。"""
+def test_ops_app_build_spec_backend_template_is_project_entry() -> None:
+    """迁移用后端模板只保留项目合同和特化入口。"""
+    agents = _read("assets/backend/AGENTS.md")
+    claude = _read("assets/backend/CLAUDE.md")
+
+    for required in (
+        "项目规范入口：`CLAUDE.md`",
+        "../docs/开发指南/FastAPI后端开发通用规范.md",
+        "../docs/openapi.json",
+        "docs/apphub-contract.md",
+    ):
+        assert required in agents
+
+    for required in (
+        "只保存 AppHub 合同和项目特有约定",
+        "backend/app.py",
+        "backend/main.py",
+        "/__apphub_healthz",
+        "APP_DB_PATH",
+        "生成的 `docs/openapi.json`",
+        "当前 Skill 的 `backend-redlines.md` 是跨项目强制红线",
+        "前端不得单独维护另一套 API 协议",
+        "viewer、session、local 或其他网关模式",
+        "项目特有约定",
+    ):
+        assert required in claude
+
+    for obsolete in (
+        "app/main.py",
+        "ops-app.config",
+        "前端 Nginx",
+        "Compose healthcheck",
+        "uv run uvicorn app.main:app",
+        "polarisUserToken",
+        "docs/API规范/openapi.json",
+    ):
+        assert obsolete not in claude
+
+def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
+    """Skill 必须通过正式清单检查并完整安装。"""
     problems = validate_release_manifest(ROOT / "opscli" / "skills" / "templates")
     assert not any("ops-app-build-spec" in problem for problem in problems)
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.5"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.6"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
-    assert (installed / "SKILL.md").exists()
-    assert (installed / "references" / "frontend-standard.md").exists()
-    assert (installed / "references" / "initialization-standard.md").exists()
-    assert (installed / "references" / "backend-standard.md").exists()
-    assert (installed / "references" / "data-access-standard.md").exists()
-    assert (installed / "references" / "migration-standard.md").exists()
-    assert (installed / "references" / "deployment-standard.md").exists()
-    assert (installed / "assets" / "nginx.conf.template").exists()
-    assert (installed / "assets" / ".dockerignore").exists()
-    assert (installed / "assets" / "ops-app.config").exists()
-    assert (installed / "assets" / "ops-app-config.mjs").exists()
-    assert (installed / "assets" / "ops-app-config.d.mts").exists()
-    assert (installed / "assets" / "render-nginx-config.mjs").exists()
-    assert (installed / "references" / "sqlite-standard.md").exists()
-    assert (installed / "references" / "backend-redlines.md").exists()
-    assert (installed / "references" / "opscli-integration-standard.md").exists()
-    assert (installed / "assets" / "backend" / "AGENTS.md").exists()
-    assert (installed / "assets" / "backend" / "CLAUDE.md").exists()
-    assert len(list((installed / "assets" / "backend" / "docs" / "开发指南").glob("*.md"))) == 6
-
-
-BACKEND_DOCS = (
-    "FastAPI后端开发通用规范.md",
-    "SQLite数据库使用通用规范.md",
-    "OPSCLI_SDK调用规范.md",
-    "OPSCLI_SDK使用文档.md",
-    "OPSCLI_API调用规范.md",
-    "OPSCLI_API使用文档.md",
-)
-
-
-def test_ops_app_build_spec_backend_references_follow_spec_contracts():
-    """后端 references 必须保持 AppHub 运行合同，并正确指向补充规范文档。"""
-    backend = _read("references/backend-standard.md")
-    sqlite = _read("references/sqlite-standard.md")
-    redlines = _read("references/backend-redlines.md")
-    integration = _read("references/opscli-integration-standard.md")
-    skill = _read("SKILL.md")
-
-    # AppHub 运行合同：单进程托管、平台健康路由、APP_DB_PATH、requirements.txt
-    for required in (
-        "backend/app.py",
-        "/__apphub_healthz",
-        "APP_DB_PATH",
-        "requirements.txt",
-        "sqlite-standard.md",
-        "opscli-integration-standard.md",
-        "backend-redlines.md",
-        "assets/backend/",
-    ):
-        assert required in backend, required
-    # 补充文档与 AppHub 合同冲突时必须声明以 backend/deployment 规范为准
-    assert "以本文与 `deployment-standard.md` 为准" in backend
-
-    for required in (
-        "journal_mode",
-        "foreign_keys",
-        "busy_timeout",
-        "BEGIN IMMEDIATE",
-        "sqlite+aiosqlite",
-        "NullPool",
-        "render_as_batch",
-        "VACUUM INTO",
-        "backup(",
-        "INTEGER",
-        "只能有一个写事务",
-    ):
-        assert required in sqlite, required
-
-    assert "唯一入口" in redlines
-    assert "--autogenerate" in redlines
-    assert "alembic_version" in redlines
-    assert "polarisUserToken" in integration
-    assert "X-Session-Id" in integration
-    assert "get_me(session_id=" in integration
-    assert "set_explicit_credentials" in integration
-    assert "userEmail" in integration
-
-    for reference in (
-        "references/sqlite-standard.md",
+    for relative_path in (
+        "SKILL.md",
+        "references/frontend-standard.md",
         "references/backend-redlines.md",
+        "references/sqlite-standard.md",
         "references/opscli-integration-standard.md",
+        "references/data-access-standard.md",
+        "references/migration-standard.md",
+        "references/deployment-standard.md",
+        "assets/backend/AGENTS.md",
+        "assets/backend/CLAUDE.md",
     ):
-        assert reference in skill
-    assert "`assets/backend/`" in skill
-    assert "以 `backend-standard.md` 与 `deployment-standard.md` 为准" in skill
+        assert (installed / relative_path).exists(), relative_path
+
+    assert not (installed / "references" / "backend-standard.md").exists()
 
 
-def test_ops_app_build_spec_backend_templates_are_filled_or_marked():
-    """AGENTS 模板路径必须已固定，CLAUDE 模板只保留项目特化占位符。"""
-    agents = _read("assets/backend/AGENTS.md")
-    claude = _read("assets/backend/CLAUDE.md")
-
-    assert "〈" not in agents
-    for doc in BACKEND_DOCS:
-        assert f"docs/开发指南/{doc}" in agents, doc
-    assert "docs/API规范/openapi.json" in agents
-
-    assert "loguru" not in claude
-    assert "backend/" in claude
-    assert "uv run uvicorn app.main:app" in claude
-    assert "sqlite+aiosqlite" in claude
-    assert "BEGIN IMMEDIATE" in claude
-    assert "render_as_batch" in claude
-    assert "### 4.8 opscli 接入" in claude
-    assert "polarisUserToken" in claude
-    assert "docs/CHANGELOG.md" in claude
-    assert "〈docs/" not in claude
-    assert "Numeric/DECIMAL" not in claude
-    # 项目特化占位符必须保留，供落地时填写
-    for placeholder in (
-        "〈一句话说明这个服务是做什么的〉",
-        "### 3.4 〈项目特有的关键机制〉",
-        "## 十二、〈项目特有约定〉",
-    ):
-        assert placeholder in claude, placeholder
-
-    for doc in BACKEND_DOCS:
-        assert (SKILL_DIR / "assets" / "backend" / "docs" / "开发指南" / doc).is_file(), doc
-
-
-def test_ops_app_build_spec_bundled_opscli_docs_match_repo_docs():
-    """打包进 Skill 的 OPSCLI 文档除头部链接改写外必须与仓库文档一致，防止漂移。"""
+def test_ops_app_build_spec_bundled_opscli_docs_match_repo_docs() -> None:
+    """Skill 内 OPSCLI 文档正文必须与仓库权威文档一致。"""
     pairs = {
-        "OPSCLI_SDK调用规范.md": ROOT / "docs" / "spec" / "SDK调用规范.md",
-        "OPSCLI_SDK使用文档.md": ROOT / "docs" / "guide" / "SDK使用文档.md",
-        "OPSCLI_API调用规范.md": ROOT / "docs" / "spec" / "API调用规范.md",
-        "OPSCLI_API使用文档.md": ROOT / "docs" / "guide" / "API使用文档.md",
+        "OPSCLI_SDK调用规范.md": (
+            ROOT / "docs" / "spec" / "SDK调用规范.md",
+            {"../guide/SDK使用文档.md": "OPSCLI_SDK使用文档.md"},
+        ),
+        "OPSCLI_SDK使用文档.md": (
+            ROOT / "docs" / "guide" / "SDK使用文档.md",
+            {
+                "CLI 用法见 [认证模块使用指南](认证模块使用指南.md)。": "CLI 用法见 opscli 仓库 `docs/guide/认证模块使用指南.md`。",
+                "../spec/SDK调用规范.md": "OPSCLI_SDK调用规范.md",
+            },
+        ),
+        "OPSCLI_API调用规范.md": (
+            ROOT / "docs" / "spec" / "API调用规范.md",
+            {
+                "../guide/API使用文档.md": "OPSCLI_API使用文档.md",
+                "SDK调用规范.md": "OPSCLI_SDK调用规范.md",
+            },
+        ),
+        "OPSCLI_API使用文档.md": (
+            ROOT / "docs" / "guide" / "API使用文档.md",
+            {
+                "../spec/API调用规范.md": "OPSCLI_API调用规范.md",
+                "SDK使用文档.md": "OPSCLI_SDK使用文档.md",
+            },
+        ),
     }
-    # 头部 6 行是文档引言，其中相对链接被改写为同目录文件名
-    header_lines = 6
-    for bundled_name, source in pairs.items():
-        bundled = (SKILL_DIR / "assets" / "backend" / "docs" / "开发指南" / bundled_name).read_text(encoding="utf-8")
+    for bundled_name, (source, replacements) in pairs.items():
+        bundled = _read(f"assets/backend/docs/开发指南/{bundled_name}")
         original = source.read_text(encoding="utf-8")
-        assert bundled.splitlines()[header_lines:] == original.splitlines()[header_lines:], bundled_name
-        assert "](../" not in bundled, bundled_name
+        assert bundled == _rewrite_bundled_links(original, replacements), bundled_name

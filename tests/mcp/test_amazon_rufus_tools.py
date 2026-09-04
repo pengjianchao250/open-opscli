@@ -92,11 +92,12 @@ def test_amazon_rufus_get_writes_report_and_filters_sensitive(monkeypatch, tmp_p
             captured["request"] = request
             return {
                 "report_path": "output/amazon-rufus/B0TEST1234-test.md",
+                "report_url": "https://files.example.com/B0TEST1234-test.md",
                 "asin": "B0TEST1234",
                 "country": "US",
                 "question_count": 1,
                 "answer_count": 1,
-                "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
             }
 
     monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda: DummyManager())
@@ -117,11 +118,12 @@ def test_amazon_rufus_get_writes_report_and_filters_sensitive(monkeypatch, tmp_p
     assert captured["request"].timeout_seconds == 180
     assert data == {
         "report_path": "output/amazon-rufus/B0TEST1234-test.md",
+        "report_url": "https://files.example.com/B0TEST1234-test.md",
         "asin": "B0TEST1234",
         "country": "US",
         "question_count": 1,
         "answer_count": 1,
-        "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+        "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
     }
 
 
@@ -134,11 +136,12 @@ def test_amazon_rufus_get_accepts_multiple_questions(monkeypatch, tmp_path: Path
             captured["request"] = request
             return {
                 "report_path": "output/amazon-rufus/B0TEST1234-test.md",
+                "report_url": "https://files.example.com/B0TEST1234-test.md",
                 "asin": "B0TEST1234",
                 "country": "US",
                 "question_count": len(request.questions),
                 "answer_count": len(request.questions),
-                "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
             }
 
     monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda: DummyManager())
@@ -525,6 +528,37 @@ def test_amazon_rufus_get_returns_platform_cookie_auth_error(monkeypatch, tmp_pa
     assert result["error"]["code"] != "RUFUS_SECRET_NOT_READY"
 
 
+def test_amazon_rufus_get_returns_report_upload_error_without_stale_url(monkeypatch, tmp_path: Path):
+    """报告上传失败时返回本地路径，但不能返回成功或历史 URL。"""
+    from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
+
+    report_path = Path("output/amazon-rufus/B0TEST1234-test.md")
+
+    class DummyManager:
+        def get(self, **kwargs):
+            raise RufusReportUploadError(report_path)
+
+    monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda: DummyManager())
+    monkeypatch.chdir(tmp_path)
+
+    result = _run(
+        amazon_rufus_tools.amazon_rufus_get(
+            asin="B0TEST1234",
+            country="US",
+            question="这个商品适合送礼吗？",
+        )
+    )
+
+    assert result["success"] is False
+    assert result["data"] is None
+    assert result["error"] == {
+        "code": "RUFUS_REPORT_UPLOAD_ERROR",
+        "message": "Rufus 报告上传失败，已保留本地文件",
+        "report_path": report_path.as_posix(),
+    }
+    assert "report_url" not in json.dumps(result, ensure_ascii=False)
+
+
 def test_amazon_rufus_get_keeps_ops_auth_error_separate_from_secret_not_ready(monkeypatch, tmp_path: Path):
     """OPS/MCP 凭证缺失类错误不应被包装成 Rufus secret 缺失。"""
 
@@ -612,11 +646,12 @@ def test_amazon_rufus_get_runs_manager_outside_event_loop(monkeypatch, tmp_path:
             captured["manager_thread"] = threading.get_ident()
             return {
                 "report_path": "output/amazon-rufus/B0TEST1234-test.md",
+                "report_url": "https://files.example.com/B0TEST1234-test.md",
                 "asin": request.asin,
                 "country": request.country,
                 "question_count": 1,
                 "answer_count": 1,
-                "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
             }
 
     async def scenario():
@@ -633,6 +668,7 @@ def test_amazon_rufus_get_runs_manager_outside_event_loop(monkeypatch, tmp_path:
     result = _run(scenario())
 
     assert result["success"] is True
+    assert result["data"]["report_url"] == "https://files.example.com/B0TEST1234-test.md"
     assert captured["manager_thread"] != captured["event_loop_thread"]
 
 
