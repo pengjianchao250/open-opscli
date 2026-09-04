@@ -2,7 +2,7 @@
 name: ops-app-data-builder
 description: 用于 Codex 中为已经通过 opscli app create/init 拉取标准模板的站点构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未初始化项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.2
+  version: 0.1.4
 ---
 
 # OPS 应用数据层构建
@@ -88,6 +88,8 @@ metadata:
 - 业务路由是否通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway`，而不是自行解析凭证。
 - `app.yaml` 的 `opscli.datasets` 是否覆盖本次验证的数据集。
 - SQLite 是否为单写实例、是否有迁移、持久卷和清理策略。
+- 用户私有数据是否统一使用可信 `owner_user_id`，第三方共享原始数据是否与用户查询历史、输入和加工结果分表。
+- SellerSprite 是否保存并复用 pending `job_id`，是否把异步任务状态误当成用户私有加工结果。
 - 生产配置是否关闭本机登录态回退，测试是否使用 FakeGateway 和 dependency override。
 
 将发现写入 `docs/ops-app/assessment.md`；保留其他工具或人员维护的内容。
@@ -107,18 +109,22 @@ metadata:
 - 数据集或场景的真实名称与可用状态。
 - 维度、指标、筛选、时间字段、粒度和口径。
 - 请求参数、响应结构、分页、截断、空值和数据量。
+- 同步/异步执行方式、正式端点、统一响应信封、任务状态和 JSON/XLS 结果边界。
 - 当前身份、站点、币种、时区和额度边界。
 - 自然键、可重复执行语义和数据新鲜度。
 
 无法验证的字段不得写成已确认合同。部分来源阻塞时保留已验证部分，并在 data-spec 中逐项标记 `blocked`。
 
-### 4. 选择执行模式
+### 4. 选择执行与存储模式
 
-- `viewer-live`：当前访问用户权限相关的 OPS 数据，请求时实时查询，默认不写共享 SQLite。
-- `app-materialized`：与访问者权限无关、允许共享的数据，由后端获取并批量写入 SQLite。
-- `hybrid`：OPS viewer 数据实时查询，允许共享的第三方快照从 SQLite 读取，由 service 在请求时组合。
+- `viewer-live`：当前访问用户权限相关的 OPS 数据，请求时查询；持久化时必须按 `owner_user_id` 隔离。
+- `sync-request`：Keepa 等同步 REST 来源；共享快照失效时调用上游，成功后短事务 `UPSERT`。
+- `async-job`：SellerSprite 等异步 REST 来源；保存 `job_id` 和正式任务状态，pending 时复用任务，成功后读取 JSON 结果。
+- `hybrid`：OPS viewer 数据与允许共享的第三方快照由 service 在请求时组合，最终加工结果按用户隔离。
 
-按身份隔离、实时性、额度、数据量、复用频率和故障恢复选择模式。不得仅因查询耗时就把 viewer 数据写入共享库。
+网络请求在数据库事务外完成。SellerSprite 的 pending 任务不得重新提交。
+
+执行方式与存储范围分开决定。合同分别声明 `source_execution`、`task_storage`、`source_storage` 和 `result_storage`；不得仅因查询耗时就把 viewer 数据写入共享库，也不得把第三方共享原始数据推导为用户加工结果共享。
 
 ### 5. 生成数据规范
 
@@ -129,7 +135,7 @@ metadata:
 - 字段、粒度、时间、筛选与口径。
 - 执行模式、身份边界和数据流。
 - FastAPI API、Pydantic 合同和前端类型。
-- 二次加工、自然键、SQLite 表、迁移和清理策略。
+- 二次加工、`owner_user_id`、`request_hash`、异步任务、SQLite 表、迁移和清理策略。
 - 数据新鲜度、分页、额度、超时和错误处理。
 - 环境变量、Mock、测试、阻塞项和待接入边界。
 
@@ -154,6 +160,10 @@ frontend/src/types/          与 Pydantic 对齐的前端类型
 
 后端路由只做协议转换、参数校验和错误映射；网络调用与业务加工进入 client/service；SQLite 访问进入 repository/db。跨来源组合必须在 service 完成，不得放到浏览器。
 
+Keepa 和 SellerSprite 后端 Client 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，使用 Bearer Header；不得引入 `OPSCLI_SELLER_SPRITE_E2E_*` 运行时别名。Keepa 页面运行时只调用 `POST /api/v1/keepa/run`。SellerSprite 使用正式普通 jobs 或 Listing Analysis 专用异步接口，保存并复用 `queued/running` 任务的 `job_id`；只有 `succeeded` 的 JSON 结果写入共享快照。
+
+用户私有表的创建、列表、读取、更新、删除、索引和唯一约束都必须包含当前 `owner_user_id`。第三方共享快照使用 `UNIQUE(provider, request_hash)`；SellerSprite 当前任务表同样按 `provider + request_hash` 唯一，用户查询历史另存用户私有表。
+
 OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`，service 通过参数接收 Gateway 并调用 `list_datasets`、`get_dataset_metadata`、`build_simple` 或 `build_simple_and_run`。不得在业务模块重新创建 `AuthClient`、`QueryManager`、`ViewerQueryGateway` 或第二套 Header 解析。
 
 每个真实 OPS 数据集必须同步加入 `app.yaml` 的 `opscli.datasets` 白名单。测试必须使用 FakeGateway 和 FastAPI dependency override，不访问真实网络、本机 opscli 登录态或用户数据库。
@@ -168,11 +178,14 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - `app.yaml.opscli.datasets` 已包含所有正式 OPS 数据集。
 - 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
-- Keepa API Key 只从后端 Secret 注入。
-- SellerSprite 未生成当前不存在的正式线上调用。
+- OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
+- Keepa 和 SellerSprite API Key 只从后端 Secret 注入，代码只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
+- Keepa 同时检查 HTTP 状态和响应 `success`，失败不清空最后有效快照。
+- SellerSprite pending 任务复用 `job_id`，`failed/cancelled` 停止轮询，HTTP 202 不被当作完成。
+- JSON 原始业务数据与用户加工结果分表；XLS/XLSX、二进制和临时下载 URL 未写入 SQLite。
 - 网络调用发生在 SQLite 事务外，写入使用短事务和批量操作。
 - Pydantic Schema、OpenAPI 和前端类型一致。
-- 测试覆盖成功、空数据、上游失败、分页/截断和权限边界。
+- 测试覆盖成功、空数据、上游失败、分页/截断、Keepa 并发写入、SellerSprite pending 复用和用户权限边界。
 - 项目中没有真实业务数据文件、凭证或完整鉴权头。
 
 未运行的验证不得写成已通过。
@@ -186,9 +199,12 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - 不在站点中执行 opscli CLI 子进程或临时连接 MCP 作为线上取数路径。
 - 不读取本机 opscli 登录态、Cookie、Keychain 或凭证文件。
 - 不把 API Key、JWT、Cookie、完整鉴权头或真实账号写入源码、前端、SQLite、日志或文档。
+- 不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`、`OPSCLI_SELLER_SPRITE_E2E_API_KEY` 或第二套第三方 API 配置合同。
 - 不从请求体接受用户自报身份；OPS 身份只能来自批准的宿主请求通道。
 - 不把未按用户隔离的 OPS viewer 结果写入共享 SQLite。
-- 不用 SQLite 保存大文件、大型 BLOB 或高频任务队列。
+- 不用 SQLite 保存 XLS/XLSX、大文件、大型 BLOB、临时下载 URL 或高频任务队列。
+- 不调用 SellerSprite quota 接口参与站点业务流程，不处理额度检查、扣减、归属或账号调度。
+- 不为 SellerSprite 自建分布式锁、租约或独立调度平台；只持久化正式 `job_id` 和上游任务状态。
 - 不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议。
 - 不生成无人值守 OPS 同步任务；Keepa 定时同步只复用项目已有且合规的调度入口。
 - 不创建运行时数据 YAML 或另一套配置权威源。
@@ -196,8 +212,9 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 ## 阻塞规则
 
 - 项目缺少标准模板 QueryGateway 文件或签名不完整：停止数据层生成并提示重新执行标准模板初始化，不兼容旧适配器或旧数据层项目。
-- SellerSprite 第一阶段只生成 schema、Mock、存储设计和站点 API 合同，状态标记为 `blocked`，不复用旧项目私有适配器。
-- Keepa 需求需要正式文档未声明的任务状态或导出下载端点：不得猜测路径；改用已声明的同步能力或标记待平台补齐。
+- Keepa 需求依赖 `/api/v1/keepa/run` 未声明的运行时端点或返回字段：不得猜测路径，标记待平台补齐。
+- SellerSprite 场景或参数未通过正式场景合同验证：停止该数据产品，不凭 SDK、CLI 或旧项目实现猜测 REST 合同。
+- SellerSprite 仅支持 XLS/XLSX 导出而页面需要 SQLite JSON 数据产品：标记阻塞或改为明确的导出型任务，不把文件伪装成 JSON 快照。
 - 依赖 Skill 或真实合同不可用：停止对应数据产品，不影响已验证数据产品继续交付。
 - 需要多写实例、跨服务共享数据库或高频持续写入：停止 SQLite 方案并提示联系 IT。
 

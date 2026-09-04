@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.2"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.2"}
+    assert frontmatter["metadata"]["version"] == "0.1.4"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.4"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -133,15 +133,21 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         "FakeGateway",
         "OPSCLI_API_BASE_URL",
         "OPSCLI_API_KEY",
-        "/api/v1/keepa/scenarios",
         "/api/v1/keepa/run",
-        "正式文档只声明 Keepa scenarios 和 run",
-        "默认状态为 `blocked` 或 `mock-only`",
+        "页面运行时只调用 `POST /api/v1/keepa/run`",
+        "/api/v1/seller-sprite/jobs",
+        "/api/v1/seller-sprite/listing-analysis/jobs",
+        "pending 任务不得重新提交",
+        "third_party_async_job",
         "不生成或引用 `opscli.app.sdk.OpsClient`",
         "不兼容旧适配器",
         "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议",
     ):
         assert required in content
+
+    assert "/api/v1/keepa/" + "scenarios" not in content
+    assert "不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`" in content
+    assert "`OPSCLI_SELLER_SPRITE_E2E_API_KEY`" in content
 
 
 def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
@@ -162,6 +168,11 @@ def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
         "frontend/src/types/",
         "网络请求在数据库事务外完成",
         "未按用户隔离的 OPS viewer 结果",
+        "owner_user_id",
+        "third_party_source_snapshot",
+        "third_party_async_job",
+        "UNIQUE(provider, request_hash)",
+        "XLS/XLSX",
         "第一阶段只生成 Markdown 规范，不新增运行时 YAML",
         "Pydantic Schema 与前端类型的一致性",
     ):
@@ -173,13 +184,15 @@ def test_ops_app_data_builder_contract_example_is_valid_json():
     contract = CONTRACT_FILE.read_text(encoding="utf-8")
     example = _first_json_example(contract)
 
-    assert example["product_key"] == "inventory_risk"
-    assert example["source"] == "ops"
-    assert example["execution_mode"] == "viewer-live"
-    assert example["runtime_gateway"] == "QueryGateway"
-    assert example["app_yaml_datasets"] == ["verified_dataset_alias"]
+    assert example["product_key"] == "seller_sprite_competitor_analysis"
+    assert example["source"] == "seller_sprite"
+    assert example["execution_mode"] == "async-job"
+    assert example["source_execution"]["success_state"] == "succeeded"
+    assert example["task_storage"]["table"] == "third_party_async_job"
+    assert example["task_storage"]["active_states"] == ["queued", "running"]
+    assert example["source_storage"]["storage_scope"] == "site-shared"
+    assert example["result_storage"]["owner_key"] == "owner_user_id"
     assert example["site_api"].startswith("GET /api/")
-    assert example["storage"] is None
 
 
 def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path: Path):
@@ -193,7 +206,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.2"
+    assert templates[SKILL_NAME]["version"] == "v0.1.4"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

@@ -23,7 +23,7 @@
 - 前端直连、浏览器密钥、用户身份自报、CLI 子进程或 MCP 运行时依赖。
 - 现有 FastAPI client/service/repository/schema/API 和 SQLite 迁移。
 - 项目是否实际提供经过批准的 OPS 应用运行时适配器。
-- SellerSprite 是否存在经过批准的项目运行时适配器。
+- SellerSprite 是否使用正式异步 REST，是否保存 pending `job_id`，是否把任务状态和用户加工结果混入共享快照。
 
 不读取或输出真实凭证、Cookie、完整鉴权头和业务数据文件。
 
@@ -56,7 +56,7 @@
 - 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - 前端不得持有 API Key、JWT、Cookie 或完整鉴权头。
 - 跨来源组合和二次加工在 service 完成。
-- SQLite 只保存允许共享或明确隔离的数据。
+- SQLite 分开保存第三方共享原始数据、SellerSprite 异步任务和带 `owner_user_id` 的用户私有结果。
 - 网络调用不得放在 SQLite 写事务内。
 
 ## 5. 数据源基线
@@ -71,14 +71,19 @@
 ### Keepa
 
 - 开发期通过 `ops-keepa` 验证场景和样本。
-- 运行期由站点后端调用正式 `/api/v1/keepa/*`。
+- 页面运行期由站点后端调用正式 `POST /api/v1/keepa/run`；场景列表只用于开发期合同验证。
 - 后端 Secret 使用 `OPSCLI_API_BASE_URL` 和 `OPSCLI_API_KEY`；不得进入 `VITE_*`。
+- 同时检查 HTTP 状态和响应 `success`；失败不清空最后有效共享快照。
+- 多用户同步并发查询可以分别执行，成功 JSON 结果通过 `provider + request_hash` `UPSERT` 为一条共享快照。
 
 ### SellerSprite
 
 - 开发期通过 `ops-seller-sprite` 验证合同。
-- 第一阶段只生成 schema、Mock、存储设计和待接入边界。
-- 没有经批准的项目运行时适配器时，不生成线上调用。
+- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端 Secret 与 Keepa 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
+- 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务复用原 `job_id`，不得重复提交。
+- 只有成功 JSON 结果进入第三方共享快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
+- 用户查询历史、输入、收藏、备注和二次加工结果写入带 `owner_user_id` 的用户私有表。
+- 不调用 quota 接口参与站点业务流程，不处理额度检查、扣减、归属或账号调度。
 
 ## 6. 项目文档
 
@@ -97,9 +102,12 @@
 - 浏览器只请求当前站点 `/api`。
 - `VITE_*`、源码、镜像、Compose、日志和数据库中没有密钥或完整 token。
 - OPS 身份不来自请求体，viewer 数据未写入未隔离共享库。
-- Keepa 只使用正式 REST 端点和后端 Secret。
-- SellerSprite Mock 未被当作真实线上接入。
 - Mock、测试替身和本地回退不得被描述成线上真实接入。
+- OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
+- Keepa 只使用正式同步 REST 和后端 Secret，HTTP 200 业务失败不会覆盖有效快照。
+- SellerSprite 使用正式异步 REST，pending `job_id` 被复用，终态和 HTTP 202 映射正确。
+- 第三方 JSON 原始数据、异步任务和用户私有加工结果分表；XLS/XLSX 和临时下载 URL 不进入 SQLite。
+- 只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 `OPSCLI_SELLER_SPRITE_E2E_*` 别名。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。
