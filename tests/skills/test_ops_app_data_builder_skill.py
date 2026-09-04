@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.4"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.4"}
+    assert frontmatter["metadata"]["version"] == "0.1.5"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.5"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -133,6 +133,10 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         "FakeGateway",
         "OPSCLI_API_BASE_URL",
         "OPSCLI_API_KEY",
+        "https://ops.mcp.xenkee.com",
+        "纯根域名",
+        "同一个 `ThirdPartyApiClient`",
+        'base_url.rstrip("/") + path',
         "/api/v1/keepa/run",
         "页面运行时只调用 `POST /api/v1/keepa/run`",
         "/api/v1/seller-sprite/jobs",
@@ -148,6 +152,8 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
     assert "/api/v1/keepa/" + "scenarios" not in content
     assert "不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`" in content
     assert "`OPSCLI_SELLER_SPRITE_E2E_API_KEY`" in content
+    assert "OPSCLI_KEEPA_BASE_URL" not in content
+    assert "OPSCLI_SELLER_SPRITE_BASE_URL" not in content
 
 
 def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
@@ -206,7 +212,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.4"
+    assert templates[SKILL_NAME]["version"] == "v0.1.5"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))
@@ -251,7 +257,7 @@ def test_ops_app_data_builder_follows_release_profile_matrix():
 
 
 def test_ops_app_data_builder_does_not_embed_sensitive_or_local_values():
-    """模板不得携带真实身份字段、凭证值、真实地址或本机路径。"""
+    """模板不得携带真实身份字段、凭证值、未批准地址或本机路径。"""
     content = "\n".join(
         path.read_text(encoding="utf-8")
         for path in SKILL_DIR.rglob("*")
@@ -263,9 +269,12 @@ def test_ops_app_data_builder_does_not_embed_sensitive_or_local_values():
         "query.from.table",
         "query.from.permission",
         "http://",
-        "https://",
         "Administrator",
         "/Users/",
         "Bearer ey",
     ):
         assert forbidden not in content
+
+    urls = set(re.findall(r"https://[^\s`<>]+", content))
+    assert urls
+    assert all(url.startswith("https://ops.mcp.xenkee.com") for url in urls)

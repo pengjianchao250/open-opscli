@@ -16,10 +16,21 @@
 ## 2. 身份与后端配置
 
 - OPS 使用 AppHub 批准的当前 viewer 身份，通过 `Depends(get_query_gateway)` 注入。
-- Keepa 和 SellerSprite 使用站点后端 Secret：`OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
+- Keepa 和 SellerSprite 线上取数服务统一使用生产根域名 `https://ops.mcp.xenkee.com`，共用同一个 `ThirdPartyApiClient`。
+- `OPSCLI_API_BASE_URL` 是后端普通配置，生产默认值为 `https://ops.mcp.xenkee.com`；该值必须是纯根域名，不得包含 `/api`、接口路径或末尾 `/`。
+- `OPSCLI_API_KEY` 只从站点后端 Secret 注入；缺失时启动或首次调用必须快速失败。
 - 第三方 Client 使用 Bearer Header，不把 Key 放进 URL、请求体、前端、日志或 SQLite。
-- 不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`、`OPSCLI_SELLER_SPRITE_E2E_API_KEY` 或第二套运行时配置。
+- 所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接；不得分别定义 Keepa、SellerSprite Base URL，不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`、`OPSCLI_SELLER_SPRITE_E2E_API_KEY` 或第二套运行时配置。
 - 站点访问用户身份只用于本地用户数据归属，不作为第三方 API 调用凭证。
+
+生产后端配置：
+
+```env
+OPSCLI_API_BASE_URL=https://ops.mcp.xenkee.com
+OPSCLI_API_KEY=<backend-secret>
+```
+
+生成的后端 Client 可以为 `OPSCLI_API_BASE_URL` 提供上述生产默认值，但不得为 `OPSCLI_API_KEY` 提供默认值。两个变量都不得进入 `VITE_*` 或其他前端构建变量。
 
 ## 3. OPS
 
@@ -71,6 +82,8 @@ OPS 原始数据和基于 OPS 的加工结果如果持久化，必须写入带 `
 → POST /api/v1/keepa/run
 ```
 
+线上完整地址为 `https://ops.mcp.xenkee.com/api/v1/keepa/run`。
+
 Client 必须：
 
 - 显式使用 JSON 业务结果。
@@ -103,6 +116,8 @@ POST /api/v1/seller-sprite/jobs
 → failed/cancelled：停止轮询并返回稳定错误
 ```
 
+普通任务提交的线上完整地址为 `https://ops.mcp.xenkee.com/api/v1/seller-sprite/jobs`；状态与结果接口继续在同一根域名下拼接对应固定路径。
+
 任务提交成功的 HTTP 202 只表示已受理。站点 API 将 pending 映射为本站稳定的处理中响应，前端只轮询当前站点 `/api`。
 
 普通任务的 `request_hash` 由 `scenario + site + period + page_size + params` 生成。`third_party_async_job` 使用 `UNIQUE(provider, request_hash)` 保存当前或最近任务；存在 `queued/running` 任务时复用原 `job_id`。
@@ -116,6 +131,8 @@ POST /api/v1/seller-sprite/listing-analysis/jobs
 GET /api/v1/seller-sprite/listing-analysis/jobs/{job_id}
 GET /api/v1/seller-sprite/listing-analysis/jobs/{job_id}/result
 ```
+
+Listing Analysis 提交的线上完整地址为 `https://ops.mcp.xenkee.com/api/v1/seller-sprite/listing-analysis/jobs`。
 
 不得把 `listing-analysis` 提交到普通 jobs。其 `request_hash` 由 `asin + station + site` 生成。任务未完成时保留原 `job_id`，不得因等待时间较长而重复提交。
 

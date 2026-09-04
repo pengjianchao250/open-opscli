@@ -18,6 +18,9 @@
   "natural_key": ["site", "asin"],
   "source_execution": {
     "auth": "backend-bearer-secret",
+    "base_url_env": "OPSCLI_API_BASE_URL",
+    "production_base_url": "https://ops.mcp.xenkee.com",
+    "api_key_env": "OPSCLI_API_KEY",
     "submit_endpoint": "POST /api/v1/seller-sprite/jobs",
     "status_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}",
     "result_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}/result",
@@ -89,7 +92,7 @@ owner_key = owner_user_id
 
 ### 4.2 第三方共享原始数据
 
-Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`。共享前提是站点后端统一使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`；站点访问用户身份不作为上游调用凭证。
+Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`。共享前提是站点后端统一使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 和同一个 `ThirdPartyApiClient`；生产根域名固定为 `https://ops.mcp.xenkee.com`，endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。站点访问用户身份不作为上游调用凭证。
 
 共享快照不得包含 API Key、Authorization、Session、JWT、Cookie、用户身份、完整敏感响应或非业务调用上下文。XLS/XLSX、二进制内容和临时下载 URL 不写入 SQLite。
 

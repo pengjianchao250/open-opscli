@@ -8542,3 +8542,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：`git checkout -- opscli/mcp/tools/query.py tests/mcp/test_query_tools.py opscli/skills/templates/ops-dataset-query/`（本次改动均为未提交工作区变更）。
 
 ---
+
+## 2026-09-04 ops-app-data-builder Skill - 统一 Keepa 与 SellerSprite 线上取数根域名
+
+**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但现有 Skill 只约束两者共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
+
+**改动点**：`ops-app-data-builder` 明确 `OPSCLI_API_BASE_URL` 的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；`OPSCLI_API_KEY` 继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
+
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest --basetemp .tmp/pytest-ops-app-data-builder-noconftest` 通过，`10 passed`；`ops-app-data-builder.json` 与 `data/VERSION.json` JSON 解析校验通过。直接加载 `tests/skills/conftest.py` 仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻断，因此沿用既有基线使用 `--noconftest` 验证。
+
+**影响范围**：影响后续由 `ops-app-data-builder` 生成或改造的站点第三方数据 Client 配置；不影响 AppHub 控制面、现有 Keepa/SellerSprite CLI/MCP 调用和已发布站点。
+
+**回滚方式**：回退 `ops-app-data-builder` 的 Skill、Reference、版本、静态评估和测试改动即可；无需修改 `opscli/app` 或 AppHub 配置。
+
+---
