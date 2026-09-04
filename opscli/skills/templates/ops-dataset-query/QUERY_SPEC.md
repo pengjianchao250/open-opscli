@@ -28,6 +28,7 @@
 | 12 | **输出列名不意译** | 结果列名与结论中的字段称呼使用元数据 `verbose_name` 原文，禁止改写、简化或美化 |
 | 13 | **结论必须带证据** | 每个数值结论附字段名或结果列；截断必须披露排序、展示数与总行数；不把局部说成全量 |
 | 14 | **仅意外失败才反馈** | 工具抛异常、`success: false`、超时或无法解释的服务错误才提交一次结构化反馈；0 行、澄清、认证未就绪、用户取消都不是反馈事件 |
+| 15 | **币种是换算参数不是字段** | 币种走请求参数 `global_currency`（payload 顶层 `globalCurrency`），由服务端换算金额指标；元数据里没有 `currency` 字段属正常，禁止去字段清单里找币种字段、禁止写进 `dimensions` / `filters`，更禁止据此判定该数据集"不支持按币种查询"。多币种 = 逐币种各查一次（见第七章） |
 
 ---
 
@@ -297,6 +298,7 @@ query_preferences()   # 返回当前用户已保存的图表字段偏好（各�
 | `dry_run` | bool | 否 | 仅验证不执行 |
 | `session_id` | string | 否 | 显式凭证；留空则自动加载登录态。两者都没有时报「无 session_id」 |
 | `jwt` | string | 否 | 显式 ops JWT；留空时用 `session_id` 换取 |
+| `global_currency` | string | 否 | 全局币种，仅 `USD/GBP/CAD/EUR/JPY/CNY`；服务端据此换算金额指标。识别到币种意图才传，未识别时不传（后端回退用户默认配置）。见下方「币种」小节 |
 
 ### dimensions / metrics 双格式
 
@@ -320,6 +322,27 @@ metrics    = [{"field": "price", "aggregation": "SUM", "alias": "f_price"},
 | `>` `>=` `<` `<=` | `{"field": "date_id", "operator": ">=", "value": "2026-01-01"}` |
 | `in` / `not in` | `{"field": "platform_name", "operator": "in", "value": ["Amazon", "Walmart"]}` |
 | `between` | `{"field": "date_id", "operator": "between", "value": ["2026-04-01", "2026-04-30"]}` |
+
+### 币种 global_currency（换算参数，不是字段）
+
+币种不是维度、不是筛选字段、不是指标，而是查询请求上的一个换算参数：
+
+- **传法**：MCP `query_simple(..., global_currency="USD")`（`query_build` / `query_build_and_run` 同名参数；手写 payload 走 `query_run` 时写在 payload 顶层 `globalCurrency`）；CLI `--global-currency USD`；Skill 脚本 `python scripts/query.py simple ... --global-currency USD`。
+- **元数据里没有 `currency` 字段是正常的**：不要在字段清单里找币种字段，不得把币种塞进 `dimensions` / `filters`，也不得因"该数据集没有币种维度"判定不支持按币种查询、或改选 `_cny`/原币字段代替。
+- **多币种 = 多次取数**：如"分别用美元和欧元"就是两次查询，除 `global_currency` 外表、字段、时间、筛选、排序、行数完全一致；禁止查一次后用任何外部汇率或本地计算折算另一币种。
+- **结论以返回的 `meta.currency` 为准**（详见第十五章）。
+
+```python
+# "查昨天的销售额和毛利，分别用美元和欧元" → 两次查询，只有币种不同
+common = dict(
+    table_id=1,
+    metrics=[{"field": "price", "aggregation": "SUM", "alias": "f_price"},
+             {"field": "gross_profit", "aggregation": "SUM", "alias": "f_gross_profit"}],
+    filters=[{"field": "date_id", "operator": "between", "value": ["2026-09-03", "2026-09-03"]}],
+)
+query_simple(**common, global_currency="USD")
+query_simple(**common, global_currency="EUR")
+```
 
 ### 示例 1：普通聚合
 
@@ -472,7 +495,7 @@ query_simple(
 |------|---------|------|
 | 同名多角色（人员/组织） | `verbose_name` 含"人员/小组/团队/部门"且 ≥2 个 | 列出所有角色让用户确认 |
 | 组织层级 | 存在多级组织维度（大组→小组→个人） | 确认查哪一层。小组（team）与部门（dept）相互独立，不得互相推导；店铺、渠道、平台不得混用 |
-| 原币 vs CNY | 同时存在 `xxx` 与 `xxx_cny` | 元数据同时提供两者时必须澄清，不静默选择 |
+| 原币 vs CNY（字段口径） | 同时存在 `xxx` 与 `xxx_cny` | 元数据同时提供两者时必须澄清，不静默选择。这只是选字段；用户要"用美元/欧元查"属币种换算，直接传 `global_currency`，不属本行歧义 |
 | SKU/ASIN 多变体 | `field_name` 含 SKU/ASIN 且 ≥2 个 | 列出渠道 SKU / 公司 SKU / 父公司 SKU 等变体让用户选 |
 | 缩写歧义（SP/SD/SB） | 用户使用缩写 | 只结合已选数据集的中文说明判断（广告指标→广告类型，产品管理→产品编码）；仍多义则澄清 |
 | 公式口径跨数据集不同 | 同 `field_name` 出现在 ≥2 个 table_id | 说明各数据集计算口径差异后让用户选 |
@@ -574,6 +597,7 @@ query_build_and_run(
 □ 快照：库存类指标是否取最新快照日，未做跨日累加
 □ 多表：是否逐表独立锁定快照/当天口径，并在每表 `truncated=false` 后才 LEFT JOIN
 □ 行数与排序：limit 是否足够？order_by 是否用了 desc 布尔值
+□ 币种：有币种意图是否传了 global_currency 参数（而不是去找 currency 字段、塞进 filters 或改选 _cny 字段）；无币种意图是否未传
 □ 多币种：是否逐币种分别查询（每次一个 globalCurrency），并核对各次 meta.currency、共同维度键和非金额指标；是否完全未使用外部汇率或本地换算
 □ 歧义：字段/人员/组织/币种/库存口径是否存在 ≥2 个合理候选未澄清
 □ 参数命名：是否全部 snake_case

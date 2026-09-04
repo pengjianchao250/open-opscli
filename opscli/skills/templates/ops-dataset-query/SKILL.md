@@ -255,9 +255,20 @@ MCP 模式下无法运行本地脚本时，`query_intent_match` 未命中后使�
 - 分页查询（`offset`）可用于获取完整数据
 - 任何截断都必须在回答中写明：排序字段、截断数量、总行数
 
-### 铁律十五：币种由服务端换算，多币种即多次取数
+### 铁律十五：币种是服务端换算参数，不是字段，多币种即多次取数
 
-- 用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，CLI 显式传 `opscli query simple --global-currency <代码>`（MCP 走 `query_run` payload 顶层 `globalCurrency`），由服务端换算；未识别到币种意图时不传，由后端回退用户默认币种配置。禁止用"选 `_cny` 字段/原币字段"代替币种参数。
+- **币种不是维度、不是筛选字段、不是指标**：它是查询请求上的一个换算参数（payload 顶层 `globalCurrency`），由服务端把金额类指标换算成目标币种。因此：
+  - 数据集元数据里**没有** `currency` 字段是正常现象，不要在 `query_metadata` 返回的字段清单里找币种字段；
+  - **禁止**因为"该数据集没有币种维度"就判定"不支持按币种查询"、就放弃取数或改走别的数据集；
+  - **禁止**把币种写进 `dimensions` / `filters`，也禁止用"选 `_cny` 字段/原币字段"代替币种参数。
+- 用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时按当前模式显式传参，由服务端换算；未识别到币种意图时不传，由后端回退用户默认币种配置：
+
+  | 模式 | 传法 |
+  |------|------|
+  | MCP | `query_simple(..., global_currency="USD")`；`query_build` / `query_build_and_run` 为同名参数 |
+  | CLI | `opscli query simple --global-currency USD`（`opscli query run` 同名选项） |
+  | Skill 脚本 | `python scripts/query.py simple --table-id <id> --json '<payload>' --global-currency USD --run` |
+  | 手写 payload 走 `query_run` | payload 顶层写 `"globalCurrency": "USD"` |
 - **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求 CNY 和 CAD 各执行一次相同范围的服务端查询，每次只传一个币种。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一币种结果。
 - **返回币种以 `meta.currency` 为准**（ISO 4217，如 `CNY`/`USD`）：有值时结论首句、结果表表头和 Excel 口径页必须显式写明币种，不得只写"金额/销售额"了事；为 `null` 或缺失只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断；与请求的 `globalCurrency` 不一致时以 `meta.currency` 为准并如实披露差异。
 - 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。
@@ -291,7 +302,7 @@ MCP 模式下无法运行本地脚本时，`query_intent_match` 未命中后使�
 2. 认证检查
 3. 未指定 dataset/table_id 时执行意图路由（opscli query intent → route_intent.py → search.py）
 4. query_metadata / 本地索引校验数据集和字段
-5. 执行查询（query_simple / opscli query simple 等；含币种意图时传 --global-currency，多币种逐币种执行；意图命中时透传归因参数）
+5. 执行查询（query_simple / opscli query simple 等；含币种意图时传币种参数——MCP `global_currency=`、CLI `--global-currency`，多币种逐币种执行；意图命中时透传归因参数）
 6. 输出结果给用户
 7. 【铁律十一】调用 ops-feedback 提交反馈   ← 不可跳过
 ```

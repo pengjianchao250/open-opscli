@@ -9050,3 +9050,30 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅 CI 构建脚本。
 **回滚方式**：`git checkout -- .github/workflows/build-and-publish.yml`
 ---
+
+## 2026-09-04 ops-dataset-query Skill - 基于合并 master 后的最新基线重做币种优化，并补齐 CLI 脚本/提问指南两处缺口
+
+**变更原因**：上一版币种优化基于合并 master 之前的 Skill 文档，release 合并 master 后 Skill 目录整体切换为 master 版，文档侧改动被覆盖（`opscli/mcp/tools/query.py` 的 `global_currency` 参数随 release 提交保留）。按最新基线重做，同时新基线暴露出两处上一版未覆盖的缺口：Skill 转发脚本 `scripts/query.py` 的 `simple` 子命令没有 `--global-currency`（走脚本路径同样无法传币种）；`references/ask-user-question-guide.md` 3.4 节把"用户提到美金/USD"列为提问触发条件，与同节"直接传参不必再问"自相矛盾，会把目标币种换算误导成需要澄清的字段口径问题。
+
+**改动点**（均在 `opscli/skills/templates/ops-dataset-query/`）：
+- `scripts/query.py`：`simple` 子命令新增 `--global-currency` 并转发给 `opscli query simple`，白名单校验仍由 opscli 负责；模块 docstring 补用法示例。
+- `SKILL.md`：铁律十五改为正面定义（币种是换算参数不是字段），传法对照表覆盖 MCP / CLI / Skill 脚本 / 手写 payload 四种；工作流第 5 步同步。
+- `QUERY_SPEC.md`：新增核心铁律第 15 条；第七章参数表补 `global_currency` 行并新增「币种 global_currency（换算参数，不是字段）」小节（含双币种示例）；第十章歧义表把"原币 vs CNY"限定为字段口径歧义；第十四章自检清单补币种参数项。
+- `references/simple-query-guide.md`：参数表 MCP 列由"暂无该参数"改为 `global_currency`；补"它不是字段"条目与四种传法；MCP 段旧备注（指路 `query_run` 手写 payload，MCP-only 不可执行）改为可执行示例。
+- `references/rules.md`：第四章开头新增"换算参数 vs 字段口径歧义"分流说明；处理策略补 MCP 传法；第九章自检清单与 15.4 同步。
+- `references/ask-user-question-guide.md`：3.4 币种改为分流表——目标币种换算不问直接传，原币/`_cny` 字段口径才用 AskUserQuestion。
+- `references/cli-simple-guide.md`：`opscli query simple` 选项表补 `--global-currency`，并加双币种执行示例。
+- `data/field_semantic_index.yml`：修正写反的 `currency` 规则；`amount_original_currency_keywords` 移除"美元/USD"，新增 `target_currency_keywords` 与 `currency_conversion_rule`。
+
+**验证结果**：
+- `pytest tests/mcp/test_query_tools.py -q` → 5 passed。
+- 端到端（无网络）：`QueryManager.build_simple(global_currency="eur")` → payload 含 `'globalCurrency': 'EUR'`；`HKD` 抛「不支持的币种」；不传时 payload 无该键。
+- Skill 脚本：`build_command` 产出 `... --json ... --global-currency USD --run --pretty`，`python3 scripts/query.py simple --help` 正常显示新选项。
+- 残留错误表述扫描（"暂无该参数""使用原币字段"等）→ 无残留；币种传法已覆盖 SKILL.md / QUERY_SPEC.md / 4 个 references / field_semantic_index.yml / scripts/query.py。
+- YAML 与 Python 语法校验通过。
+
+**影响范围**：MCP、CLI、Skill 脚本三条手工取数路线的币种传参与文档口径统一；规划器路线不变。未改动版本号。
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/`（本次改动均为工作区未提交变更）。
+
+---
