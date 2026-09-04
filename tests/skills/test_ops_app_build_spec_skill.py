@@ -25,7 +25,7 @@ def test_ops_app_build_spec_has_consistent_scope():
     files = sorted(path.relative_to(SKILL_DIR).as_posix() for path in SKILL_DIR.rglob("*") if path.is_file())
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.4"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.5"}
 
 
 def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
@@ -39,9 +39,20 @@ def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
         "references/deployment-standard.md",
         "references/frontend-standard.md",
         "references/migration-standard.md",
-    ]
-    assert not (SKILL_DIR / "assets").exists()
-
+        "$ops-app-data-builder",
+        "页面需要真实业务数据",
+        "不选择或猜测数据集、字段、聚合、筛选、第三方场景",
+        "前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite",
+        "docs/ops-app/data-spec.md",
+        "OPSCLI_API_BASE_URL",
+        "OPSCLI_API_KEY",
+        "未隔离的 viewer 数据",
+        "owner_user_id",
+        "pending `job_id`",
+        "XLS/XLSX",
+        "第一阶段不增加运行时数据 YAML",
+    ): 
+        assert required in content
 
 def test_ops_app_build_spec_clones_and_recognizes_the_template():
     """新项目克隆模板，已绑定业务远端的项目按合同识别。"""
@@ -248,7 +259,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.4"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.5"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

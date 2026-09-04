@@ -64,6 +64,10 @@ description: 用于新建站点、新建看板、从零开发运营数据应用�
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
 - 页面涉及真实数据时必须读取取数规范；不得凭经验猜测数据集、接口、凭证或 SDK 调用。
 - 用户未授权时，不安装依赖、启动服务、执行数据库写入、提交、推送或部署。
+- `app.yaml`、Git 根和 `main` 分支是否满足发布前置。
+- # 支持结论、迁移风险、未识别项及预计文件变更。
+- 页面真实数据用途、现有数据源、调用路径和前端直连或凭证风险。
+- 第三方原始数据、SellerSprite 异步任务和用户私有加工结果是否正确分层。
 
 前后端参考只保留跨项目强制规则，不复制模板的完整开发手册。数据库实现和迁移步骤由目标项目随代码维护。
 
@@ -172,7 +176,9 @@ AppHub 发布主路径固定为 Nixpacks：
 - 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - `VITE_*`、源码、镜像、Compose、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
-- Keepa 只使用正式 opscli REST 端点和后端 Secret；SellerSprite Mock 没有被当作真实线上接入。
+- Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run` 和后端 Secret。
+- SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，pending `job_id` 被持久化并复用，成功 JSON 结果才进入共享快照。
+- Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 E2E 配置别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
@@ -185,6 +191,7 @@ AppHub 发布主路径固定为 Nixpacks：
 - 模板合同冲突：列出证据和影响，不猜测。
 - 迁移无法保持业务行为：停止迁移，保留源实现和失败证据。
 - `opscli` CLI 或 MCP 工具失败：按 `ops-feedback` 规范立即提交结构化反馈；认证未授权和用户取消除外。
+- 数据合同无法验证、OPS 运行时适配器缺失、第三方场景未验证或结果格式不支持目标数据产品：保留已验证部分，在 data-spec 标记阻塞，不伪造调用代码。
 
 ## 输出
 

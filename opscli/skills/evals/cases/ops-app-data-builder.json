@@ -17,12 +17,21 @@
     "$ops-keepa",
     "$ops-seller-sprite",
     "viewer-live",
+    "sync-request",
+    "async-job",
     "docs/ops-app/data-spec.md",
     "backend/clients/ops_query_client.py",
     "Depends(get_query_gateway)",
     "ViewerQueryGateway",
     "app.yaml",
     "opscli.datasets",
+    "OPSCLI_API_BASE_URL",
+    "OPSCLI_API_KEY",
+    "/api/v1/keepa/run",
+    "/api/v1/seller-sprite/jobs",
+    "third_party_async_job",
+    "owner_user_id",
+    "pending 任务不得重新提交",
     "不生成或引用 `opscli.app.sdk.OpsClient`",
     "不兼容旧适配器",
     "不让前端直连 OPS、opscli REST、Keepa 或 SellerSprite",
@@ -42,7 +51,7 @@
       "prompt": "当前产品分析站点要组合 OPS 销售数据和 Keepa 价格历史，并把 Keepa 快照保存到 SQLite。"
     },
     {
-      "id": "seller-sprite-runtime-gap",
+      "id": "seller-sprite-async-runtime",
       "prompt": "站点需要卖家精灵关键词反查数据，请把数据层和页面接口都搭好。"
     },
     {
@@ -68,8 +77,10 @@
     "OPS 通过 Depends(get_query_gateway) 复用标准模板 QueryGateway，线上使用 ViewerQueryGateway",
     "真实 OPS 数据集同步加入 app.yaml.opscli.datasets 白名单",
     "测试使用 FakeGateway 和 dependency override，不访问真实 SDK、凭证或网络",
-    "Keepa 只通过后端正式 opscli REST 和 Secret 调用",
-    "SellerSprite 缺少正式运行时入口时只生成合同、Mock 和阻塞边界",
+    "Keepa 只通过后端正式同步 REST 和 Secret 调用，业务失败不覆盖有效快照",
+    "SellerSprite 使用正式异步 REST，保存并复用 pending job_id，成功 JSON 结果写共享快照",
+    "OPS 原始和加工结果、用户查询历史及二次加工结果按 owner_user_id 隔离",
+    "XLS/XLSX、二进制和临时下载 URL 不写入 SQLite",
     "前端只调用当前站点 /api，跨来源加工进入 FastAPI service",
     "生成 data-spec、schema、前端类型、迁移和测试",
     "单次查询和 Dashboard 请求不由本 Skill 处理"

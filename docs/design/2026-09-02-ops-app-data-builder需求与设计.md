@@ -1,7 +1,7 @@
 # OPS 站点数据层构建能力需求与设计
 
 > 文档日期：2026-09-02  
-> 更新日期：2026-09-03  
+> 更新日期：2026-09-04  
 > 文档状态：已确认并按标准模板 QueryGateway 优化  
 > 新 Skill：`ops-app-data-builder`  
 > 原 Skill：`ops-business-data-orchestrator`  
@@ -22,8 +22,8 @@
 | 数据源 | 典型数据 | 当前正式能力 |
 | --- | --- | --- |
 | OPS 公司运营系统 | 销售、库存、广告、流量、利润、权限数据 | 标准模板 `QueryGateway`；线上 `ViewerQueryGateway`，显式 Session 使用 `OpsQueryGateway`，本地开发使用 `LocalQueryGateway` |
-| Keepa | 商品、价格历史、Offer、Buy Box、排名 | 正式 REST `/api/v1/keepa/*`、Keepa SDK/CLI |
-| SellerSprite | 关键词、反查词、转化率、竞品流量 | SellerSprite SDK/CLI；当前正式 REST 文档未声明 SellerSprite 端点 |
+| Keepa | 商品、价格历史、Offer、Buy Box、排名 | 正式同步 REST `POST /api/v1/keepa/run`；开发期通过 Keepa Skill 验证合同 |
+| SellerSprite | 关键词、反查词、转化率、竞品流量 | 正式异步 REST jobs、状态、result/export 和 Listing Analysis 专用接口 |
 
 ## 3. 权威规范
 
@@ -43,9 +43,9 @@
 1. 前端默认只访问当前站点 `/api`，浏览器环境变量不得保存密钥。
 2. FastAPI 路由只处理协议、参数和响应，业务编排进入 service，数据库访问进入 repository/db。
 3. SQLite 只允许单写实例，不适合多实例共享、高并发持续写入或高频任务队列。
-4. opscli REST API 当前正式覆盖 query 和 Keepa。
+4. opscli REST API 当前正式覆盖 query、Keepa 同步查询和 SellerSprite 异步任务。
 5. 标准模板通过 `get_query_gateway` 选择 Gateway；AppHub 线上由 `ViewerQueryGateway` 使用宿主注入的 `X-Ops-Token`，业务代码不得自行创建 `AuthClient` 或 `QueryManager`。
-6. Keepa 和 SellerSprite 使用各自平台凭证，不能与 OPS 用户身份混用。
+6. Keepa 和 SellerSprite 共用站点后端 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不能与 OPS viewer 身份混用。
 7. API Key、JWT、Cookie 和账号信息不得进入源码、前端产物、日志或项目文档。
 
 ## 4. 当前缺口
@@ -69,7 +69,7 @@
 
 - OPS 统一复用标准模板 `backend/clients/ops_query_client.py` 和 `backend/core/auth.py`。
 - Keepa 可以使用正式 opscli REST API。
-- SellerSprite 当前未出现在正式 REST 端点清单中。
+- SellerSprite 使用正式异步 jobs 和 Listing Analysis 三段式接口。
 
 标准模板已提供 `QueryGateway`、`ViewerQueryGateway`、`OpsQueryGateway` 和 `LocalQueryGateway`。新 Skill 必须复用该基线，不生成或引用不存在的 `opscli.app.sdk.OpsClient`，也不兼容旧项目私有适配器。
 
@@ -127,8 +127,8 @@ ops-app-data-builder
 站点 FastAPI 后端
   ├─ OPS：标准模板 QueryGateway
   ├─ Keepa：后端统一 opscli REST Client
-  ├─ SellerSprite：第一阶段标记运行时阻塞
-  └─ SQLite：保存允许共享的业务结果
+  ├─ SellerSprite：后端正式异步 REST Client
+  └─ SQLite：分开保存共享原始数据、异步任务和用户私有结果
        ↓
 前端只调用当前站点 /api
 ```
@@ -185,7 +185,7 @@ ops-app-data-builder
 浏览器
 → 站点 FastAPI /api
 → 站点后端统一 OpscliApiClient
-→ /api/v1/keepa/*
+→ POST /api/v1/keepa/run
 ```
 
 约束：
@@ -193,7 +193,7 @@ ops-app-data-builder
 - API Key 仅存在于后端运行环境。
 - 使用 `Authorization` Header。
 - 必须检查 HTTP 状态码和统一信封 `success`。
-- 长任务使用 `job_id` 幂等语义。
+- Keepa 按同步响应处理，同时检查 HTTP 状态和 `success`。
 - 处理 `truncated`、`total_count` 和分页。
 - 可按业务需要实时请求或物化到 SQLite。
 
@@ -210,16 +210,17 @@ OPSCLI_API_KEY
 
 开发期使用 `$ops-seller-sprite` 验证场景、参数、返回结构和少量样本，可以生成数据规范、Pydantic Schema、Mock、SQLite 表设计和页面 API 合同。
 
-当前正式 API 文档没有声明 SellerSprite REST 端点，标准模板也没有 SellerSprite Gateway，因此第一阶段默认策略为：
+SellerSprite 运行期使用站点后端统一 REST Client 和后端 Secret：
 
 ```text
-只完成开发合同和待接入边界
-不生成伪造的正式线上调用代码
+提交普通 jobs 或 Listing Analysis 专用任务
+保存 job_id 和 queued/running/succeeded/failed/cancelled 状态
+pending 任务复用 job_id，成功 JSON 结果写共享快照
 ```
 
 禁止站点读取本机 Cookie、执行 opscli CLI 子进程、临时连接 MCP、固化个人 session/JWT 或由前端直连 SellerSprite。
 
-不兼容或复用旧项目私有 SellerSprite 适配器；必须等待标准模板或正式 REST API 提供统一入口。
+不兼容或复用旧项目私有 SellerSprite 适配器；不通过 CLI、MCP、Cookie 或个人账号绕过正式 REST。
 
 ## 9. 数据执行模式
 
@@ -227,13 +228,17 @@ OPSCLI_API_KEY
 
 适用于当前用户权限相关的 OPS 数据：每次通过当前请求身份查询，默认不写共享 SQLite。
 
-### 9.2 `app-materialized`
+### 9.2 `sync-request`
 
-适用于 Keepa 公共商品数据、已有合规服务身份的数据、用户录入和与访问者权限无关的共享结果：后端获取、规范化并批量写入 SQLite。
+适用于 Keepa 同步 REST：共享快照失效时调用上游，成功 JSON 结果通过短事务写入 SQLite。
 
-### 9.3 `hybrid`
+### 9.3 `async-job`
 
-适用于当前用户 OPS 数据与 Keepa 公共数据组合：OPS 实时查询，Keepa 从 SQLite 读取共享快照，由 FastAPI Service 请求时组合。
+适用于 SellerSprite：提交任务、保存 `job_id`、查询状态，pending 时复用任务，成功后读取 JSON 结果。
+
+### 9.4 `hybrid`
+
+适用于当前用户 OPS 数据与第三方共享快照组合：OPS 按用户查询，第三方从 SQLite 读取共享原始数据，由 FastAPI Service 请求时组合，最终加工结果按用户隔离。
 
 ## 10. SQLite 边界
 
@@ -282,7 +287,7 @@ product_operation_overview
 
 ### 11.4 选择执行模式
 
-按身份、实时性、额度、数据量和复用频率选择 `viewer-live`、`app-materialized` 或 `hybrid`。
+按身份、实时性、数据量、复用频率和故障恢复选择 `viewer-live`、`sync-request`、`async-job` 或 `hybrid`。
 
 ### 11.5 生成数据规范
 
@@ -316,7 +321,8 @@ frontend/src/types/          前端类型
 - 前端只调用当前站点 `/api`；
 - OPS 使用现有应用运行时身份通道；
 - Keepa API Key 未进入前端和源码；
-- SellerSprite 未生成当前不存在的正式 REST 调用；
+- SellerSprite 使用正式异步 REST，pending `job_id` 被保存并复用；
+- 第三方 JSON 原始数据、异步任务和用户私有加工结果分表；
 - OPS viewer 数据未写入共享缓存；
 - SQLite 符合单写和迁移约束；
 - Pydantic Schema 与前端类型一致；
@@ -411,7 +417,7 @@ opscli/skills/templates/ops-app-data-builder/
 
 ### 16.1 新 Skill 模板契约测试
 
-覆盖名称、版本、安装、references、manifest、敏感信息、数据源路由、SellerSprite 阻塞、OPS viewer 存储边界以及项目交付物。
+覆盖名称、版本、安装、references、manifest、敏感信息、OPS 用户隔离、Keepa 同步调用、SellerSprite 异步任务、共享快照和项目交付物。
 
 ### 16.2 `ops-app-build-spec` 测试
 
@@ -422,7 +428,7 @@ opscli/skills/templates/ops-app-data-builder/
 1. OPS 销售看板数据层构建。
 2. OPS 模糊库存需求，需要查询向导。
 3. OPS + Keepa 混合产品分析。
-4. SellerSprite 页面需求，开发合同完成但运行时明确阻塞。
+4. SellerSprite 页面需求，生成正式异步任务、pending 复用和 JSON 结果合同。
 5. 单次明确查询，不应触发站点数据层构建。
 6. 当前 Dashboard 页面编辑，不应触发。
 7. 前端直连数据源改造请求，应改为站点 `/api`。
@@ -436,7 +442,7 @@ opscli/skills/templates/ops-app-data-builder/
 2. 新 Skill 只在标准站点数据层构建场景触发。
 3. OPS 数据需求可验证数据集和字段并生成合规运行时代码要求。
 4. Keepa 数据需求可验证正式场景并生成后端 REST 接入要求。
-5. SellerSprite 不会生成当前不存在的正式 REST 调用。
+5. SellerSprite 使用正式异步 REST，不重复提交 pending 任务。
 6. 多数据源加工逻辑进入 FastAPI service，不进入前端。
 7. 前端只调用站点 `/api`。
 8. SQLite 不保存未隔离的 OPS viewer 数据。
@@ -463,7 +469,9 @@ opscli/skills/templates/ops-app-data-builder/
 - 不兼容旧数据层项目或旧项目私有适配器。
 - 不重写标准模板 QueryGateway 和鉴权基础设施。
 - 不新增或修改 opscli REST API 服务端端点。
-- 不实现 SellerSprite 正式 REST 接入。
+- 不修改 Keepa 或 SellerSprite 正式 REST 服务端能力。
+- 不处理第三方额度检查、扣减、归属或账号调度。
+- 不建设分布式锁、租约或独立调度平台。
 - 不实现每用户第三方账号切换。
 - 不实现 AppHub 自动签发应用 API Key。
 - 不实现新的统一后台调度平台。
@@ -473,13 +481,13 @@ opscli/skills/templates/ops-app-data-builder/
 
 ## 19. 确认记录
 
-以下事项已于 2026-09-02 全部确认：
+以下事项已于 2026-09-02 确认，并于 2026-09-04 按用户隔离与第三方正式 API 定稿更新：
 
 1. Skill 名称使用 `ops-app-data-builder`。
 2. 直接删除旧名称，不保留兼容副本。
 3. OPS viewer 数据默认实时查询，不写共享 SQLite。
 4. Keepa 由站点后端通过正式 opscli REST API 调用，并使用后端 Secret。
-5. SellerSprite 第一阶段只完成开发合同、Mock 和待接入边界，不生成正式线上调用。
+5. SellerSprite 使用正式异步 REST，保存并复用 pending `job_id`，成功 JSON 原始数据允许站点共享。
 6. 第一阶段仅生成 `docs/ops-app/data-spec.md`，暂不增加运行时 YAML。
 7. 第一阶段不自动生成 OPS 无人值守同步；Keepa 定时同步仅在项目已有合规调度入口时复用。
 8. 实施时由本文替代并删除旧需求设计与旧落地计划。
@@ -503,8 +511,8 @@ opscli/skills/templates/ops-app-data-builder/
 ops-app-build-spec 负责识别和委托
 ops-app-data-builder 负责验证真实数据合同并生成站点数据层
 标准模板 QueryGateway 承担 OPS 应用运行时身份通道
-正式 opscli REST API 承担 Keepa 运行时调用
-SellerSprite 在第一阶段只完成开发合同和待接入边界
+正式 opscli REST API 承担 Keepa 同步和 SellerSprite 异步运行时调用
+SQLite 分开保存第三方共享快照、SellerSprite 任务和用户私有加工结果
 ```
 
 本文所列 Skill、manifest、测试、评估和规范改动已实施，并按落地计划完成验证。
