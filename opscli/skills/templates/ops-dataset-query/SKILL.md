@@ -141,6 +141,7 @@ CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`opscl
 - 遵守 `numeric_evidence_policy_zh`，结论或证据中的关键数值保持返回精度，不自行四舍五入。
 - 0 行只能说明没有返回记录，不能判断业务为 0；全零不等于无数据；空值不等于 0。
 - 周期比较只使用已返回的本期、`last_*`、`diff_*`、`pct_*` 列，缺列时说明无法比较。不同原币不得混加，也不得与 CNY 列混加。
+- **币种是服务端换算参数，不是维度、筛选字段或指标**：它写在请求上（payload 顶层 `globalCurrency`；MCP `query_simple(..., global_currency="USD")`，`query_build` / `query_build_and_run` 同名参数；CLI `--global-currency USD`），由服务端换算金额指标。数据集元数据里**没有** `currency` 字段是正常现象——不要在字段清单里找币种字段，不要把币种写进 `dimensions` / `filters`，更不得因"该数据集没有币种维度"就判定不支持按币种查询或放弃取数；也不得用"选 `_cny`/原币字段"代替币种参数。
 - 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入完整性绑定模板。单币种写入 `query_template`；明确要求多个币种时生成 `query_templates`，一体化入口必须逐币种调用取数服务。未识别到币种意图时不注入，由后端回退用户默认配置。
 - **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求人民币（CNY）和加拿大元（CAD）各执行一次相同范围的服务端查询。MCP-only 也必须为每个币种分别调用 `query_simple` 并传对应 `global_currency`。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一个币种结果。
 - 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前，先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键不一致或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。

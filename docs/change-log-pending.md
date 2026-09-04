@@ -8464,3 +8464,31 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退 `ops-app-build-spec` 的模板门禁、初始化 Reference、版本与相关文档测试；无需回滚应用、仓库、binding 或发布记录。
 
 ---
+
+## 2026-09-04 mcp/query + ops-dataset-query Skill - 币种改为可传的服务端换算参数，并纠正"币种=字段"的错误心智
+
+**变更原因**：用户以"不走规划器"手工路线要求"分别用美元和欧元查昨天销售额和毛利"时，Agent 先去 `query_metadata` 里找 `currency` 维度字段，没找到就判定"综合数据集不支持按币种查询"。根因有两条：
+① 代码层——`QueryManager.build_simple()/build()` 早已支持 `global_currency`（写 payload 顶层 `globalCurrency`）、CLI 也有 `--global-currency`，但 MCP 的 `query_simple` / `query_build` / `query_build_and_run` 三个工具都没暴露该参数，MCP 手工路线实际无任何方式传币种；
+② 文档层——SKILL 让 MCP "改用 `query_run` 手写 payload"，而 MCP-only 环境既无写文件能力、`query_build` 也没有该参数，这条指引不可执行；同时 `field_semantic_index.yml` 的 `currency` 规则写反（"用户提到美元时使用原币字段"），把币种引导成字段选择问题。
+
+**改动点**：
+- `opscli/mcp/tools/query.py`：`query_simple` / `query_build` / `query_build_and_run` 各新增 `global_currency` 参数并透传至 `QueryManager`（内核已就绪，仅缺签名）；docstring 补【币种】说明——币种是服务端换算参数，不是维度/筛选字段，元数据无 `currency` 字段属正常，多币种须逐币种各调用一次。
+- `tests/mcp/test_query_tools.py`：新增 3 个用例，覆盖 `query_simple` 透传、不传时为 `None`、`query_build` / `query_build_and_run` 透传。
+- Skill `opscli/skills/templates/ops-dataset-query/`：
+  - `SKILL.md` 铁律十五改标题与首条为正面定义（"币种是服务端换算参数，不是字段"），补 CLI / MCP / 手写 payload 三种传法对照表；工作流第 5 步同步 MCP 传法。
+  - `QUERY_SPEC.md` 新增核心铁律第 15 条、第七章参数表补 `global_currency` 行并新增「币种 global_currency（换算参数，不是字段）」小节（含双币种示例）、第十章歧义表把"原币 vs CNY"限定为字段口径歧义、第十四章自检清单补币种参数项。
+  - `references/simple-query-guide.md` 参数表 MCP 列由"暂无该参数"改为 `global_currency`；「全局币种」章节补"它不是字段"条目与 MCP 传法；MCP 段旧备注（指路 `query_run` 手写 payload）改写为可执行示例。
+  - `references/rules.md` 第四章开头新增"换算参数 vs 字段口径歧义"边界说明，处理策略补 MCP 传法；第九章自检清单与 15.4 币种口径同步。
+  - `data/field_semantic_index.yml` 修正 `currency` 歧义规则；`amount_original_currency_keywords` 移除"美元/USD"，新增 `target_currency_keywords` 与 `currency_conversion_rule`。
+
+**验证结果**：
+- `pytest tests/mcp/test_query_tools.py -q` → 5 passed（新增 3 例）。
+- 端到端（无网络）：`QueryManager.build_simple(global_currency="eur")` → payload `{'tableId': 1, ..., 'globalCurrency': 'EUR'}`；`HKD` 抛 `不支持的币种: HKD，仅支持 USD/GBP/CAD/EUR/JPY/CNY`；不传时 payload 无该键。
+- `pytest tests/mcp/ tests/query/ -q`（排除 2 个预存收集错误）→ 6 failed / 681 passed，6 条失败在 stash 掉本次改动后同样复现，属预存基线。
+- YAML 与 Python 语法均校验通过。
+
+**影响范围**：MCP 手工取数路线（不走规划器）现可按币种取数与做多币种查询；CLI 与规划器路线行为不变；Skill 文档口径统一。未改动版本号（`VERSION.json` / SKILL frontmatter 当前 1.3.19 为工作区既有改动），远端发布前需按发布流程 bump。
+
+**回滚方式**：`git checkout -- opscli/mcp/tools/query.py tests/mcp/test_query_tools.py opscli/skills/templates/ops-dataset-query/`（本次改动均为未提交工作区变更）。
+
+---
