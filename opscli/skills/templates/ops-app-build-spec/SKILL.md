@@ -64,6 +64,7 @@ Skill 重新盘点并继续正式开发，不使用初始化前的空目录结�
 - `app.yaml`、Git 根和 `main` 分支是否满足发布前置。
 - # 支持结论、迁移风险、未识别项及预计文件变更。
 - 页面真实数据用途、现有数据源、调用路径和前端直连或凭证风险。
+- 第三方原始数据、SellerSprite 异步任务和用户私有加工结果是否正确分层。
 - 支持结论、迁移风险和未识别项。
 - 预计新增、修改、保留的文件。
 
@@ -191,7 +192,9 @@ AppHub 发布主路径固定为 Nixpacks：
 - 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - `VITE_*`、源码、镜像、Compose、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
-- Keepa 只使用正式 opscli REST 端点和后端 Secret；SellerSprite Mock 没有被当作真实线上接入。
+- Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run` 和后端 Secret。
+- SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，pending `job_id` 被持久化并复用，成功 JSON 结果才进入共享快照。
+- Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 E2E 配置别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
@@ -203,7 +206,7 @@ AppHub 发布主路径固定为 Nixpacks：
 - 识别证据冲突：列出冲突并询问，不猜测。
 - 迁移后行为不一致：停止后续迁移，保留失败证据，不删除旧实现。
 - 项目注册工具或 `opscli`/MCP 工具失败：按 `ops-feedback` 规范立即提交结构化反馈；认证未授权和用户取消除外。
-- 数据合同无法验证、OPS 运行时适配器缺失或 SellerSprite 没有正式入口：保留已验证部分，在 data-spec 标记阻塞，不伪造调用代码。
+- 数据合同无法验证、OPS 运行时适配器缺失、第三方场景未验证或结果格式不支持目标数据产品：保留已验证部分，在 data-spec 标记阻塞，不伪造调用代码。
 - 部分写入或发布状态不确定：重新读取本地状态后停止，不重复创建项目或重复发布。
 
 ## 输出规范

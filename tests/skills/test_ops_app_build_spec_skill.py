@@ -24,7 +24,7 @@ def test_ops_app_build_spec_has_consistent_metadata():
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.4"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.5"}
 
 
 def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
@@ -43,6 +43,9 @@ def test_ops_app_build_spec_routes_real_data_work_to_data_builder():
         "OPSCLI_API_BASE_URL",
         "OPSCLI_API_KEY",
         "未隔离的 viewer 数据",
+        "owner_user_id",
+        "pending `job_id`",
+        "XLS/XLSX",
         "第一阶段不增加运行时数据 YAML",
     ):
         assert required in content
@@ -278,7 +281,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path):
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.4"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.5"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

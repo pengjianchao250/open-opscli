@@ -1,5 +1,27 @@
 # 待归档变更记录
 
+## 2026-09-04 skills/docs - 站点数据层明确用户隔离与第三方共享快照
+
+**变更原因**：原有站点数据层规范没有完整区分 OPS 用户权限数据、第三方原始业务数据、SellerSprite 异步任务状态和用户二次加工结果，容易把“共享 SQLite”误解为“不能使用 SQLite”，或造成不同用户之间的数据越权复用。
+
+**改动点**：`ops-app-data-builder` 升级到 `v0.1.4`，明确 OPS 原始及加工结果持久化时按 `owner_user_id` 隔离；Keepa 成功 JSON 原始数据按 `provider + request_hash` 写入站点共享快照；SellerSprite 使用正式异步 REST，保存并复用 pending `job_id`，仅将成功 JSON 结果写入共享快照，XLS/XLSX、二进制和临时下载 URL 不入库；用户查询历史、输入、收藏、备注以及 OPS/第三方加工结果均按用户隔离。同步将 `ops-app-build-spec` 升级到 `v0.0.5`，更新 Reference、静态 eval、发行清单、测试、需求设计和落地计划。
+
+**配置边界**：Keepa 与 SellerSprite 运行时只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 `OPSCLI_SELLER_SPRITE_E2E_*` 别名；Keepa 页面运行时只调用 `POST /api/v1/keepa/run`；不处理第三方额度检查、扣减、归属、账号调度或复杂分布式锁。
+
+**验证结果**：`tests/skills/test_ops_app_data_builder_skill.py` 通过，`10 passed`；`ops-app-build-spec` 元数据、真实数据路由和安装声明专项测试通过，`3 passed`；两个 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`；`scripts/check_skill_release_manifest.py` 校验通过。
+
+**影响范围**：只修改站点数据层生成规范、关联发布检查、Skill 元数据、测试和文档，不修改 `opscli app`、AppHub、标准模板仓库、正式数据服务或 `opscli/auth/config.py`。
+
+## 2026-09-03 skills/docs - Keepa 站点运行时收敛为单一 run 端点
+
+**变更原因**：`ops-app-data-builder` 的运行时路由仍把 `/api/v1/keepa/scenarios` 与 `/api/v1/keepa/run` 并列为线上入口，但当前站点运行时只允许调用 `/api/v1/keepa/run`。继续保留 scenarios 会误导站点生成不应存在的运行时代码。
+
+**改动点**：Skill 升级到 `v0.1.3`；Keepa 开发期仍通过 `ops-keepa` 验证场景、参数和少量样本，站点线上运行时只允许后端通过 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 调用 `/api/v1/keepa/run`；同步更新运行时 Reference、落地计划和契约测试，并增加 scenarios 路径零残留断言。
+
+**影响范围**：只影响 `ops-app-data-builder` 生成 Keepa 站点数据层时的运行时端点选择，不修改 `opscli keepa` CLI/MCP 自身命令面，也不影响 OPS QueryGateway 或 SellerSprite 阻塞策略。
+
+**验证结果**：`SKIP_CYTHON=1 uv run pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest` 通过，`10 passed`；Skill 快速校验返回 `Skill is valid!`；Skill、落地计划和契约测试中的 `/api/v1/keepa/scenarios` 引用已清零。
+
 ## 2026-09-03 skills/docs - ops-app-data-builder 统一标准模板 QueryGateway
 
 **变更原因**：`ops-app-data-builder` 原规范仍以抽象 `OpsClient` 和“项目实际适配器”描述 OPS 运行时，相关 SDK 文档还引用当前不可导入的 `opscli.app.sdk.OpsClient`。正式建站模板已经提供 `QueryGateway`、三种 Gateway 模式、FastAPI 依赖注入、数据集白名单和测试替身，继续保留抽象或旧项目兼容会导致生成重复鉴权代码或错误导入。
