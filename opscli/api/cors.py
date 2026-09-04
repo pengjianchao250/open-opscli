@@ -9,13 +9,15 @@ from starlette.types import Scope
 LOCAL_PROTOTYPE_ORIGINS = (
     "http://127.0.0.1:4173",
     "http://localhost:4173",
+    "http://127.0.0.1:4174",
+    "http://localhost:4174",
 )
 PRIVATE_LAN_PROTOTYPE_ORIGIN = (
     r"^http://(?:"
     r"10(?:\.\d{1,3}){3}|"
     r"192\.168(?:\.\d{1,3}){2}|"
     r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
-    r"):4173$"
+    r"):(?:4173|4174)$"
 )
 _PRIVATE_LAN_PROTOTYPE_ORIGIN_PATTERN = re.compile(PRIVATE_LAN_PROTOTYPE_ORIGIN)
 

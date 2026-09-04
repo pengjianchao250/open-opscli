@@ -316,6 +316,44 @@ def test_mcp_server_allows_local_prototype_cors_preflight():
     assert "POST" in response.headers["access-control-allow-methods"]
 
 
+def test_mcp_server_allows_seller_sprite_prototype_cors_preflight():
+    """卖家精灵原型使用独立端口时也应通过共享 CORS 预检。"""
+    from opscli.mcp.server import _build_dual_endpoint_app
+
+    app = _build_dual_endpoint_app(api_key="test-api-key")
+    response = TestClient(app).options(
+        "/api/v1/seller-sprite/jobs",
+        headers={
+            "Origin": "http://127.0.0.1:4174",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:4174"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
+def test_mcp_server_allows_private_lan_seller_sprite_cors_preflight():
+    """SellerSprite prototype should allow private-LAN origins on port 4174."""
+    from opscli.mcp.server import _build_dual_endpoint_app
+
+    app = _build_dual_endpoint_app(api_key="test-api-key")
+    response = TestClient(app).options(
+        "/api/v1/seller-sprite/jobs",
+        headers={
+            "Origin": "http://10.6.53.56:4174",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://10.6.53.56:4174"
+    assert "POST" in response.headers["access-control-allow-methods"]
+
+
 def test_mcp_server_allows_private_lan_prototype_cors_preflight():
     """局域网设备打开的 HTML 原型也应能跨端口调用本机 API。"""
     from opscli.mcp.server import _build_dual_endpoint_app

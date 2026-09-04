@@ -9058,3 +9058,11 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：HTTP/SSE 多用户模式下的 OPS 凭据建立、Keepa 场景请求和新增认证诊断接口；卖家精灵继续复用同一凭据入口，默认不强制预取 JWT。
 **回滚方式**：回退共享凭据模块、Keepa 接入、REST 路由、对应测试、使用指南及本条记录。
 ---
+## 2026-09-04 SellerSprite Lens - 新增卖家精灵 JSON 场景站点
+
+**变更原因**：为现有 SellerSprite MCP/REST 普通场景提供与 JSON Lens 类似的浏览器工作台，支持按官网筛选口径构造请求并查看异步任务 JSON 结果。
+**改动点**：新增 `sites/seller-sprite-lens-prototype`，包含 13 个 JSON 场景表单、任务提交与续查、最近任务恢复、额度读取、JSON v2 多工作表浏览和当前表格 CSV 导出；与 Keepa JSON Lens 统一复用 DaisyUI 5 + Tailwind CSS 4 的控件、卡片、表格和明暗主题，保留 SellerSprite 固定场景侧边栏及品牌色；月份型场景按官网口径提供“最近30天”及按两个月发布延迟生成的 25 个动态历史月份（2026-09-04 对应从 2026-07 开始），ABA、按周/90 天及无周期场景分别使用各自周期规则；一期不开放 Listing Analysis、`branddb`、`aba-reverse` 和官方 XLSX 下载。站点使用独立 `4174` 端口，并在共享 CORS 白名单和私有局域网正则中增加该端口。
+**验证结果**：Node 单元测试、Playwright 场景测试和 API CORS 回归测试均已通过；本地页面在 `4174` 端口完成桌面与移动端验证。
+**影响范围**：新增独立静态站点，并扩展 API 网关本地原型 CORS 到 `4174`；不修改 SellerSprite MCP、Collector、REST 路由或原有 Keepa JSON Lens。
+**回滚方式**：删除 `sites/seller-sprite-lens-prototype`，从 `opscli/api/cors.py` 移除 `4174`，删除对应 CORS 测试并移除本条变更记录。
+---
