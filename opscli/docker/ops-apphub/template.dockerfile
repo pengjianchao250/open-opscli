@@ -24,7 +24,7 @@ ENV VIRTUAL_ENV=/opt/venv \
     PYTHONUTF8=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PORT=8000 \
-    APP_DB_PATH=/data/app.db \
+    SQLITE_PATH=/data/app.db \
     PATH=/opt/venv/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # 保留编译工具，支持模板应用安装缺少预编译 wheel 的依赖。
