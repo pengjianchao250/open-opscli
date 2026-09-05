@@ -18,7 +18,7 @@ DEFAULTS = {
     "ops_url": "https://ops.api.xenkee.com/api",
     "ops_system_url": "https://ops.api.xenkee.com",
     "ops_token_endpoint": "/api/v1/auth/cli-token",
-    "apphub_url": "http://10.1.13.143:8080",
+    "apphub_url": "https://apphub.api.xenkee.com",
     "app_template_repo": "http://10.1.13.143:3000/aukeys-admin/template.git",
     "app_template_branch": "main",
     "polaris_system_url": "https://bi.api.xenkee.com",

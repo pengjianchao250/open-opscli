@@ -34,7 +34,7 @@ def test_apphub_url_defaults_to_production(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CONFIG_PATH", tmp_path / "missing.ini")
     monkeypatch.delenv("OPSCLI_APPHUB_URL", raising=False)
 
-    assert config.get_apphub_url() == "http://10.1.13.143:8080"
+    assert config.get_apphub_url() == "https://apphub.qa.aukeyit.com"
 
 
 def test_apphub_url_can_be_configured_from_config_ini(tmp_path, monkeypatch):
@@ -45,13 +45,13 @@ def test_apphub_url_can_be_configured_from_config_ini(tmp_path, monkeypatch):
         "\n".join(
             [
                 "[systems]",
-                "apphub_url = http://10.1.13.143:8080",
+                "apphub_url = https://apphub.qa.aukeyit.com",
             ]
         ),
         encoding="utf-8",
     )
 
-    assert config.get_apphub_url() == "http://10.1.13.143:8080"
+    assert config.get_apphub_url() == "https://apphub.qa.aukeyit.com"
 
 
 def test_app_template_defaults(tmp_path, monkeypatch):

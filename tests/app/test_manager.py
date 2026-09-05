@@ -1,4 +1,4 @@
-"""create、init、push、release 四命令业务编排测试。"""
+"""create、init、push 三命令业务编排测试。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ class FakeClient:
         self.closed = False
         self.create_payloads: list[dict] = []
         self.issue_calls: list[bool] = []
-        self.publish_calls: list[dict] = []
         self.accessible_calls = 0
         self.apps = {
             "sales-dashboard": {
@@ -36,19 +35,14 @@ class FakeClient:
             }
         }
         self.accessible_slugs = ["sales-dashboard"]
-        self.releases = {
-            "releases": [
-                {"status": "healthy", "is_rollback": False, "commit_sha": "a" * 40}
-            ]
-        }
 
-    def create_app(self, app_yaml: dict) -> dict:
-        self.create_payloads.append(app_yaml)
-        slug = app_yaml["name"]
+    def create_app(self, request_payload: dict) -> dict:
+        self.create_payloads.append(request_payload)
+        slug = request_payload["name"]
         detail = {
             "app_id": f"app-{len(self.apps) + 1}",
             "slug": slug,
-            "title": app_yaml["title"],
+            "title": request_payload["title"],
             "status": "registered",
             "repo_url": _repo_url(slug),
             "current_version": None,
@@ -95,29 +89,6 @@ class FakeClient:
         self.issue_calls.append(rotate)
         return {"username": "owner", "token": "rotated-secret", "token_hint": "87654321"}
 
-    def list_releases(self, slug: str, **kwargs) -> dict:
-        assert kwargs == {"page": 1, "size": 1, "is_rollback": False}
-        return self.releases
-
-    def publish_release(
-        self,
-        slug: str,
-        *,
-        commit_sha: str,
-        message: str,
-        on_event=None,
-    ) -> dict:
-        self.publish_calls.append(
-            {"slug": slug, "commit_sha": commit_sha, "message": message}
-        )
-        if on_event is not None:
-            on_event({"seq": 6, "level": "info", "message": "healthy", "status": "healthy"})
-        return {
-            "release_id": 41,
-            "last_seq": 6,
-            "terminal_event": {"status": "healthy", "seq": 6},
-        }
-
     def close(self) -> None:
         self.closed = True
 
@@ -159,7 +130,6 @@ class FakeGit:
             "pushed": self.pushed,
         }
 
-
 def _manager(
     client: FakeClient,
     git: FakeGit,
@@ -172,11 +142,19 @@ def _manager(
     )
 
 
+def _write_manifest(root: Path, *, name: str = "template-app", title: str = "示例应用") -> None:
+    (root / "app.yaml").write_text(
+        f"apiVersion: apps.aukeys/v1\nname: {name}\ntitle: {title}\nruntime: fastapi\n",
+        encoding="utf-8",
+    )
+
+
 def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     client = FakeClient()
     git = FakeGit()
     credentials = FakeCredentialStore()
     manager = _manager(client, git, credentials)
+    _write_manifest(tmp_path)
 
     result = manager.create_app("新看板", path=tmp_path)
 
@@ -193,6 +171,45 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     assert binding_payload["schema_version"] == 3
     assert "template_repo_url" not in binding_payload
     assert result["app_name"] == "新看板"
+    manifest = (tmp_path / "app.yaml").read_text(encoding="utf-8")
+    assert f'name: "{result["slug"]}"' in manifest
+    assert 'title: "新看板"' in manifest
+    assert "runtime: fastapi" in manifest
+
+
+def test_create_without_manifest_does_not_generate_one(tmp_path: Path) -> None:
+    manager = _manager(FakeClient(), FakeGit(), FakeCredentialStore())
+
+    manager.create_app("新应用", path=tmp_path)
+
+    assert not (tmp_path / "app.yaml").exists()
+
+
+def test_create_default_path_reuses_existing_binding(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "sales-dashboard"
+    BindingStore().save(
+        root,
+        SiteBinding(
+            app_id="app-1",
+            app_name="销售看板",
+            slug="sales-dashboard",
+            repo_url=_repo_url("sales-dashboard"),
+        ),
+    )
+    _write_manifest(root)
+    client = FakeClient()
+    monkeypatch.chdir(tmp_path)
+
+    result = _manager(client, FakeGit()).create_app("sales-dashboard")
+
+    assert client.create_payloads == []
+    assert result["app_id"] == "app-1"
+    manifest = (root / "app.yaml").read_text(encoding="utf-8")
+    assert 'name: "sales-dashboard"' in manifest
+    assert 'title: "销售看板"' in manifest
 
 
 def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> None:
@@ -287,83 +304,6 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     result = _manager(client, git).push(tmp_path, message="优化首页")
 
     assert git.push_calls[0][1]["message"] == "优化首页"
-    assert client.publish_calls == []
     assert "release_id" not in result
     assert "version" not in result
     assert result["message"] == "源码已推送到远端仓库。"
-
-
-def test_release_pushes_then_publishes_remote_sha(tmp_path: Path) -> None:
-    BindingStore().save(
-        tmp_path,
-        SiteBinding(
-            app_id="app-1",
-            app_name="销售看板",
-            slug="sales-dashboard",
-            repo_url=_repo_url("sales-dashboard"),
-            git_username="owner",
-        ),
-    )
-    client = FakeClient()
-    git = FakeGit()
-
-    result = _manager(client, git).release(tmp_path, message="发布首页优化")
-
-    assert git.push_calls[0][1]["message"] == "发布首页优化"
-    assert client.publish_calls == [
-        {
-            "slug": "sales-dashboard",
-            "commit_sha": "b" * 40,
-            "message": "发布首页优化",
-        }
-    ]
-    assert result["release_id"] == 41
-    assert result["version"] == "v2"
-    assert result["status"] == "healthy"
-
-
-def test_release_returns_noop_for_published_remote_sha(tmp_path: Path) -> None:
-    BindingStore().save(
-        tmp_path,
-        SiteBinding(
-            app_id="app-1",
-            app_name="销售看板",
-            slug="sales-dashboard",
-            repo_url=_repo_url("sales-dashboard"),
-            git_username="owner",
-        ),
-    )
-    client = FakeClient()
-    client.releases = {"baseline": {"commit_sha": "b" * 40}, "releases": []}
-
-    result = _manager(client, FakeGit(pushed=False)).release(
-        tmp_path,
-        message="确认发布状态",
-    )
-
-    assert result["status"] == "noop"
-    assert result["reason_code"] == "RELEASE-NOOP"
-    assert client.publish_calls == []
-
-
-def test_disabled_application_allows_push_but_blocks_release(tmp_path: Path) -> None:
-    BindingStore().save(
-        tmp_path,
-        SiteBinding(
-            app_id="app-1",
-            app_name="销售看板",
-            slug="sales-dashboard",
-            repo_url=_repo_url("sales-dashboard"),
-            git_username="owner",
-        ),
-    )
-    client = FakeClient()
-    client.apps["sales-dashboard"]["status"] = "disabled"
-    manager = _manager(client, FakeGit())
-
-    assert manager.push(tmp_path, message="保存源码")["commit_sha"] == "b" * 40
-    with pytest.raises(AppProjectError) as caught:
-        manager.release(tmp_path, message="尝试发布")
-
-    assert caught.value.code == "APP-STATE"
-    assert client.publish_calls == []

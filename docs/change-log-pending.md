@@ -1,4 +1,36 @@
+## 2026-09-05 App - 收敛为三命令源码交付工具
+
+**变更原因**：`opscli app release`、AppHub release API 和 SSE 发布跟踪超出应用登记、Git 初始化与源码推送职责，继续保留会让源码交付与线上发布混淆。
+
+**改动点**：命令树收敛为 `create/init/push`；删除 `AppManager.release()`、发布服务、SSE 解析器、release API 客户端和对应测试；push 只执行普通 commit/push，源码到达远端后立即结束；删除旧四命令需求定稿，现行设计统一指向三命令源码交付定稿；更新 AppHub 使用指南、SDK 总览和 `ops-app-build-spec`，明确线上构建、发布、版本、URL、健康检查与回滚不属于 `opscli app`。
+
+**验证结果**：`tests/app` 36 项通过；`ops-app-build-spec` 受影响的元数据、部署边界、文档镜像和安装契约直接检查通过；`ops-app-data-builder` 4 项相关直接契约通过；相关 Python 文件静态编译通过。完整 Skill pytest 仍被仓库既有缺失模块 `enum_cache.py` 阻断；Skill 安装检查成功，但因沙箱权限无法写入用户级 hook/settings/config，仅输出非阻断警告。
+
+**影响范围**：影响 `opscli app` 命令树、AppHub 客户端公开能力、App Skill 源码交付说明及相关文档；不执行真实 Git push，不调用 AppHub 发布服务。
+
+**回滚方式**：还原本条记录及三命令定稿对应的 app、测试、Skill 和文档改动。
+
+---
+
+## 2026-09-05 App - 统一 app.yaml 与本地 binding 职责
+
+> 历史变更：其中四命令和 release 描述已被本文件顶部“三命令源码交付工具”变更取代。
+
+**变更原因**：统一模板中的 `app.yaml.name/title` 是示例身份，真实应用信息来自 AppHub create 响应；历史 `ops-app.config` 同时混合应用声明、本地绑定和旧部署派生规则，容易与 `.opscli/app.json` 产生多套事实源。
+
+**改动点**：新增 `AppManifestStore`，在不覆盖运行时、入口、数据集和扩展字段的前提下原子同步 `app.yaml.name/title`；create 在默认目录和显式目录都先校验 binding，同应用幂等返回；API 请求模型由 `AppYaml` 重命名为 `AppCreateRequest`；release 的 `--message` 改为可选，缺省时按 Git 提交用户和带时区日期时间生成；push 增加 `.opscli/app.json` 跟踪与忽略保护；`ops-app-build-spec` 和 `ops-app-data-builder` 改用 `app.yaml + .opscli/app.json` 身份门禁，移除 `ops-app.config`、Compose/Nginx 双服务和镜像派生规则；同步更新使用指南和专项测试。
+
+**验证结果**：`tests/app` 共 42 项通过；`ops-app-build-spec` 本次相关的 5 项隔离契约测试通过；`ops-app-data-builder` 10 项隔离契约测试通过；两个 Skill 的 `quick_validate.py` 均通过；相关 Python 文件静态编译通过。完整 `tests/skills` 仍被仓库既有缺失模块 `enum_cache.py` 阻断；当前环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：影响 `opscli app create/init/push/release` 的本地身份同步与 Git 安全检查，以及两个 App Skill 的项目门禁；不拉取模板、不生成业务代码、不执行真实 push 或发布。
+
+**回滚方式**：还原本条记录、应用身份确认稿及本次 app、测试、Skill 和使用指南改动。
+
+---
+
 ## 2026-09-05 App - 拆分源码推送与版本发布职责
+
+> 历史变更：四命令方案已被本文件顶部“三命令源码交付工具”变更取代。
 
 **变更原因**：`opscli app` 将模板初始化、源码推送和 AppHub release 混在三命令流程中，导致 push 隐式发布，并与建站顺序、代码规范和 Skill 职责混淆；同时 AppHub Apifox 在 2026-09-04 已将正式前缀更新为 `/api/v1` 并调整创建请求字段。
 

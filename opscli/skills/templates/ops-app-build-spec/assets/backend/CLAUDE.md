@@ -38,9 +38,9 @@
 
 - **技术栈**：Python 3.12 + FastAPI + SQLAlchemy 2.0（异步，`aiosqlite` 驱动）+ Alembic + Pydantic v2 + SQLite；依赖管理 uv + `pyproject.toml` + `uv.lock`
 - **入口**：`app/main.py`，容器内端口 `8000`；CLI 入口 `cli.py`
-- **请求流**：浏览器 → 前端 Nginx `/api/` 代理 → `api/v1` 路由 → `services/` 业务层 → `models/` ORM → SQLite（容器内 `/data/app.db`）
-- **探针**：`/health` 存活（不查依赖），`/ready` 就绪（检查数据库），Compose healthcheck 用 `/ready`
-- **前端与部署**：由仓库根目录 `frontend/`、`deployment/` 与 `ops-app.config` 承担，本文件只管 `backend/`
+- **请求流**：浏览器 → 当前应用相对路径 `/api/` → `api/v1` 路由 → `services/` 业务层 → `models/` ORM → SQLite（线上路径由平台注入）
+- **探针**：`/health` 存活（不查依赖），`/ready` 就绪（检查数据库）
+- **前端与发布声明**：前端位于仓库根目录 `frontend/`；AppHub 声明使用根目录 `app.yaml`；`.opscli/app.json` 仅为不入库的本地绑定；本文件只管 `backend/`
 
 **目录结构**
 
@@ -116,7 +116,7 @@ uv run ruff format . && uv run ruff check . && uv run mypy app/
 **环境约束**：
 
 - **必须在虚拟环境中开发和测试**（`uv sync` 创建的 `.venv`），禁止污染系统 Python。
-- **未明确要求时不得用容器启动业务服务**；本地开发直接 `uvicorn`，Compose 只用于发布检查。
+- **未明确要求时不得用容器启动业务服务**；本地开发直接 `uvicorn`，线上构建和发布由 AppHub 负责。
 - **任何时候不得清空容器旧数据与卷**；`/data` 卷中的 SQLite 是唯一数据副本。
 - 本地开发 `SCHEDULER_ENABLED=false`，需要调试任务时用 `cli.py jobs run` 手动执行，不在本地开启调度器。
 - worktree / 隔离环境工作时，**必须把所有不入库的本地配置一并复制过去**（`.env`、`*.ini`、本地证书），详见第八章。
@@ -144,7 +144,7 @@ repositories/  →  models/
 - 数据库为本应用独占的 SQLite，容器内路径 `/data/app.db`，本地路径由 `SQLITE_PATH` 指定；ORM 基类 `app/models/base.py` 的 `Base`，Alembic 只管理该 metadata。
 - 表名蛇形复数，无前缀；主键 `id`；软删除统一用 `〈deleted_at / status〉`。
 - 引擎 `sqlite+aiosqlite` + `NullPool`，`app/database.py` 在 `connect` 事件注入 PRAGMA 基线（WAL、`foreign_keys=ON`、`busy_timeout=5000`），写事务 `BEGIN IMMEDIATE`；每个参数都有取值依据注释。
-- SQLite 任何时刻只有一个写者：Compose 固定单副本，事务必须短，禁止事务内网络调用。需要多副本或高并发写时停止并联系 IT，不得硬扛。
+- SQLite 任何时刻只有一个写者：线上保持单写实例，事务必须短，禁止事务内网络调用。需要多副本或高并发写时停止并联系 IT，不得硬扛。
 - 类型规则以《SQLite 数据库使用通用规范》为准：金额 `INTEGER` 最小单位、时间 UTC 单一表示、`STRICT` 表、JSON 列 `json_valid`。
 - 迁移 `render_as_batch=True`；改列类型、约束、主键外键必须走 batch 重建，并显式重建索引与触发器。
 
