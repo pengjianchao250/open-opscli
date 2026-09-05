@@ -1,5 +1,27 @@
 # 待归档变更记录
 
+## 2026-09-05 query metadata - 保留远端根因并过滤空数据集别名
+
+**变更原因**：生产会话 5392 的远端元数据请求因无效凭证失败后，代码静默回退本地
+缓存，并用 `DATASET_NOT_FOUND` 覆盖原始 `RemoteBusinessError`；同一次调用还将字符串
+`"null"` 数据集别名置于有效 `table_id` 之前，进一步制造“缓存未同步”假象。
+
+**改动点**：`query_metadata` 将 `null`、`none`、`undefined` 字符串别名归一化为空；
+`QueryManager.metadata()` 在远端失败后仅允许本地缓存确实命中时降级成功，本地加载失败
+或目标未命中时重新抛出原始远端异常。远端成功确认目标不存在时仍返回
+`DATASET_NOT_FOUND`。
+
+**验证结果**：两组相关面回归共 131 条通过：第一组
+`tests/query/test_manager.py tests/mcp/test_query_tools.py` 50 passed；第二组覆盖 metadata
+all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模块 `compileall` 通过；当前
+项目虚拟环境未安装 Ruff（`No module named ruff`），未执行 Ruff 检查。
+
+**影响范围**：query metadata 的失败归因与字符串化空别名；成功响应结构不变。
+
+**回滚方式**：回滚本次提交，无配置、数据结构或远端 API 契约变化。
+
+---
+
 ## 2026-09-05 auth/query - 阻止字符串化空凭证进入请求
 
 **变更原因**：生产会话 5392 中 MCP 参数将 JSON null 序列化为字符串 `"null"`，
