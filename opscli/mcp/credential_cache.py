@@ -14,8 +14,15 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
+
+# JWT 可用性的安全余量（秒）。与 TokenManager.REFRESH_THRESHOLD 同值：
+# 剩余寿命不足该阈值的票视同不可用，让调用方去换一张新的。
+# 为什么必须留余量：原实现只判 `exp > now`，一张只剩 1 秒的票照样被发出去，
+# 请求发到服务端时已过期 —— JwtAuthMiddleware 判 407，表现为"刚拿到票就被登出"。
+# 换票本身很廉价（一次 POST），拿一张将死的票去赌请求时延不划算。
+_JWT_USABLE_MARGIN_SECONDS = 300
 
 
 class McpCredentialCache:
@@ -55,15 +62,16 @@ class McpCredentialCache:
             return self._data.get("email")
 
     def get_jwt(self, system: str = "ops") -> str | None:
-        """获取指定系统的有效 JWT（含过期检查）。
+        """获取指定系统的仍有安全余量的 JWT（含过期检查）。
 
-        如果 JWT 已过期，会自动清除并返回 None。
+        剩余寿命不足 _JWT_USABLE_MARGIN_SECONDS 的票视同不可用，会被清除并返回 None，
+        由调用方换新——避免把一张即将过期的票发出去后在服务端被判 407。
 
         Args:
             system: 系统别名（默认 "ops"）
 
         Returns:
-            有效的 JWT 字符串，或 None
+            仍有安全余量的 JWT 字符串，或 None
         """
         with self._lock:
             tokens = self._data.get("tokens", {})
@@ -74,11 +82,12 @@ class McpCredentialCache:
                 exp = datetime.fromisoformat(td["expires_at"])
                 if exp.tzinfo is None:
                     exp = exp.replace(tzinfo=timezone.utc)
-                if exp > datetime.now(timezone.utc):
+                usable_until = exp - timedelta(seconds=_JWT_USABLE_MARGIN_SECONDS)
+                if usable_until > datetime.now(timezone.utc):
                     return td["jwt"]
             except (KeyError, ValueError):
                 pass
-            # 已过期：从缓存中移除（下次 _load 会从存储同步真实状态）
+            # 已过期或余量不足：从缓存中移除（下次 _load 会从存储同步真实状态）
             del tokens[system]
             return None
 

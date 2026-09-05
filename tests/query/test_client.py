@@ -389,3 +389,58 @@ def test_cli_query_no_mcp_header_when_context_absent(monkeypatch):
 
     client.cli_query({"tableId": 1, "query": {"select": []}})
     assert "X-MCP-API-Key" not in captured["headers"]
+
+
+class CountingAuthClient:
+    """记录 session→JWT 换票次数的假 AuthClient。"""
+
+    def __init__(self) -> None:
+        self.exchanges = 0
+
+    def get_token_by_session(self, session_id: str, alias: str) -> str:
+        self.exchanges += 1
+        return f"jwt-{self.exchanges}"
+
+
+def test_stateless_mode_reuses_exchanged_jwt_within_instance(monkeypatch):
+    """无状态模式下换到的 JWT 在同一实例内复用，不每次请求都重新换票。
+
+    回归防护：一次规划会对 dept/channel/country/brand 等组件逐个发枚举查询再加一次执行，
+    若每次都换票，单次取数就是 N 次 cli-token（每次查一遍 shared_login_sessions 并往
+    auth_token_records 插一行），业务请求本身还会再查一次会话表。
+    """
+    auth = CountingAuthClient()
+    client = QueryClient(auth_client=auth, session_id="session-123")
+    seen_headers = []
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        seen_headers.append(headers["Authorization"])
+        return httpx.Response(
+            200, json={"code": 200, "data": {"rows": []}}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client.cli_simple_query({"tableId": 1})
+    client.cli_simple_query({"tableId": 2})
+
+    assert auth.exchanges == 1
+    assert seen_headers == ["Bearer jwt-1", "Bearer jwt-1"]
+
+
+def test_explicit_jwt_still_skips_exchange(monkeypatch):
+    """调用方显式传了 JWT 时一次都不换票（既有行为不得回归）。"""
+    auth = CountingAuthClient()
+    client = QueryClient(auth_client=auth, jwt="caller-jwt", session_id="session-123")
+
+    def fake_post(url, json=None, headers=None, cookies=None, timeout=None):
+        assert headers["Authorization"] == "Bearer caller-jwt"
+        return httpx.Response(
+            200, json={"code": 200, "data": {"rows": []}}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client.cli_simple_query({"tableId": 1})
+
+    assert auth.exchanges == 0
