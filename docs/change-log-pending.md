@@ -55,6 +55,84 @@
 
 # 待归档变更记录
 
+## 2026-09-05 mcp - 一步登录顺带签发的 JWT 落盘复用（配合后端 P2-1）
+
+**变更原因**：MCP 模式认证是两段式——`/v1/mcp/auth/login` 只产出 session，客户端随后还要打一次 `/v1/auth/cli-token` 才能拿到业务请求用的 Bearer JWT。后端（auto-scheduler `feat/mcp-login-jwt-and-session-renew`）已改为在登录响应里顺带签发一张，客户端落盘即可省掉登录后第一次调用的那一跳。
+
+**改动点**：`opscli/mcp/tools/auth.py::auth_mcp_login`
+- 从响应里取 `jwt` / `expires_in`，在 `save_session` **之后**调用 `store.save_token("ops", ...)` 落进隔离凭证目录。顺序不可颠倒：`save_session` 在 session 变化时会清空旧 JWT（防串号），先存票会把刚拿到的票一起清掉。
+- **把 `jwt` / `expires_in` 从返回体里 `pop` 掉**，对外只留布尔 `jwt_saved`。`auth_mcp_login` 的返回会原样回给 AI Agent，进入模型上下文并落进 `dm_message_events`——明文凭证绝不能走这条路。
+- 票或有效期不完整（空票/零有效期/缺字段）一律不写：宁可多换一次票，也不存一张说不清有效期的票。
+- 旧后端不返回该字段时行为完全不变（向后兼容）。
+
+**验证结果**：新增 8 条测试全通（`tests/mcp/test_mcp_login_jwt.py`）——落盘、**明文票不回传守卫**、旧后端兼容、4 种不完整 payload 参数化、先 session 后票的顺序守卫。相关面回归与 master 基线 `3cb7dc89` 逐条对照：`tests/mcp` 2 failed / **468** passed / 1 error（基线 2/460/1，+8 恰为新增用例数）、`tests/query` 5/289/1 与基线一致、`tests/auth` 73 passed；FAILED + ERROR 清单逐行完全一致，零新增失败。
+
+**影响范围**：仅 `auth_mcp_login` 一处；新后端下登录后 24h 内的工具调用不再需要 `cli-token` 换票。返回体新增可选字段 `jwt_saved`（不影响既有消费方）。
+
+**回滚方式**：`git revert` 本 commit；后端即使已返回 jwt，旧客户端也只是忽略该字段，两侧可独立回滚。
+
+---
+
+## 2026-09-05 query - 组件枚举故障不再连累与该字段无关的查询
+
+**变更原因**：`dept_name` 是 `_ENUM_COMPONENT_SPECS` 首项且 `reverse_lookup=True`，用户没提部门也必发一次枚举；再叠加 `_resolve_component_filters` 里"首个失败即 break"，部门组件一坏，连「查昨天总销售额」这种压根不涉及部门的请求也会被整条 blocked。实测形态见生产会话 5384（该轮请求只要销售额，报错却是"部门的授权枚举调用失败"）。
+
+**⚠️ 与原计划的偏差及原因**：计划原文是「用户原文未提及该字段（`requested` 为空）且枚举失败时，不升级为 blocked」。**按字面实现是不安全的**：`requested` 为空只说明"标签形态没抽到值"，而 channel/country/brand/销售/小组 等字段的裸值（如渠道「傲彼瑞」）本就依赖枚举反查识别——枚举一挂就无从判断原文提没提到它，此时放行等于把「查傲彼瑞的销售额」静默变成查全部渠道，正是本文件反复强调的"静默错数比查不到数据危险得多"。故收窄为：**只有配了自定义 `extract`（文本级检测器）的字段才允许跳过**，当前仅部门一个（`_extract_requested_department_value` 能从「查九部销售额」抠出「九部」，不依赖枚举值）。其余字段一律维持 fail-closed。
+
+**改动点**：`opscli/query/services/planner/query_plan.py`
+- 新增 `_has_text_level_detector(spec)`：该字段能否只看原文就判断用户提没提到它（等价于是否配了自定义 `extract`）。
+- 新增 `_disclose_component_unavailable()`：把"某组件枚举不可用、本次未施加该筛选"写进 `answer_contract.required_disclosures_zh`。**跳过必须披露**——放宽查询范围可以，但不能悄悄放宽；披露过的放宽不是静默错数。
+- `_resolve_enum_component_filter` 在三个阻断分支之前插入跳过分支：`enum_errors and not requested and _has_text_level_detector(spec)` 时登记披露并 `return contract` 继续规划。
+
+**验证结果**：新增 10 条测试全通（`tests/query/planner/test_enum_failure_scope.py`）——部门是当前唯一有文本级检测器的组件、无关查询不被部门故障阻断、跳过必留披露、原文点名部门仍阻断、channel/country/brand 三个无检测器字段参数化验证仍 fail-closed、认证类故障同样适用、多组件下只跳过坏的那个其余照常解析、部门被跳过后渠道该澄清仍澄清。
+
+相关面回归（与 master 基线 `f4333af8` 逐条对照，含同批的 P1-1 提交）：分支 `tests/query` 5 failed / **289** passed / 1 error、`tests/mcp` 2 failed / **460** passed / 1 error、`tests/auth` 73 passed、`tests/skills` 13 errors；基线为 5/277/1、2/454/1、73、13 errors。**FAILED + ERROR 清单逐行完全一致，零新增失败**，passed 差值 +18 恰等于两个 commit 新增用例数之和（10 + 2 + 6）。仓库全量 `pytest tests/` 在 master 上同样直接 48 errors（既有环境问题），故按目录对照。
+
+**影响范围**：仅当"部门组件枚举失败 + 原文未识别到部门值"时行为改变（原 blocked → 现继续规划 + 必披露）。其余字段、其余失败形态、原文点名部门的场景一律不变。
+
+**回滚方式**：`git revert` 本 commit。
+
+---
+
+## 2026-09-05 query/mcp - 换票结果实例内复用，并给缓存 JWT 加可用余量
+
+**变更原因**：两个独立但同源的浪费/风险点。① `QueryClient._get_auth` 在无状态模式下只要 `self.jwt` 为空就重新换票，而它换到票后**不回写 `self.jwt`**——一次规划要对 dept/channel/country/brand 等组件逐个发枚举查询再加一次执行，于是单次取数会打出 N 次 `cli-token`，每次都查一遍 `shared_login_sessions` 并往 `auth_token_records` 插一行，而业务请求本身还会再查一次会话表。② `McpCredentialCache.get_jwt` 只判 `exp > now` 没有任何安全余量（对比 `TokenManager.REFRESH_THRESHOLD` 有 300 秒），一张只剩 1 秒的票照样被发出去，请求到达服务端时已过期、被 `JwtAuthMiddleware` 判 407，表现为"刚拿到票就被登出"。
+
+**改动点**：
+- `opscli/query/transport/client.py`：`_get_auth` 换票成功后写回 `self.jwt`，本实例内复用。**只记在进程内存里、不落盘**——跨调用持久化要写同一份 `credentials.bin`（`CredentialStore.save_token` 是无锁 read-modify-write，多进程并发会损坏），且显式传入的 `session_id` 可能属于别的账号，落盘会串号；风险大于收益，故不做。
+- `opscli/mcp/credential_cache.py`：`get_jwt` 引入 `_JWT_USABLE_MARGIN_SECONDS = 300`（与 `TokenManager.REFRESH_THRESHOLD` 同值），余量不足的票视同不可用并移出内存缓存，由调用方换新。
+
+**验证结果**：新增 8 条测试全通——`tests/query/test_client.py` 2 条（两次请求只换一次票且 Authorization 一致；显式传 JWT 时一次都不换，既有行为不回归）、`tests/mcp/test_credential_cache.py` 6 条（余量 5 种边界参数化：1 小时/刚好超余量/余量不足/只剩 1 分钟/已过期，以及废票被移出缓存）。
+
+**影响范围**：所有走无状态凭证的 MCP 取数调用（换票次数由 N 降为 1）；`get_jwt` 的判定收紧，剩余寿命 <300 秒的缓存票会被当作缺失而触发一次换票——多一次换票，换掉一次必然的 407。
+
+**回滚方式**：`git revert` 本 commit；两处改动互相独立，也可只回退其中一处。
+
+---
+
+## 2026-09-05 query/mcp - 登录态失效的枚举失败单独归因，并自愈重登重试一次
+
+**变更原因**：远端 MCP 上的登录 Session 失效后（TTL 30 天且使用时不续期，或被服务端登出置 `is_valid=0`），opscli 拿它去 `POST /api/v1/auth/cli-token` 换 JWT 恒 401 抛 `TokenFetchError`。规划器 `_auto_enum_component_values` 对枚举异常只做 `except Exception` 不分类型，`enum_failed` 分支一律按「通常是该筛选组件的元数据配置异常，重试无效，请提交反馈由平台侧核查」归因——把一个"重新登录就能恢复"的问题误导成平台缺陷，用户只能提反馈干等。生产实测（ops-agent `dm_messages` 全库检索）2026-08-04 起 **59 个会话 / 17 个用户**被这条文案误导，代表案例为会话 5384「部门的授权枚举调用失败（TokenFetchError: 获取 ops JWT 失败: 401）」。放大因素：`dept_name` 是 `_ENUM_COMPONENT_SPECS` 首项且 `reverse_lookup=True`，用户没提部门也必发一次枚举，因此认证一坏任何一次规划都 100% 卡在"部门"。
+
+另一半原因在自愈侧：`ensure_ops_credentials` 已有自动登录，但只在 `is_authenticated()` 为假时触发，而它**只比对本地 `session_expires_at`**；被服务端登出/吊销的 Session 本地依然显示未过期，自动登录因此永远不触发。且该函数当前只被 seller_sprite 调用，取数链路根本没接。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`：新增 `_auth_error_type_names()`（从 `TokenFetchError` / `NotAuthenticatedError` 类对象取 `__name__`，异常类改名时判定自动跟随）与 `_is_auth_enum_error()`；`_resolve_enum_component_filter` 的 `enum_failed` 分支按类型分流——认证类改为 `component_filter_state="auth_required"` / `next_action="reauthenticate"`，文案明说「登录态失效、不是数据集或数据权限问题、重新登录后重试」，且不再出现「元数据配置异常 / 重试无效 / 提交反馈」；非认证类归因与文案原样不动。两类都仍 fail-closed 撤模板。
+- `opscli/mcp/ops_credentials.py`：`ensure_ops_credentials()` 新增 `force_relogin` 参数，忽略 `is_authenticated()` 强制重登；single-flight 二次检查在 force 路径下改以「`session_id` 是否换了新的」为判据（只看 `is_authenticated()` 会把并发前那张被服务端拒掉的旧 Session 当成有效，导致真正需要重登的请求被跳过）。
+- `opscli/mcp/tools/query.py`：新增 `_contract_needs_reauth()` 与 `_reauth_credentials_for_retry()`；`query_flow` / `query_plan` 拿到 `auth_required` 合同时强制重登一次并**用新凭证**原样重跑一次（最多一次，防 401 风暴）；重登失败或拿不到凭证时保留原合同。放在工具层而非规划器 `enum_fn` 内：规划器是同步的而重登是 async，且整轮重跑能一并覆盖同一轮里其它同因失败。
+
+**验证结果**：新增 30 条测试全通——`tests/query/planner/test_enum_auth_attribution.py` 14 条（分类判定含空串/无冒号裸文本、类名集合跟随真实类、两类异常的归因与文案、误导措辞黑名单、非认证类归因不被带偏、两类都撤模板）、`tests/mcp/test_query_reauth_retry.py` 13 条（触发条件 8 种形态参数化、换新凭证重跑、最多重试一次、重登失败保留原合同、query_plan 同样自愈、重登辅助吞异常）、`tests/mcp/test_ops_credentials.py` 追加 3 条（force 无视本地未过期、并发已重登则跳过、默认路径行为不变）。
+
+相关面回归（筛选依据：改动文件 → 反查 `tests/query` `tests/mcp` `tests/auth` `tests/skills` 四个目录）：分支 `tests/query` 5 failed / **277** passed / 1 error、`tests/mcp` 2 failed / **454** passed / 1 error、`tests/auth` 73 passed、`tests/skills` 13 errors；master 基线同命令为 5/**263**/1、2/**438**/1、73、13 errors。**FAILED + ERROR 清单逐行 diff 完全一致**（既有基线红：`test_seller_sprite_proxy` 1、`test_seller_sprite_tools` 1、`test_pure_units` 1、`test_intent_attribution_headers` 2、`test_intent_match_report` 2，另 `test_shopify_tools` / `test_flow_parity` / `tests/skills` 全目录为既有 collection error），**零新增失败**，passed 差值 +30 恰等于本次新增用例数。
+
+⚠️ 未跑仓库全量：`pytest tests/` 在 master 上同样直接 48 errors 而非收集完成（既有环境/插件问题，非本次引入），故改按目录跑并与 master 逐条对照。
+
+**影响范围**：`query_plan` / `query_flow` 两个 MCP 工具在登录态失效时的对外语义（新增 `auth_required` / `reauthenticate` 状态，调用方若硬编码只认 `enum_failed` 需同步）；`ensure_ops_credentials` 新增可选参数，默认行为不变（seller_sprite 不受影响）。未覆盖 CLI 直跑路径与 `query_metadata` / `query_simple` 手工路线——它们的认证失败以异常原样抛出，本就不经 `enum_failed` 归因。
+
+**回滚方式**：`git revert` 本 commit；三处改动互相独立，也可单独回退 `query.py` 只保留归因、不要自愈重试。
+
+---
+
 ## 2026-09-03 Skills - ops-app-build-spec 改用统一模板仓库
 
 **变更原因**：AppHub 已提供完整模板项目，脚手架、目录结构、具体开发命令和数据库实现应由模板项目维护；前后端最低开发要求、取数、平台、安全、迁移和源码交付限制仍需随 opscli 发版更新，不能全部移入创建后不再自动更新的业务项目。

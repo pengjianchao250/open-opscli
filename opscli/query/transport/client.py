@@ -34,7 +34,7 @@ class QueryClient:
 
         参数：
             auth_client: 认证客户端，缺省时自动创建
-            jwt: 无状态模式下外部传入的 JWT
+            jwt: 无状态模式下外部传入的 JWT；留空时首次换票后会在本实例内缓存复用
             session_id: 无状态模式下外部传入的会话 ID
             timeout: 查询执行接口的 HTTP 超时秒数，None 或非正数时回退默认值 120 秒
         """
@@ -56,6 +56,14 @@ class QueryClient:
             if not jwt:
                 # 无状态模式：用 session_id 实时向后端换取 JWT
                 jwt = self.auth_client.get_token_by_session(self.session_id, alias)
+                # 换到的票在本实例内复用：一次规划会对 dept/channel/country/brand 等
+                # 组件逐个发枚举查询，再加一次执行——若每次都重新换票，单次取数就是
+                # N 次 cli-token（每次都查一遍 shared_login_sessions 并往
+                # auth_token_records 插一行），且业务请求本身还会再查一次会话表。
+                # 只在进程内存里记，不落盘：跨调用的持久化涉及多进程写同一份
+                # credentials.bin（save_token 是无锁 read-modify-write）与显式凭证
+                # 串号（传入的 session 可能属于别的账号），风险大于收益。
+                self.jwt = jwt
             headers = {"Authorization": f"Bearer {jwt}"}
             headers.update(get_mcp_request_headers())
             cookies = {"polarisUserToken": self.session_id}

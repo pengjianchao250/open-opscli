@@ -75,6 +75,7 @@ async def ensure_ops_credentials(
     *,
     provided_session: str | None = None,
     provided_jwt: str | None = None,
+    force_relogin: bool = False,
 ) -> OpsCredentialBinding:
     """按当前 MCP 身份确保并返回可信 OPS 凭证。
 
@@ -86,6 +87,12 @@ async def ensure_ops_credentials(
     Args:
         provided_session: 旧客户端或 stdio 调用方显式传入的 OPS Session。
         provided_jwt: 旧客户端或 stdio 调用方显式传入的 OPS JWT。
+        force_relogin: 远端模式下强制重新登录一次，忽略 ``is_authenticated()``。
+            用于「本地看着没过期、服务端却已判无效」的场景——``is_authenticated()``
+            只比对本地 ``session_expires_at``，而服务端还会校验 ``is_valid``
+            与真实有效期，被登出或吊销的 Session 在本地依然显示未过期，
+            于是自动登录永远不触发、调用方恒拿到 401。仅在调用方确实撞到
+            认证类失败后才允许传 True，避免每次调用都重登。
 
     Returns:
         与当前 MCP 身份一致的凭证作用域、邮箱和 OPS 凭证绑定。
@@ -99,10 +106,20 @@ async def ensure_ops_credentials(
         if credential_dir is None:
             raise OpsCredentialBindingError("无法确定当前 MCP 用户的隔离凭证作用域")
         cache = _get_isolated_credential_cache(credential_dir)
-        if not cache.is_authenticated():
+        # force_relogin 时不看本地有效期：这条路径的前提就是"本地认为有效但服务端拒了"。
+        stale_session_id = cache.get_session_id() if force_relogin else None
+        if force_relogin or not cache.is_authenticated():
             async with _get_login_lock(str(credential_dir)):
                 # 取得锁后必须二次检查，其他并发请求可能已经完成自动登录。
-                if not cache.is_authenticated():
+                # force_relogin 下的"已完成"判据是 session_id 确实换了新的——
+                # 只看 is_authenticated() 会把并发前那张被服务端拒掉的旧 Session
+                # 当成有效，导致真正需要重登的请求被跳过。
+                already_renewed = (
+                    force_relogin
+                    and cache.get_session_id()
+                    and cache.get_session_id() != stale_session_id
+                )
+                if not already_renewed and (force_relogin or not cache.is_authenticated()):
                     login_result = await auth_mcp_login()
                     if login_result.get("success") is not True:
                         error = login_result.get("error") or {}
