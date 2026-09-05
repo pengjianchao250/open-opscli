@@ -35,17 +35,29 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 
 ## 新项目
 
-1. 确认目标目录不存在或为空。
+1. 确认应用展示名称，并确认目标目录不存在或为空。
 2. 克隆模板：
 
    ```bash
    git clone --branch main --single-branch http://10.1.13.143:3000/aukeys-admin/template "<project-directory>"
    ```
 
-3. 核对分支和 HEAD，并确认 `app.yaml`、`AGENTS.md`、`frontend/`、`backend/app.py`、`backend/CLAUDE.md` 和 `docs/apphub-contract.md` 存在。
-4. 开发前读取目标项目的 `AGENTS.md`、`docs/apphub-contract.md`、`backend/CLAUDE.md` 和 `README.md`。
+3. 模板克隆成功后立即创建 AppHub 应用并写入本地 binding：
 
-新项目只通过 clone 获取模板，不使用 `opscli app create/init` 代替 clone。克隆后的 `origin` 指向模板仓库，业务代码不得推回模板仓库；首次源码交付前再按部署规范创建应用并绑定业务仓库。
+   ```bash
+   opscli app create "<app-name>" --path "<project-directory>" --json
+   ```
+
+4. `create` 成功后立即初始化应用仓库并将模板 `origin` 切换为业务仓库：
+
+   ```bash
+   opscli app init "<project-directory>" --json
+   ```
+
+5. 核对分支、HEAD 和 `origin`，确认 `.opscli/app.json`、`app.yaml`、`AGENTS.md`、`frontend/`、`backend/app.py`、`backend/CLAUDE.md` 和 `docs/apphub-contract.md` 存在，且 `.opscli/app.json.slug == app.yaml.name`。
+6. 开发前读取目标项目的 `AGENTS.md`、`docs/apphub-contract.md`、`backend/CLAUDE.md` 和 `README.md`。
+
+新项目只通过 clone 获取模板，不使用 `opscli app create/init` 代替 clone；但 clone、`create` 和 `init` 是开始开发前连续执行的必需步骤。任一步失败都停止后续开发，并按错误处理规范保留证据；业务代码不得推回模板仓库。
 
 不得运行项目生成器、手写替代脚手架，或从 Skill 复制应用代码和发布资产。
 
