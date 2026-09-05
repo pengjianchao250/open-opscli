@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 
 from opscli.auth import AuthClient
 from opscli.auth.storage.credential_store import CredentialStore
-from opscli.mcp.tools.helpers import _get_session_id, _get_jwt
+from opscli.mcp.tools.helpers import _get_auth_pair, _get_session_id, _get_jwt
 from opscli.mcp.credential_cache import McpCredentialCache, get_credential_cache
 
 
@@ -79,6 +79,19 @@ def test_cli_login_mcp_can_read_jwt(monkeypatch, tmp_path):
     # MCP 读取
     mcp_jwt = _get_jwt("ops", None)
     assert mcp_jwt == jwt
+
+
+@pytest.mark.parametrize("null_like", ["null", " NULL ", "None", "undefined"])
+def test_auth_pair_treats_stringified_null_as_absent(tmp_path, null_like):
+    """字符串化空凭证不得覆盖隔离缓存中的真实登录态。"""
+    cli_client = AuthClient(base_dir=tmp_path)
+    cli_client._store.save_session(
+        "sess-live", "user@example.com", "2099-01-01T00:00:00+00:00"
+    )
+    jwt = _make_jwt(expires_in=7200)
+    cli_client._store.save_token("ops", jwt, expires_in=7200)
+
+    assert _get_auth_pair("ops", null_like, null_like) == ("sess-live", jwt)
 
 
 # ── 测试 2：MCP 登录后，CLI 可直接读取 ─────────────────────────────

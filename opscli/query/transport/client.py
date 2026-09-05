@@ -5,6 +5,7 @@ from __future__ import annotations
 import httpx
 
 from opscli.auth import AuthClient, OPS_URL
+from opscli.auth.context import normalize_optional_credential
 from opscli.mcp.context import get_mcp_request_headers
 from opscli.query.domain.exceptions import BadRemoteJsonError, RemoteBusinessError, RemoteHttpError
 from opscli.shared.http import parse_remote_response
@@ -39,8 +40,9 @@ class QueryClient:
             timeout: 查询执行接口的 HTTP 超时秒数，None 或非正数时回退默认值 120 秒
         """
         self.auth_client = auth_client or AuthClient()
-        self.jwt = jwt
-        self.session_id = session_id
+        # 传输层再做一次防御，避免绕过 MCP helper 的直接 SDK 调用发出 Bearer null。
+        self.jwt = normalize_optional_credential(jwt)
+        self.session_id = normalize_optional_credential(session_id)
         self.ops_url = OPS_URL.rstrip("/")
         # 仅作用于 cli_query / cli_simple_query 两个查询执行接口
         self.timeout = timeout if timeout and timeout > 0 else DEFAULT_QUERY_TIMEOUT

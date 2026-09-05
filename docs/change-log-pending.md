@@ -1,5 +1,27 @@
 # 待归档变更记录
 
+## 2026-09-05 auth/query - 阻止字符串化空凭证进入请求
+
+**变更原因**：生产会话 5392 中 MCP 参数将 JSON null 序列化为字符串 `"null"`，
+原有真值判断把它当成真实 session/JWT，最终生成 `Authorization: Bearer null` 和
+`polarisUserToken=null`，被后端误报为“用户不存在”。
+
+**改动点**：在 `auth.context` 增加可选凭证归一化；`mcp.tools.helpers` 的 session、JWT
+及凭证对读取统一过滤 `null`、`none`、`undefined`（忽略大小写和首尾空白）并回退隔离
+凭证缓存；`QueryClient` 构造时再做传输层防御，覆盖绕过 MCP helper 的直接 SDK 调用。
+
+**验证结果**：相关面回归 53 条通过：
+`tests/auth/test_explicit_credentials.py`、`tests/mcp/test_helpers_identity.py`、
+`tests/mcp/test_query_tools.py`、`tests/mcp/test_feedback_tools.py`、
+`tests/test_session_sharing.py`、`tests/query/test_client.py`。
+
+**影响范围**：仅改变不可能成为合法凭证的字符串化空值；正常显式凭证和本地凭证读取
+优先级保持不变。
+
+**回滚方式**：回滚本次提交，无配置、数据结构或远端 API 契约变化。
+
+---
+
 ## 2026-09-05 mcp - 一步登录顺带签发的 JWT 落盘复用（配合后端 P2-1）
 
 **变更原因**：MCP 模式认证是两段式——`/v1/mcp/auth/login` 只产出 session，客户端随后还要打一次 `/v1/auth/cli-token` 才能拿到业务请求用的 Bearer JWT。后端（auto-scheduler `feat/mcp-login-jwt-and-session-renew`）已改为在登录响应里顺带签发一张，客户端落盘即可省掉登录后第一次调用的那一跳。
