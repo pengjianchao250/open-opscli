@@ -128,7 +128,7 @@ def test_query_simple_forwards_global_currency(monkeypatch):
 
 
 def test_query_simple_omits_global_currency_by_default(monkeypatch):
-    """未识别到币种意图时不传该参数，由后端回退用户默认币种配置。"""
+    """未指定币种时只透传 None，不注入默认值；最终币种以返回声明为准。"""
     captured = {}
 
     class DummyManager:
@@ -139,8 +139,9 @@ def test_query_simple_omits_global_currency_by_default(monkeypatch):
     monkeypatch.setattr(helpers, "_get_auth_pair", lambda system, session_id, jwt: ("sid-1", "jwt-1"))
     monkeypatch.setattr(query_tools, "_query_manager", lambda jwt=None, session_id=None: DummyManager())
 
-    _run(query_tools.query_simple(table_id=1, metrics=["price:SUM"]))
+    result = _run(query_tools.query_simple(table_id=1, metrics=["price:SUM"]))
 
+    assert result["success"] is True
     assert captured["kwargs"]["global_currency"] is None
 
 

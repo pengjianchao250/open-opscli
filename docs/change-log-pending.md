@@ -1,3 +1,30 @@
+## 2026-09-05 MCP query - 币种语义与三入口 schema 审查跟进
+
+**变更原因**：`bf32a66c` 补齐 MCP 币种参数后，生产分支的字段语义索引仍把
+美元/USD 解释为选择原币字段，并默认 CNY，与查询规范冲突；schema 回归仅覆盖
+`query_simple`。复核后端 `CliQueryService::resolveGlobalCurrency` 确认用户默认币种
+回退已停用，前次审查建议将测试说明改为“回退用户默认币种”不准确。
+
+**改动点**：语义索引拆分原币字段口径与目标币种换算关键词，去掉默认 CNY 指令，
+明确目标币种走 `global_currency`、未指定时不传、结果按 `meta.currency` 披露；
+默认参数测试说明仅描述透传 `None` 的可验证行为，并断言调用成功；FastMCP schema
+测试参数化覆盖 `query_simple`、`query_build`、`query_build_and_run`，检查参数存在、
+可选且默认值为 `None`。
+
+**验证结果**：使用项目虚拟环境运行
+`python -m pytest tests/mcp/test_query_tools.py tests/mcp/test_tools.py tests/query/test_manager.py -q`，
+master 和 release 各 64 条通过。release 通过 cherry-pick 移植 `42d0643f`，冲突解决后
+确认字段语义索引与 master 一致，原有变更记录完整保留。PyYAML 解析及结构校验通过：
+目标关键词覆盖六种受支持币种代码、原币关键词与目标关键词互斥、默认币种为空；
+`git diff --check` 通过。
+
+**影响范围**：内置 ops-dataset-query 字段语义索引和 MCP 测试；不改变后端默认币种
+策略、接口参数或版本号。
+
+**回滚方式**：回退本节记录及上述语义索引、两个测试文件的本次差异，无数据库或配置迁移。
+
+---
+
 ## 2026-09-05 App - 收敛为三命令源码交付工具
 
 **变更原因**：`opscli app release`、AppHub release API 和 SSE 发布跟踪超出应用登记、Git 初始化与源码推送职责，继续保留会让源码交付与线上发布混淆。
