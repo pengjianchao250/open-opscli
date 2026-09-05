@@ -141,7 +141,7 @@ repositories/  →  models/
 
 ### 3.2 数据库
 
-- 数据库为本应用独占的 SQLite，容器内路径 `/data/app.db`，本地路径由 `SQLITE_PATH` 指定；ORM 基类 `app/models/base.py` 的 `Base`，Alembic 只管理该 metadata。
+- 数据库为本应用独占的 SQLite，唯一变量为 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。ORM 基类 `app/models/base.py` 的 `Base`，Alembic 只管理该 metadata。
 - 表名蛇形复数，无前缀；主键 `id`；软删除统一用 `〈deleted_at / status〉`。
 - 引擎 `sqlite+aiosqlite` + `NullPool`，`app/database.py` 在 `connect` 事件注入 PRAGMA 基线（WAL、`foreign_keys=ON`、`busy_timeout=5000`），写事务 `BEGIN IMMEDIATE`；每个参数都有取值依据注释。
 - SQLite 任何时刻只有一个写者：Compose 固定单副本，事务必须短，禁止事务内网络调用。需要多副本或高并发写时停止并联系 IT，不得硬扛。

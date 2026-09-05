@@ -5,7 +5,8 @@
 ## 提交前配置检查
 
 - 仓库根目录存在 `app.yaml`，并按业务填写名称、标题、描述、数据集和可见范围。
-- `app.yaml` 保持 `apiVersion: apps.aukeys/v1`、`runtime: fastapi`、`python: "3.12"`、`entrypoint: backend/app.py`；使用 SQLite 时保持 `services.sqlite: true`。
+- `app.yaml` 保持 `apiVersion: apps.aukeys/v1`；使用 SQLite 时声明 `database.kind: sqlite` 与容器文件路径 `database.path: /data/app.db`。
+- 应用数据库唯一变量是 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。
 - 模板要求的入口、`nixpacks.toml`、`Dockerfile` 和依赖清单仍存在，未被旧项目文件覆盖。
 - 前端资源与 API 使用相对地址，不硬编码 AppHub 公开前缀、appId、slug 或部署域名。
 - AppHub 生产入口保持单应用进程合同：`uvicorn backend.app:app --host 0.0.0.0 --port 8000`。Compose 或其他本地工具不能替代线上发布配置。

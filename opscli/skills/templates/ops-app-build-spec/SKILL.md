@@ -69,7 +69,7 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 - 只修改当前业务需要的代码，保留用户已有修改和模板基础能力。
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
 - 用户未授权时，不安装依赖、启动服务、执行数据库写入、提交、推送或部署。
-- `app.yaml`、Git 根和 `main` 分支是否满足发布前置。
+- `app.yaml`、Git 根和 `master` 分支是否满足发布前置。
 - # 支持结论、迁移风险、未识别项及预计文件变更。
 - 页面真实数据用途、现有数据源、调用路径和前端直连或凭证风险。
 - 第三方原始数据、SellerSprite 异步任务和用户私有加工结果是否正确分层。
@@ -88,7 +88,7 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 
 ## 提交与部署
 
-首次源码交付或后续推送时读取部署规范。Skill 负责配置校验、当前 opscli 命令边界和提交前检查；源码推送后的构建、发布、健康状态和回滚由线上 AppHub 处理。
+首次源码交付或后续推送时读取部署规范。Skill 负责配置校验、当前 opscli 命令边界和提交前检查；源码推送后的构建、自动 release、健康状态和回滚由线上 AppHub 处理。Skill 不绕过 `opscli app push` 直接 Push，也不调用 release 创建接口生成第二条 release。
 
 发布态固定为一个 FastAPI 进程托管 Vite 构建产物、API 和健康检查：
 
@@ -124,14 +124,12 @@ Dockerfile
 
 ```yaml
 apiVersion: apps.aukeys/v1
-runtime: fastapi
-python: "3.11"
-entrypoint: backend/app.py
-services:
-  sqlite: true
+database:
+  kind: sqlite
+  path: /data/app.db
 ```
 
-禁止在应用代码、环境文件、构建文件或前端配置中重复维护平台身份、公开前缀或发布地址。`app.yaml` 必须位于独立 Git 仓库根目录，发布分支必须为 `main`；模板源目录嵌套在另一个仓库中时先迁出并初始化独立仓库。
+禁止在应用代码、环境文件、构建文件或前端配置中重复维护平台身份、公开前缀或发布地址。`app.yaml` 必须位于独立 Git 仓库根目录，发布分支必须为 `master`；模板源目录嵌套在另一个仓库中时先迁出并初始化独立仓库。
 
 全新项目从 `.opscli/app.json.app_id` 和 `.opscli/app.json.slug` 读取平台身份，分别写入或校验 `ops-app.config.appId` 和 `ops-app.config.appName`，不在首次发布阶段重新注册应用。
 
@@ -150,7 +148,7 @@ services:
 - FastAPI 先注册 `/__apphub_healthz`、`/api/*` 和 WebSocket，再挂载静态资源，SPA fallback 最后注册。
 - FastAPI 不读取公开前缀，不设置框架子路径参数。
 - Vite `dist` 由同一个 FastAPI 进程托管，不启动第二个生产 Web 进程。
-- SQLite 只读取 `APP_DB_PATH`；本地开发默认使用已忽略的 `.data/app.db`，测试使用临时目录，线上由平台注入 `/data/app.db`。
+- SQLite 只读取 `SQLITE_PATH`；模板库为 `data/app.db`，本地运行库为已忽略的 `.data/app.db`，容器运行库为 `/data/app.db`。平台只把命名卷挂到 `/data`，不注入数据库路径变量。
 
 ### 7. 构建与发布
 
@@ -165,7 +163,7 @@ AppHub 发布主路径固定为 Nixpacks：
 
 发布前必须确认：
 
-- `app.yaml` 能通过当前 schema，入口文件存在，Git 根独立且当前分支为 `main`。
+- `app.yaml` 能通过当前 schema，入口文件存在，Git 根独立且当前分支为 `master`。
 - `requirements.txt` 的普通依赖全部精确锁定，真实 `aukeys-opscli` 通过兼容模块导入检查。
 - 前端测试和生产构建、后端测试、健康检查通过。
 - Nixpacks 与 Dockerfile 的构建产物、启动模块、端口和健康路径一致。
