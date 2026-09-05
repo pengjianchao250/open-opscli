@@ -5,10 +5,15 @@ based_on: "intent_taxonomy.yml v1.2"
 purpose: "将用户自然语言中的业务术语映射为候选字段、候选数据集、口径说明和澄清规则，避免只做关键词搜索导致误选字段或误选数据集。"
 
 global_semantic_rules:
-  default_currency: "CNY"
+  # 未指定币种时不注入换算参数，最终币种以返回的 meta.currency 为准。
+  default_currency: null
   formula_metrics_no_extra_aggregation: true
-  amount_original_currency_keywords: [原币, 美金, 美元, USD, 站点币种]
+  # 原币口径只参与字段选择，不能用原币字段代替目标币种换算。
+  amount_original_currency_keywords: [原币, 站点币种, 当地币种]
   amount_cny_keywords: [人民币, CNY, 本币]
+  # 目标币种关键词命中时传 global_currency，由服务端换算金额指标。
+  target_currency_keywords: [美元, 美金, USD, 欧元, EUR, 英镑, GBP, 加元, 加拿大元, CAD, 日元, JPY, 人民币, CNY]
+  currency_conversion_rule: "币种换算走请求参数 global_currency（payload 顶层 globalCurrency），仅支持 USD/GBP/CAD/EUR/JPY/CNY；币种不是维度或筛选字段，元数据无 currency 字段属正常。未指定币种时不传该参数，最终币种以返回的 meta.currency 为准，未声明时不得推断。"
   output_field_name_rule: "输出字段名必须使用数据集原始 verbose_name，不得自行改写。"
   field_check_rule: "字段语义索引只负责候选推荐，构造查询前仍必须通过 metadata 或 dataset_fields.csv 校验字段真实存在。"
 
@@ -331,7 +336,7 @@ ambiguity_rules:
 
   - rule_id: "currency"
     trigger_terms: [金额, 销售额, 广告费, CPC, 成本]
-    action: "默认CNY；用户提到原币、美元、USD时使用原币字段。"
+    action: "用户指定美元/欧元/人民币等目标币种时传 global_currency（CLI --global-currency），不要找 currency 字段、不要塞 filters、不要用字段替代；未指定币种时不传参数，不默认选择 CNY 字段。仅当用户要求原币/站点币种口径且数据集同时存在 xxx 与 xxx_cny 时，才澄清字段口径。"
 
   - rule_id: "traffic_conversion_scope"
     trigger_terms: [转化率]

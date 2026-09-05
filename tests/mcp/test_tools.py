@@ -52,17 +52,21 @@ def test_mcp_exposes_expected_tools():
     assert "mcp_user_list" not in names
 
 
-def test_query_simple_exposes_global_currency_in_mcp_schema():
-    """生产 MCP 工具清单必须公开 global_currency，避免调用前参数校验直接拒绝。"""
+@pytest.mark.parametrize("tool_name", ["query_simple", "query_build", "query_build_and_run"])
+def test_query_tools_expose_optional_global_currency_in_mcp_schema(tool_name):
+    """三个手工查询入口都必须公开可选的 global_currency，兼容未传币种的调用。"""
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
-            return next(tool for tool in tools if tool.name == "query_simple")
+            return next(tool for tool in tools if tool.name == tool_name)
 
     tool = _run(scenario())
-    properties = (tool.inputSchema or {}).get("properties", {})
+    schema = tool.inputSchema or {}
+    properties = schema.get("properties", {})
 
     assert "global_currency" in properties
+    assert "global_currency" not in schema.get("required", [])
+    assert properties["global_currency"]["default"] is None
 
 
 def test_mcp_hides_temporarily_closed_service_tools():
