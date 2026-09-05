@@ -194,8 +194,9 @@ AppHub 发布主路径固定为 Nixpacks：
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
 
-发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app push <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
-没有线上证据时，不得把 push、构建排队或镜像生成报告成已部署。
+只交付源码且用户已确认时，由 Codex 执行 `opscli app push <root> --message <summary>`。
+发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app release <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
+没有 release 终态和线上证据时，不得把 push、构建排队或镜像生成报告成已部署。
 
 ## 错误处理
 

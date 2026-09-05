@@ -1,4 +1,4 @@
-"""AppHub 第一阶段 HTTP/SSE 客户端测试。"""
+"""AppHub 应用、Git 与 release HTTP/SSE 客户端测试。"""
 
 from __future__ import annotations
 
@@ -17,26 +17,23 @@ class FakeAuth:
         return {"X-Session-Id": "session", "X-Opscli-Version": "0.0.1"}
 
 
-def test_client_uses_shared_apphub_environment_config(monkeypatch) -> None:
+def test_client_uses_current_apphub_api_prefix(monkeypatch) -> None:
     monkeypatch.setattr(
         "opscli.app.transport.client.get_apphub_url",
         lambda: "http://10.1.13.143:8080",
     )
     http = httpx.Client(
         transport=httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                json={"repo_url": "https://gitea.example/apps/demo.git"},
-            )
+            lambda request: httpx.Response(200, json={"apps": []})
         )
     )
 
     client = AppHubClient(auth_client=FakeAuth(), http_client=http)
 
-    assert client.api_base_url == "http://10.1.13.143:8080/api/apphub/v1"
+    assert client.api_base_url == "http://10.1.13.143:8080/api/v1"
 
 
-def test_create_app_sends_full_appyaml_without_cookie() -> None:
+def test_create_app_sends_current_contract_without_cookie() -> None:
     observed = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -52,26 +49,46 @@ def test_create_app_sends_full_appyaml_without_cookie() -> None:
             },
         )
 
-    http = httpx.Client(transport=httpx.MockTransport(handler))
     client = AppHubClient(
         base_url="https://apphub.example",
         auth_client=FakeAuth(),
-        http_client=http,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
-    app_yaml = AppYaml.from_site_name("sales-dashboard").to_dict()
 
-    payload = client.create_app(app_yaml)
+    payload = client.create_app(
+        AppYaml.from_app_name("销售看板", slug="sales-dashboard").to_dict()
+    )
 
     request = observed["request"]
-    assert request.url == "https://apphub.example/api/apphub/v1/apps"
+    assert request.url == "https://apphub.example/api/v1/apps"
     assert request.headers["X-Session-Id"] == "session"
     assert "cookie" not in request.headers
     body = json.loads(request.content)
     assert body["apiVersion"] == "apps.aukeys/v1"
-    assert body["runtime"] == "streamlit"
-    assert body["services"] == {"sqlite": False}
+    assert body["database"] == {"path": None}
     assert body["opscli"] == {"auth_mode": "viewer", "datasets": []}
+    assert "runtime" not in body
+    assert "python" not in body
+    assert "entrypoint" not in body
+    assert "services" not in body
     assert payload["app_id"] == "app-1"
+
+
+def test_list_accessible_apps_uses_current_path() -> None:
+    observed = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        return httpx.Response(200, json={"apps": []})
+
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.list_accessible_apps() == {"apps": []}
+    assert observed[0].url.path == "/api/v1/accessible-apps"
 
 
 def test_publish_release_resumes_sse_from_last_sequence() -> None:
@@ -100,11 +117,10 @@ def test_publish_release_resumes_sse_from_last_sequence() -> None:
             ).encode(),
         )
 
-    http = httpx.Client(transport=httpx.MockTransport(handler))
     client = AppHubClient(
         base_url="https://apphub.example",
         auth_client=FakeAuth(),
-        http_client=http,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
     result = client.publish_release(
@@ -124,19 +140,24 @@ def test_http_error_envelope_is_mapped() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             409,
-            json={"detail": {"code": "CONFLICT", "message": "busy", "fix_hint": "rename"}},
+            json={
+                "detail": {
+                    "code": "CONFLICT",
+                    "message": "busy",
+                    "fix_hint": "rename",
+                }
+            },
             headers={"X-Request-Id": "req-1"},
         )
 
-    http = httpx.Client(transport=httpx.MockTransport(handler))
     client = AppHubClient(
         base_url="https://apphub.example",
         auth_client=FakeAuth(),
-        http_client=http,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
     with pytest.raises(AppHubHttpError) as caught:
-        client.create_app(AppYaml.from_site_name("demo").to_dict())
+        client.create_app(AppYaml.from_app_name("demo").to_dict())
 
     assert caught.value.code == "CONFLICT"
     assert caught.value.fix_hint == "rename"

@@ -1,3 +1,17 @@
+## 2026-09-05 App - 拆分源码推送与版本发布职责
+
+**变更原因**：`opscli app` 将模板初始化、源码推送和 AppHub release 混在三命令流程中，导致 push 隐式发布，并与建站顺序、代码规范和 Skill 职责混淆；同时 AppHub Apifox 在 2026-09-04 已将正式前缀更新为 `/api/v1` 并调整创建请求字段。
+
+**改动点**：命令调整为 `create/init/push/release`；create 只创建并保存基础信息，init 只恢复应用和初始化 Git，push 只提交并普通推送源码，release 幂等确保源码已推送后再创建 release 和续订 SSE；移除 app 模块的模板仓库、模板分支和模板 checkout；binding 升级到 schema v3 并兼容读取 v1/v2；AppHub 客户端切换 `/api/v1` 和当前 create 请求；同步更新 `ops-app-build-spec` 源码交付语义及历史设计文档失效标记。
+
+**验证结果**：app 模块 26 项测试全部通过；相关 Python 文件静态编译通过；`ops-app-build-spec` 本次受影响的元数据、部署合同、安装和文档镜像 4 项契约检查通过。完整 Skill pytest 被仓库既有缺失文件 `opscli/skills/templates/ops-dataset-query/scripts/enum_cache.py` 阻断；邻接 API 测试 10 项通过、2 项因沙箱无权读取用户级 `~/.config/opscli` 失败，均与本次 app 改动无关。
+
+**影响范围**：影响 `opscli app` 命令、AppHub 请求契约、本地 binding、Git 初始化、release 调用和 `ops-app-build-spec` 发布入口；不生成业务代码，不执行真实 push 或发布。
+
+**回滚方式**：还原本条记录、2026-09-05 需求文档及本次 app、测试、Skill 和规范文档改动。
+
+---
+
 ## 2026-09-03 Skills - 统一 ops-app-build-spec 前后端合同
 
 **变更原因**：Skill 将普通后端开发路由到简要摘要，后端红线只在评审阶段读取；前端又独立声明 API 语义，迁移用 `backend/CLAUDE.md` 仍保留旧 Nginx、Compose 和 `app/main.py` 设计，导致同一应用存在多套规范。
@@ -8554,5 +8568,3 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：影响后续由 `ops-app-data-builder` 生成或改造的站点第三方数据 Client 配置；不影响 AppHub 控制面、现有 Keepa/SellerSprite CLI/MCP 调用和已发布站点。
 
 **回滚方式**：回退 `ops-app-data-builder` 的 Skill、Reference、版本、静态评估和测试改动即可；无需修改 `opscli/app` 或 AppHub 配置。
-
----

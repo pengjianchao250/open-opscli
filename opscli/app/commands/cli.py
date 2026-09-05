@@ -1,4 +1,4 @@
-"""Codex 站点创建、Git 初始化与源码推送命令。"""
+"""AppHub 应用创建、Git 初始化、源码推送与版本发布命令。"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import typer
 from opscli.app.domain.exceptions import AppError
 from opscli.app.services.manager import AppManager
 
-app = typer.Typer(help="创建并绑定 Codex 站点，初始化 Git 项目并推送源码")
+app = typer.Typer(help="管理 AppHub 应用信息、Git 仓库、源码推送和版本发布")
 
 
 def _emit_release_event(event: dict) -> None:
@@ -31,18 +31,17 @@ def _emit(payload: dict, *, json_output: bool) -> None:
             typer.echo(data["message"])
         for key in (
             "app_id",
-            "site_name",
+            "app_name",
             "slug",
             "path",
             "repo_url",
             "default_branch",
-            "template_applied",
             "commit_sha",
             "release_id",
             "version",
             "status",
             "url",
-            "error_code",
+            "reason_code",
         ):
             if data.get(key) is not None:
                 typer.echo(f"{key}: {data[key]}")
@@ -92,37 +91,56 @@ def _run(command: str, action, *, json_output: bool) -> None:
 
 
 @app.command("create")
-def create_site(
-    site_name: str = typer.Argument(..., help="站点名称"),
-    path: Path | None = typer.Option(None, "--path", help="绑定目录；默认使用服务返回的 slug"),
+def create_app(
+    app_name: str = typer.Argument(..., help="应用名称"),
+    path: Path | None = typer.Option(None, "--path", help="绑定目录；默认使用应用 slug"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """在 AppHub 创建站点并绑定本地目录。"""
+    """在 AppHub 创建应用并保存本地基础信息。"""
     _run(
         "app create",
-        lambda manager: manager.create_site(site_name, path=path),
+        lambda manager: manager.create_app(app_name, path=path),
         json_output=json_output,
     )
 
 
 @app.command("init")
 def init_git(
-    path: Path = typer.Argument(Path("."), help="已绑定的站点目录"),
+    path: Path = typer.Argument(Path("."), help="应用源码目录"),
+    app_slug: str | None = typer.Option(None, "--app", help="要恢复或创建的应用 slug"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """初始化 Git；已有源码时保留源码并跳过模板。"""
-    _run("app init", lambda manager: manager.init_git(path), json_output=json_output)
+    """恢复应用信息并初始化本地 Git，不生成或覆盖业务源码。"""
+    _run(
+        "app init",
+        lambda manager: manager.init_git(path, app_slug=app_slug),
+        json_output=json_output,
+    )
 
 
 @app.command("push")
 def push(
-    path: Path = typer.Argument(Path("."), help="已初始化的站点目录"),
-    message: str = typer.Option(..., "--message", "-m", help="Codex 对当前修改的一句话总结"),
+    path: Path = typer.Argument(Path("."), help="应用源码目录"),
+    message: str = typer.Option(..., "--message", "-m", help="Git 提交说明"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """普通推送站点源码，并触发 AppHub release 与 SSE 跟踪。"""
+    """提交并推送源码到远端 main，不创建 AppHub release。"""
     _run(
         "app push",
         lambda manager: manager.push(path, message=message),
+        json_output=json_output,
+    )
+
+
+@app.command("release")
+def release(
+    path: Path = typer.Argument(Path("."), help="应用源码目录"),
+    message: str = typer.Option(..., "--message", "-m", help="版本发布说明"),
+    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """确保源码已推送，再创建并跟踪 AppHub release。"""
+    _run(
+        "app release",
+        lambda manager: manager.release(path, message=message),
         json_output=json_output,
     )

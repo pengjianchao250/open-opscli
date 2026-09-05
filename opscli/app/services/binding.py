@@ -23,15 +23,14 @@ class BindingStore:
         target = root / BINDING_RELATIVE_PATH
         if target.exists():
             current = self.load(root)
-            is_v1_migration = (
-                current.schema_version == 1
-                and binding.schema_version == 2
+            is_schema_migration = (
+                current.schema_version < binding.schema_version
                 and current.slug == binding.slug
             )
-            if current.app_id != binding.app_id and not is_v1_migration:
+            if current.app_id != binding.app_id and not is_schema_migration:
                 raise AppProjectError(
                     "APP-ALREADY-BOUND",
-                    f"目录已绑定其他站点：{current.site_name} ({current.app_id})",
+                    f"目录已绑定其他应用：{current.app_name} ({current.app_id})",
                 )
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(".tmp")
@@ -49,15 +48,15 @@ class BindingStore:
         if not target.is_file():
             raise AppProjectError(
                 "APP-NOT-BOUND",
-                f"未找到站点绑定文件：{target}",
-                fix_hint="请先执行 opscli app create。",
+                f"未找到应用绑定文件：{target}",
+                fix_hint="执行 opscli app init --app <slug> 可恢复或创建绑定。",
             )
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise AppProjectError("APP-BINDING-INVALID", f"站点绑定文件读取失败：{exc}") from exc
+            raise AppProjectError("APP-BINDING-INVALID", f"应用绑定文件读取失败：{exc}") from exc
         if not isinstance(payload, dict):
-            raise AppProjectError("APP-BINDING-INVALID", "站点绑定文件顶层必须是 JSON 对象。")
+            raise AppProjectError("APP-BINDING-INVALID", "应用绑定文件顶层必须是 JSON 对象。")
         return SiteBinding.from_dict(payload)
 
     def is_bound(self, path: str | Path) -> bool:

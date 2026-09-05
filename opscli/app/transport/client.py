@@ -21,7 +21,7 @@ EventCallback = Callable[[dict[str, Any]], None]
 
 
 class AppHubClient:
-    """仅封装 create/init/push 闭环所需的 AppHub API。"""
+    """封装应用创建、Git 操作和 release 所需的 AppHub API。"""
 
     def __init__(
         self,
@@ -48,6 +48,9 @@ class AppHubClient:
 
     def get_app(self, slug: str) -> dict[str, Any]:
         return self._request_json("GET", f"/apps/{_segment(slug)}")
+
+    def list_accessible_apps(self) -> dict[str, Any]:
+        return self._request_json("GET", "/accessible-apps")
 
     def get_git_config(self, slug: str) -> dict[str, Any]:
         return self._request_json("GET", f"/apps/{_segment(slug)}/git-config")
@@ -107,7 +110,7 @@ class AppHubClient:
             raise AppHubHttpError(
                 "APPHUB-SSE-INTERRUPTED",
                 "发布事件流中断，自动续订后仍未收到终态。",
-                fix_hint="重新执行同一条 app push；服务端会按 commit_sha 幂等续跑。",
+                fix_hint="重新执行同一条 opscli app release；服务端会按 commit_sha 幂等续跑。",
                 detail={
                     "release_id": state.get("release_id"),
                     "last_seq": state.get("last_seq"),

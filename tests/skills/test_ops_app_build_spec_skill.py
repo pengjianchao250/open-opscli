@@ -31,7 +31,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.6"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.7"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -226,8 +226,10 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "opscli app create",
         "opscli app init",
         "opscli app push",
+        "opscli app release",
         "整体暂存当前项目改动",
         "push 成功只表示源码到达远端",
+        "release 成功才表示 AppHub 已完成当前版本发布",
         "不得报告“部署成功”",
         "ops-feedback",
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
@@ -283,7 +285,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.6"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.7"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

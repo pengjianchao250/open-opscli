@@ -1,4 +1,4 @@
-"""Git push 后的 release baseline 与 SSE 发布编排。"""
+"""release baseline 与 SSE 发布编排。"""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ class PublishService:
             return {
                 "release_id": None,
                 "status": "noop",
-                "error_code": "GIT-004",
+                "reason_code": "RELEASE-NOOP",
                 "baseline_commit_sha": baseline_sha,
                 "message": "远端 main 与最近健康发布一致，无新内容需要发布。",
             }

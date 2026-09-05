@@ -1,15 +1,8 @@
 """`opscli app` 使用的稳定常量。"""
 
-APPHUB_API_PREFIX = "/api/apphub/v1"
+APPHUB_API_PREFIX = "/api/v1"
 
-APP_TEMPLATE_REPO_DEFAULT = "http://10.1.13.143:3000/aukeys-admin/template.git"
-APP_TEMPLATE_BRANCH_DEFAULT = "main"
-
-APP_DEFAULT_RUNTIME = "streamlit"
-APP_DEFAULT_PYTHON = "3.11"
-APP_DEFAULT_ENTRYPOINT = "app.py"
-
-BINDING_SCHEMA_VERSION = 2
+BINDING_SCHEMA_VERSION = 3
 BINDING_RELATIVE_PATH = ".opscli/app.json"
 GIT_DEFAULT_BRANCH = "main"
 GIT_MIN_VERSION = (2, 30, 0)
