@@ -105,7 +105,9 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
 
     Returns:
         成功：{ success: True, data: { status, session_id, email, expires_at,
-                                       agent_name, saved_locally } }
+                                       agent_name, saved_locally, jwt_saved? } }
+        jwt_saved 仅在后端顺带签发了 JWT 时出现（新版后端）；**响应里不会出现 jwt 明文**，
+        票只落本地隔离凭证目录，避免明文凭证进入模型上下文与事件落库。
         失败：{ success: False, error: { code, message } }
     """
     from opscli.auth import OPS_URL
@@ -179,10 +181,25 @@ async def auth_mcp_login(agent_name: str | None = None) -> dict:
     email = result.get("email", "")
     expires_at = result.get("expires_at", "")
 
+    # 后端 2026-09-05 起在登录响应里顺带签发一张 ops JWT（旧后端没有该字段，为 None）。
+    # 【必须从 result 里摘掉】result 会原样回给 AI Agent，落进模型上下文与
+    # dm_message_events——明文 JWT 绝不能走这条路。这里只落本地隔离凭证目录，
+    # 对外仅留一个布尔标记。
+    issued_jwt = result.pop("jwt", None)
+    issued_expires_in = result.pop("expires_in", None)
+
     if session_id:
         try:
             store = _get_isolated_store()
             store.save_session(session_id, email, expires_at)
+            # 顺序不可颠倒：save_session 在 session 变化时会清空旧 JWT，
+            # 先存票再存 session 会把刚拿到的票一起清掉。
+            if issued_jwt and issued_expires_in:
+                try:
+                    store.save_token("ops", str(issued_jwt), int(issued_expires_in))
+                    result["jwt_saved"] = True
+                except Exception:  # noqa: BLE001 存票失败不影响登录本身
+                    result["jwt_saved"] = False
             from opscli.mcp.credential_cache import invalidate_credential_cache
             invalidate_credential_cache(base_dir=_get_credential_dir())
             # 登录成功，失效该用户元数据缓存（授权范围可能随账号变化）

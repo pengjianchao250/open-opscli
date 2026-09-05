@@ -1,5 +1,23 @@
 # 待归档变更记录
 
+## 2026-09-05 mcp - 一步登录顺带签发的 JWT 落盘复用（配合后端 P2-1）
+
+**变更原因**：MCP 模式认证是两段式——`/v1/mcp/auth/login` 只产出 session，客户端随后还要打一次 `/v1/auth/cli-token` 才能拿到业务请求用的 Bearer JWT。后端（auto-scheduler `feat/mcp-login-jwt-and-session-renew`）已改为在登录响应里顺带签发一张，客户端落盘即可省掉登录后第一次调用的那一跳。
+
+**改动点**：`opscli/mcp/tools/auth.py::auth_mcp_login`
+- 从响应里取 `jwt` / `expires_in`，在 `save_session` **之后**调用 `store.save_token("ops", ...)` 落进隔离凭证目录。顺序不可颠倒：`save_session` 在 session 变化时会清空旧 JWT（防串号），先存票会把刚拿到的票一起清掉。
+- **把 `jwt` / `expires_in` 从返回体里 `pop` 掉**，对外只留布尔 `jwt_saved`。`auth_mcp_login` 的返回会原样回给 AI Agent，进入模型上下文并落进 `dm_message_events`——明文凭证绝不能走这条路。
+- 票或有效期不完整（空票/零有效期/缺字段）一律不写：宁可多换一次票，也不存一张说不清有效期的票。
+- 旧后端不返回该字段时行为完全不变（向后兼容）。
+
+**验证结果**：新增 8 条测试全通（`tests/mcp/test_mcp_login_jwt.py`）——落盘、**明文票不回传守卫**、旧后端兼容、4 种不完整 payload 参数化、先 session 后票的顺序守卫。相关面回归与 master 基线 `3cb7dc89` 逐条对照：`tests/mcp` 2 failed / **468** passed / 1 error（基线 2/460/1，+8 恰为新增用例数）、`tests/query` 5/289/1 与基线一致、`tests/auth` 73 passed；FAILED + ERROR 清单逐行完全一致，零新增失败。
+
+**影响范围**：仅 `auth_mcp_login` 一处；新后端下登录后 24h 内的工具调用不再需要 `cli-token` 换票。返回体新增可选字段 `jwt_saved`（不影响既有消费方）。
+
+**回滚方式**：`git revert` 本 commit；后端即使已返回 jwt，旧客户端也只是忽略该字段，两侧可独立回滚。
+
+---
+
 ## 2026-09-05 query - 组件枚举故障不再连累与该字段无关的查询
 
 **变更原因**：`dept_name` 是 `_ENUM_COMPONENT_SPECS` 首项且 `reverse_lookup=True`，用户没提部门也必发一次枚举；再叠加 `_resolve_component_filters` 里"首个失败即 break"，部门组件一坏，连「查昨天总销售额」这种压根不涉及部门的请求也会被整条 blocked。实测形态见生产会话 5384（该轮请求只要销售额，报错却是"部门的授权枚举调用失败"）。
