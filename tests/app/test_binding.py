@@ -88,3 +88,17 @@ def test_binding_refuses_different_app(tmp_path: Path) -> None:
         store.save(tmp_path, _binding("app-2"))
 
     assert caught.value.code == "APP-ALREADY-BOUND"
+
+
+@pytest.mark.parametrize("field", ["app_name", "slug", "repo_url"])
+def test_binding_rejects_empty_required_fields(tmp_path: Path, field: str) -> None:
+    payload = _binding().to_dict()
+    payload[field] = None
+    target = tmp_path / ".opscli" / "app.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(AppProjectError) as caught:
+        BindingStore().load(tmp_path)
+
+    assert caught.value.code == "APP-BINDING-INVALID"

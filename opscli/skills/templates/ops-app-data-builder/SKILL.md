@@ -1,8 +1,8 @@
 ---
 name: ops-app-data-builder
-description: 用于 Codex 中为已经通过 opscli app create/init 拉取标准模板的站点构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未初始化项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
+description: 用于 Codex 中为已绑定 AppHub 应用的标准模板项目构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未绑定项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.5
+  version: 0.1.6
 ---
 
 # OPS 应用数据层构建
@@ -15,7 +15,7 @@ metadata:
 
 使用本 Skill：
 
-- 当前工作对象已通过 `opscli app create/init` 完成标准模板初始化。
+- 当前工作对象来自标准模板，并已通过 `opscli app create/init` 完成 AppHub 应用和 Git 仓库绑定。
 - 页面需要 OPS、Keepa、SellerSprite 或这些来源的组合数据。
 - 需求包含多个字段、跨来源组合、二次加工、数据新鲜度、SQLite 物化或站点专用 API。
 - 需要为现有页面补齐 FastAPI client/service/repository/schema/API、前端 API/types、迁移或测试。
@@ -35,7 +35,7 @@ metadata:
 ## 必要输入
 
 - 项目根目录和当前 `AGENTS.md`。
-- 根目录 `.opscli/app.json` 和 `ops-app.config`，两者的 `app_id/slug` 与 `appId/appName` 必须一致。
+- 根目录 `.opscli/app.json` 和 `app.yaml`；binding 必须包含有效 `app_id/slug`，且 `.opscli/app.json.slug == app.yaml.name`。
 - 已确认的页面业务需求、筛选范围、刷新要求和使用者范围。
 - `docs/ops-app/project-spec.md`；存在时同时读取 assessment、migration-plan、development、deployment 和 data-spec。
 - 标准模板中的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py` 和 `backend/api/v1/query.py`。
@@ -72,7 +72,7 @@ metadata:
 
 1. 根目录存在 `.opscli/app.json`，项目已绑定 AppHub 应用和独立仓库。
 2. 项目存在标准模板拉取后的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py`、`backend/api/v1/query.py` 和 `app.yaml`。
-3. `ops-app.config.appId` 等于 binding 的 `app_id`，`ops-app.config.appName` 等于 binding 的 `slug`。
+3. binding 包含有效 `app_id` 和 `slug`，并且 `.opscli/app.json.slug == app.yaml.name`；`.opscli/app.json` 未被 Git 跟踪。
 
 如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码、缺少标准 QueryGateway 文件，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成或重新执行 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架。
 

@@ -1,6 +1,6 @@
 # opscli app 自然语言建站编排需求定稿
 
-> **历史方案，已被取代**：2026-09-05 起自然语言建站编排由 Skill 负责，`opscli app` 只提供 create/init/push/release 四个原子命令。
+> **历史方案，已被取代**：2026-09-05 起自然语言建站编排由 Skill 负责，`opscli app` 只提供 create/init/push 三个源码交付命令，具体以 `docs/design/2026-09-05-opscli-app三命令源码交付职责定稿.md` 为准。
 
 > 日期：2026-09-03  
 > 状态：需求定稿并落地  

@@ -29,7 +29,7 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 | 后端调用 opscli SDK 或 REST                  | `references/opscli-integration-standard.md`                         |
 | 页面使用 OPS、Keepa、SellerSprite 或组合数据 | `references/data-access-standard.md`                                |
 | 迁移或同步项目规范                           | `references/migration-standard.md`                                  |
-| 创建应用、绑定仓库、提交源码或检查部署条件   | `references/deployment-standard.md`                                 |
+| 创建应用、绑定仓库、提交源码或检查交付条件   | `references/deployment-standard.md`                                 |
 
 不要加载与当前任务无关的参考文件。普通开发不读取 `assets/` 中的全文规范。
 
@@ -120,7 +120,7 @@ Dockerfile
 
 ### 5. 唯一发布声明
 
-根目录 `app.yaml` 是应用发布声明的唯一来源。全新项目校验并调整模板已有声明；已有项目迁移时才按计划使用 `assets/app.yaml` 补齐，再按实际应用修改 `name`、展示信息、数据集和可见范围；保持：
+根目录 `app.yaml` 是应用发布声明的唯一来源。模板中的 `name/title` 只是示例身份；执行 `opscli app create` 后，以 AppHub 返回的真实 `slug` 和创建时确认的展示名称回填 `app.yaml.name/title`。其他运行时、入口、服务、数据集和可见范围字段按项目实际需求维护；保持：
 
 ```yaml
 apiVersion: apps.aukeys/v1
@@ -131,7 +131,7 @@ database:
 
 禁止在应用代码、环境文件、构建文件或前端配置中重复维护平台身份、公开前缀或发布地址。`app.yaml` 必须位于独立 Git 仓库根目录，发布分支必须为 `master`；模板源目录嵌套在另一个仓库中时先迁出并初始化独立仓库。
 
-全新项目从 `.opscli/app.json.app_id` 和 `.opscli/app.json.slug` 读取平台身份，分别写入或校验 `ops-app.config.appId` 和 `ops-app.config.appName`，不在首次发布阶段重新注册应用。
+首次源码交付前确认根目录存在 `.opscli/app.json`，binding 中具有有效 `app_id` 和 `slug`，且 `.opscli/app.json.slug == app.yaml.name`。`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding，不写入 `app.yaml`；`.gitignore` 必须忽略 `.opscli/`。
 
 已有项目迁移时按计划补齐根级资产；全新模板缺少这些必需资产时报告模板问题，不静默复制另一套基线：
 
@@ -150,51 +150,46 @@ database:
 - Vite `dist` 由同一个 FastAPI 进程托管，不启动第二个生产 Web 进程。
 - SQLite 只读取 `SQLITE_PATH`；模板库为 `data/app.db`，本地运行库为已忽略的 `.data/app.db`，容器运行库为 `/data/app.db`。平台只把命名卷挂到 `/data`，不注入数据库路径变量。
 
-### 7. 构建与发布
+### 7. 构建与源码交付
 
-AppHub 发布主路径固定为 Nixpacks：
+项目构建合同以 AppHub 的 Nixpacks 运行环境为准：
 
 - `nixpacks.toml` 分别在 `install` 与 `python:install` 使用 `...` 保留 Node/Python provider 计划；平台 SDK 导入门禁追加到 `python:install`，Vite 构建显式依赖两个安装阶段，并以平台同款命令启动 FastAPI。
-- 根目录 `requirements.txt` 中普通第三方依赖使用 `==` 精确锁定；平台 SDK 使用真实包 `aukeys-opscli>=0.0.129`，并在构建阶段验证 `import opscli.app`。若索引中尚无兼容正式版本，停止发布并联系 IT，不得用本地同名包绕过。
+- 根目录 `requirements.txt` 中普通第三方依赖使用 `==` 精确锁定；平台 SDK 使用真实包 `aukeys-opscli>=0.0.129`，并在构建阶段验证 `import opscli.app`。若索引中尚无兼容正式版本，停止源码交付并联系 IT，不得用本地同名包绕过。
 - 禁止创建本地 `opscli/` 包、同名模块或路径依赖来绕过真实包安装。
-- `Dockerfile` 只用于本地、CI 和可复现构建，不改变 AppHub 的 Nixpacks 发布路径。
-- 启动命令为 `python -m opscli.app.migrate && uvicorn backend.app:app --host 0.0.0.0 --port 8000`。
+- `Dockerfile` 只用于本地、CI 和可复现构建，不改变 AppHub 的 Nixpacks 运行合同。
+- 启动命令为 `uvicorn backend.app:app --host 0.0.0.0 --port 8000`，数据库初始化和迁移遵循项目合同与 AppHub 运行时能力，不调用已废弃的项目侧部署命令。
 - 平台健康检查固定为 `/__apphub_healthz`，必须快速返回 200，且不依赖业务查询。
 
-发布前必须确认：
+源码交付前必须确认：
 
 - `app.yaml` 能通过当前 schema，入口文件存在，Git 根独立且当前分支为 `master`。
 - `requirements.txt` 的普通依赖全部精确锁定，真实 `aukeys-opscli` 通过兼容模块导入检查。
 - 前端测试和生产构建、后端测试、健康检查通过。
 - Nixpacks 与 Dockerfile 的构建产物、启动模块、端口和健康路径一致。
 - 构建产物使用相对 URL，根路径页面、静态资源、SPA 刷新、API 和 WebSocket 可用。
-- `.data/` 和 SQLite 文件不进入源码或镜像；迁移通过 `opscli.app.migrate` 执行。
-- `deployment/Dockerfile`、`deployment/compose.yaml`、`deployment/nginx.conf.template`、`deployment/ops-app-config.mjs`、`deployment/ops-app-config.d.mts`、`deployment/render-nginx-config.mjs` 存在；Dockerfile 同时提供前端、后端构建 target，并通过共享配置模块和渲染脚本生成项目内 Nginx 配置。
-- 部署构建基线为 Linux 服务器：Compose 必须显式使用 `context: ..` 与 `dockerfile: deployment/Dockerfile`；本地宿主机兼容性问题只记录，不改变项目产物规范。
-- 根目录 `.dockerignore` 存在，且没有排除构建必需的源码、锁文件、`ops-app.config` 或 deployment 资产。
-- Vite 配置已导入 `deployment/ops-app-config.mjs`，Compose、Dockerfile 和环境变量中没有重复的应用 ID、应用名称或部署路径。
-- Compose 同时声明前端、后端服务；SQLite 使用持久卷。
-- Dockerfile 使用精确 `COPY` 分层和 BuildKit 缓存；禁止无边界 `COPY . .`，但必须复制依赖清单、锁文件、源码和部署模板。
-- 后端依赖统一使用 `uv`、`pyproject.toml`、`uv.lock`；Nginx 以非 root 用户监听 `8080`；Dockerfile 不声明 `VOLUME`，持久卷只由 Compose 管理。
-- 根目录 `.dockerignore` 排除依赖目录、构建缓存、本地数据库、环境文件和密钥，同时保留锁文件、配置和部署资产。
-- Compose 使用最新 Compose Specification；前后端镜像名由 `ops-app.config` 派生为 `<appId>-<appName>-frontend|backend`，同时发布 `:sha-<git-sha>` 和 `:latest`，线上始终拉取 `:latest`。
+- `.data/` 和 SQLite 文件不进入源码或构建产物。
+- 根目录 `.gitignore` 忽略 `.opscli/`，`.opscli/app.json` 未被跟踪或暂存；`app.yaml` 必须保留在源码中。
+- 根目录 `.dockerignore` 排除依赖目录、构建缓存、本地数据库、环境文件和密钥，同时保留 `app.yaml`、锁文件、源码和必要构建资产。
+- Dockerfile 使用精确 `COPY` 分层和 BuildKit 缓存；禁止无边界 `COPY . .`，但必须复制依赖清单、锁文件、源码和必要配置。
+- 后端依赖统一使用 `uv`、`pyproject.toml`、`uv.lock`；项目不得自行派生 AppHub 公开路径、Compose service 名或线上镜像名。
 - 模板项目开发只要求 Node.js 主版本大于 22；补丁版本 engine 警告允许记录到评估文档，不作为构建或测试的阻断条件。
-- 前后端构建、测试、健康检查及 `docker compose config` 通过。
+- 前后端构建、测试和健康检查通过。
 - 构建产物引用部署前缀，本地开发仍使用根路径。
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。
 - 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
-- `VITE_*`、源码、镜像、Compose、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
+- `VITE_*`、源码、构建产物、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
 - Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run` 和后端 Secret。
 - SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，pending `job_id` 被持久化并复用，成功 JSON 结果才进入共享快照。
 - Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 E2E 配置别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
-未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
+未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器。
 
-只交付源码且用户已确认时，由 Codex 执行 `opscli app push <root> --message <summary>`。
-发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app release <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
-没有 release 终态和线上证据时，不得把 push、构建排队或镜像生成报告成已部署。
+源码交付获得用户确认后，由 Codex 执行 `opscli app push <root> --message <summary>`。该命令成功只表示源码到达应用远端仓库，随后 `opscli app` 职责结束。
+应用发布、构建排队、版本状态、线上 URL、健康检查和回滚由 AppHub 或其他发布平台负责，本 Skill 不调用或指导调用 `opscli app` 发布命令。
+没有线上平台证据时，不得把 push、构建或镜像生成报告成已发布或已部署。
 
 ## 错误处理
 
