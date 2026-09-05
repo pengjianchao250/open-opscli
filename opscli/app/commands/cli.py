@@ -1,4 +1,4 @@
-"""AppHub 应用创建、Git 初始化、源码推送与版本发布命令。"""
+"""AppHub 应用创建、Git 初始化与源码推送命令。"""
 
 from __future__ import annotations
 
@@ -10,15 +10,7 @@ import typer
 from opscli.app.domain.exceptions import AppError
 from opscli.app.services.manager import AppManager
 
-app = typer.Typer(help="管理 AppHub 应用信息、Git 仓库、源码推送和版本发布")
-
-
-def _emit_release_event(event: dict) -> None:
-    if event.get("level") == "hidden":
-        return
-    message = event.get("message")
-    if message:
-        typer.echo(f"[release:{event.get('seq', '-')}] {message}")
+app = typer.Typer(help="管理 AppHub 应用信息、Git 仓库和源码推送")
 
 
 def _emit(payload: dict, *, json_output: bool) -> None:
@@ -37,11 +29,6 @@ def _emit(payload: dict, *, json_output: bool) -> None:
             "repo_url",
             "default_branch",
             "commit_sha",
-            "release_id",
-            "version",
-            "status",
-            "url",
-            "reason_code",
         ):
             if data.get(key) is not None:
                 typer.echo(f"{key}: {data[key]}")
@@ -55,9 +42,7 @@ def _emit(payload: dict, *, json_output: bool) -> None:
 
 
 def _run(command: str, action, *, json_output: bool) -> None:
-    manager = AppManager(
-        release_event_handler=None if json_output else _emit_release_event
-    )
+    manager = AppManager()
     try:
         _emit(
             {"success": True, "command": command, "data": action(manager), "error": None},
@@ -131,16 +116,3 @@ def push(
         json_output=json_output,
     )
 
-
-@app.command("release")
-def release(
-    path: Path = typer.Argument(Path("."), help="应用源码目录"),
-    message: str = typer.Option(..., "--message", "-m", help="版本发布说明"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """确保源码已推送，再创建并跟踪 AppHub release。"""
-    _run(
-        "app release",
-        lambda manager: manager.release(path, message=message),
-        json_output=json_output,
-    )

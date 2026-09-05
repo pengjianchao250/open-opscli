@@ -15,7 +15,7 @@ _SLUG_VALID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
 
 
 @dataclass(frozen=True)
-class AppYaml:
+class AppCreateRequest:
     """AppHub 创建应用请求。"""
 
     name: str
@@ -24,7 +24,12 @@ class AppYaml:
     contact: str | None = None
 
     @classmethod
-    def from_app_name(cls, app_name: str, *, slug: str | None = None) -> "AppYaml":
+    def from_app_name(
+        cls,
+        app_name: str,
+        *,
+        slug: str | None = None,
+    ) -> "AppCreateRequest":
         title = app_name.strip()
         if not title:
             raise AppProjectError("APP-ARGUMENT", "应用名称不能为空。")
@@ -32,7 +37,7 @@ class AppYaml:
         return cls(name=normalized_slug, title=title)
 
     @classmethod
-    def from_site_name(cls, site_name: str) -> "AppYaml":
+    def from_site_name(cls, site_name: str) -> "AppCreateRequest":
         return cls.from_app_name(site_name)
 
     def to_dict(self) -> dict[str, Any]:
@@ -124,12 +129,19 @@ class SiteBinding:
             )
         try:
             app_id = payload.get("app_id") or payload.get("site_id")
+            app_name = _optional_text(
+                payload.get("app_name") or payload.get("site_name")
+            )
+            slug = _optional_text(payload.get("slug"))
+            repo_url = _optional_text(payload.get("repo_url"))
+            if app_name is None or slug is None or repo_url is None:
+                raise ValueError("missing required binding fields")
             binding = cls(
                 schema_version=source_version,
                 app_id=str(app_id),
-                app_name=str(payload.get("app_name") or payload["site_name"]),
-                slug=str(payload["slug"]),
-                repo_url=str(payload["repo_url"]),
+                app_name=app_name,
+                slug=slug,
+                repo_url=repo_url,
                 default_branch=str(payload.get("default_branch") or GIT_DEFAULT_BRANCH),
                 git_username=_optional_text(payload.get("git_username")),
                 owner_user_id=_optional_text(payload.get("owner_user_id")),
@@ -145,6 +157,8 @@ class SiteBinding:
             ) from exc
         if not binding.app_id or binding.app_id == "None":
             raise AppProjectError("APP-BINDING-INVALID", "应用绑定缺少 app_id/site_id。")
+        if not _SLUG_VALID_RE.fullmatch(binding.slug):
+            raise AppProjectError("APP-BINDING-INVALID", "应用绑定 slug 格式错误。")
         return binding
 
     def migrated(self, **changes: Any) -> "SiteBinding":

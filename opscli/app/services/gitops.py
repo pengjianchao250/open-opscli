@@ -88,33 +88,47 @@ class GitService:
         git_created = not (root / ".git").exists()
         if git_created:
             self.runner.run(root, ["init"])
-
-        previous_origin = self._set_remote(root, "origin", repo_url)
-        remote_sha = self._fetch_remote_main(root)
+        else:
+            self._assert_on_branch(root)
+        remote_sha = self.probe_remote_main(root, repo_url=repo_url)
+        previous_origin = self._get_remote(root, "origin")
+        self._set_remote(root, "origin", repo_url)
+        if remote_sha is None:
+            self._clear_remote_tracking(root)
+        else:
+            remote_sha = self._fetch_remote_main(root)
         head = self.runner.run(root, ["rev-parse", "--verify", "HEAD"], check=False)
         if head.returncode != 0:
             self.runner.run(root, ["symbolic-ref", "HEAD", f"refs/heads/{GIT_DEFAULT_BRANCH}"])
-            self.runner.run(root, ["reset", "--mixed", f"origin/{GIT_DEFAULT_BRANCH}"])
-            self._checkout_missing_remote_files(root)
+            if remote_sha is not None:
+                self.runner.run(root, ["reset", "--mixed", f"origin/{GIT_DEFAULT_BRANCH}"])
+                self._checkout_missing_remote_files(root)
         else:
             self.runner.run(root, ["branch", "-M", GIT_DEFAULT_BRANCH])
-            ancestor = self.runner.run(
-                root,
-                ["merge-base", "--is-ancestor", f"origin/{GIT_DEFAULT_BRANCH}", "HEAD"],
-                check=False,
-            )
-            if ancestor.returncode != 0:
-                self.runner.run(
+            if remote_sha is not None:
+                ancestor = self.runner.run(
                     root,
-                    [
-                        "merge",
-                        "--allow-unrelated-histories",
-                        "-s",
-                        "ours",
-                        "--no-commit",
-                        f"origin/{GIT_DEFAULT_BRANCH}",
-                    ],
+                    ["merge-base", "--is-ancestor", f"origin/{GIT_DEFAULT_BRANCH}", "HEAD"],
+                    check=False,
                 )
+                if ancestor.returncode != 0:
+                    self.runner.run(
+                        root,
+                        [
+                            "merge",
+                            "--allow-unrelated-histories",
+                            "-s",
+                            "ours",
+                            "--no-commit",
+                            f"origin/{GIT_DEFAULT_BRANCH}",
+                        ],
+                    )
+
+        if remote_sha is not None:
+            self.runner.run(
+                root,
+                ["branch", f"--set-upstream-to=origin/{GIT_DEFAULT_BRANCH}", GIT_DEFAULT_BRANCH],
+            )
 
         reachable_sha = self.probe_remote_main(root, repo_url=repo_url)
         if reachable_sha != remote_sha:
@@ -123,8 +137,8 @@ class GitService:
             "git_created": git_created,
             "previous_origin": previous_origin if previous_origin != repo_url else None,
             "remote_main_sha": remote_sha,
+            "remote_main_exists": remote_sha is not None,
         }
-
     def push_all(self, root: Path, *, repo_url: str, message: str) -> dict:
         self._ensure_git(root)
         if not (root / ".git").exists():
@@ -133,8 +147,13 @@ class GitService:
                 "当前目录尚未初始化 Git。",
                 fix_hint="请先执行 opscli app init。",
             )
+        self._assert_binding_ignored(root)
         self._assert_origin(root, repo_url)
-        remote_sha = self._fetch_remote_main(root)
+        remote_sha = self.probe_remote_main(root, repo_url=repo_url)
+        if remote_sha is None:
+            self._clear_remote_tracking(root)
+        else:
+            remote_sha = self._fetch_remote_main(root)
 
         head = self.runner.run(root, ["rev-parse", "--verify", "HEAD"], check=False)
         if head.returncode != 0 or not _is_sha(head.stdout):
@@ -149,23 +168,25 @@ class GitService:
         committed = False
         if dirty:
             self.runner.run(root, ["add", "-A"])
+            self._assert_binding_ignored(root)
         if dirty or merge_pending:
             self.runner.run(root, ["commit", "-m", message])
             committed = True
 
         head = self.runner.run(root, ["rev-parse", "--verify", "HEAD"])
-        ancestor = self.runner.run(
-            root,
-            ["merge-base", "--is-ancestor", f"origin/{GIT_DEFAULT_BRANCH}", "HEAD"],
-            check=False,
-        )
-        if ancestor.returncode != 0:
-            raise AppGitError(
-                "GIT-003",
-                "远端 main 包含本地尚未合并的提交，已拒绝非 fast-forward 推送。",
-                fix_hint="先合并 origin/main 后重试；禁止使用 force push。",
+        if remote_sha is not None:
+            ancestor = self.runner.run(
+                root,
+                ["merge-base", "--is-ancestor", f"origin/{GIT_DEFAULT_BRANCH}", "HEAD"],
+                check=False,
             )
-        if head.stdout == remote_sha:
+            if ancestor.returncode != 0:
+                raise AppGitError(
+                    "GIT-003",
+                    "远端 main 包含本地尚未合并的提交，已拒绝非 fast-forward 推送。",
+                    fix_hint="先合并 origin/main 后重试；禁止使用 force push。",
+                )
+        if remote_sha is not None and head.stdout == remote_sha:
             return {
                 "commit_sha": head.stdout,
                 "remote_commit_sha": remote_sha,
@@ -180,6 +201,12 @@ class GitService:
         if push.returncode != 0:
             self._raise_git_transport_error(push, non_fast_forward=True)
         remote_sha = self.probe_remote_main(root, repo_url=repo_url)
+        if remote_sha is None:
+            raise AppGitError(
+                "GIT-REPO-NOT-READY",
+                "Git push 成功后仍无法读取远端 main。",
+                fix_hint="检查目标仓库的默认分支和 Git 服务状态。",
+            )
         return {
             "commit_sha": head.stdout,
             "remote_commit_sha": remote_sha,
@@ -187,7 +214,7 @@ class GitService:
             "pushed": True,
         }
 
-    def probe_remote_main(self, root: Path, *, repo_url: str) -> str:
+    def probe_remote_main(self, root: Path, *, repo_url: str) -> str | None:
         result = self.runner.run(
             root,
             ["ls-remote", repo_url, f"refs/heads/{GIT_DEFAULT_BRANCH}"],
@@ -195,7 +222,9 @@ class GitService:
         )
         if result.returncode != 0:
             self._raise_git_transport_error(result)
-        sha = result.stdout.split(maxsplit=1)[0] if result.stdout else ""
+        if not result.stdout:
+            return None
+        sha = result.stdout.split(maxsplit=1)[0]
         if not _is_sha(sha):
             raise AppGitError(
                 "GIT-REPO-NOT-READY",
@@ -203,6 +232,32 @@ class GitService:
                 fix_hint="稍后重新执行 opscli app init；仓库和 main 由 AppHub 创建。",
             )
         return sha
+
+    def _get_remote(self, root: Path, name: str) -> str | None:
+        result = self.runner.run(root, ["remote", "get-url", name], check=False)
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+
+    def _clear_remote_tracking(self, root: Path) -> None:
+        self.runner.run(
+            root,
+            ["update-ref", "-d", f"refs/remotes/origin/{GIT_DEFAULT_BRANCH}"],
+        )
+        self.runner.run(root, ["branch", "--unset-upstream"], check=False)
+
+    def _assert_on_branch(self, root: Path) -> None:
+        result = self.runner.run(
+            root,
+            ["symbolic-ref", "--quiet", "--short", "HEAD"],
+            check=False,
+        )
+        if result.returncode != 0 or not result.stdout:
+            raise AppGitError(
+                "GIT-DETACHED-HEAD",
+                "当前项目处于 detached HEAD，无法绑定应用仓库。",
+                fix_hint="请先切换到本地分支后重新执行 opscli app init。",
+            )
 
     def _fetch_remote_main(self, root: Path) -> str:
         result = self.runner.run(
@@ -257,6 +312,27 @@ class GitService:
                 "GIT-ORIGIN-MISMATCH",
                 "Git origin 与当前应用的独立仓库不一致。",
                 fix_hint="请重新执行 opscli app init。",
+            )
+
+    def _assert_binding_ignored(self, root: Path) -> None:
+        binding_path = root / ".opscli" / "app.json"
+        if not binding_path.exists():
+            return
+        tracked = self.runner.run(
+            root,
+            ["ls-files", "--error-unmatch", "--", ".opscli/app.json"],
+            check=False,
+        )
+        ignored = self.runner.run(
+            root,
+            ["check-ignore", "-q", "--", ".opscli/app.json"],
+            check=False,
+        )
+        if tracked.returncode == 0 or ignored.returncode != 0:
+            raise AppGitError(
+                "APP-BINDING-TRACKED",
+                ".opscli/app.json 是本地绑定文件，禁止进入 Git 提交。",
+                fix_hint="在项目 .gitignore 中加入 .opscli/；如已跟踪，请先从 Git 索引移除。",
             )
 
     def _set_remote(self, root: Path, name: str, url: str) -> str | None:

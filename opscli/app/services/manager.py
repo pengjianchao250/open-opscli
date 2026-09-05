@@ -1,22 +1,18 @@
-"""create、init、push、release 四命令业务编排。"""
+"""create、init、push 三命令业务编排。"""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, MESSAGE_MAX_LENGTH
 from opscli.app.domain.exceptions import AppProjectError
-from opscli.app.domain.models import AppYaml, SiteBinding, slugify_site_name
+from opscli.app.domain.models import AppCreateRequest, SiteBinding, slugify_site_name
 from opscli.app.services.binding import BindingStore
 from opscli.app.services.gitcred import GitCredentialStore
 from opscli.app.services.gitops import GitService
-from opscli.app.services.publish import PublishService
+from opscli.app.services.manifest import AppManifestStore
 from opscli.app.transport.client import AppHubClient
-
-_YAML_SCALAR_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*?)\s*$")
 
 
 class AppManager:
@@ -26,40 +22,36 @@ class AppManager:
         client: AppHubClient | None = None,
         binding_store: BindingStore | None = None,
         git_service: GitService | None = None,
+        manifest_store: AppManifestStore | None = None,
         credential_store: GitCredentialStore | None = None,
-        publish_service: PublishService | None = None,
-        release_event_handler: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.client = client or AppHubClient()
         self.binding_store = binding_store or BindingStore()
         self.git_service = git_service or GitService()
+        self.manifest_store = manifest_store or AppManifestStore()
         self.credential_store = credential_store or GitCredentialStore(
             runner=self.git_service.runner
         )
-        self.publish_service = publish_service or PublishService(self.client)
-        self.release_event_handler = release_event_handler
 
     def close(self) -> None:
         self.client.close()
 
     def create_app(self, app_name: str, *, path: str | Path | None = None) -> dict:
-        app_yaml = AppYaml.from_app_name(app_name)
-        if path is not None:
-            root = self.binding_store.prepare_root(path)
-            if self.binding_store.is_bound(root):
-                binding = self.binding_store.load(root)
-                if binding.slug != app_yaml.name:
-                    raise AppProjectError(
-                        "APP-ALREADY-BOUND",
-                        f"目录已绑定应用：{binding.app_name} ({binding.app_id})",
-                    )
-                binding = binding.migrated()
-                self.binding_store.save(root, binding)
-                return self._binding_result(root, binding, "目录已绑定该应用，无需重复创建。")
-        else:
-            root = self.binding_store.prepare_root(app_yaml.name)
+        request = AppCreateRequest.from_app_name(app_name)
+        root = self.binding_store.prepare_root(path if path is not None else request.name)
+        if self.binding_store.is_bound(root):
+            binding = self.binding_store.load(root)
+            if binding.slug != request.name:
+                raise AppProjectError(
+                    "APP-ALREADY-BOUND",
+                    f"目录已绑定应用：{binding.app_name} ({binding.app_id})",
+                )
+            binding = binding.migrated()
+            self.binding_store.save(root, binding)
+            self.manifest_store.sync_identity(root, binding)
+            return self._binding_result(root, binding, "目录已绑定该应用，无需重复创建。")
 
-        binding, credential_saved = self._create_binding(root, app_yaml)
+        binding, credential_saved = self._create_binding(root, request)
         return {
             **self._binding_result(root, binding, "应用和独立仓库已创建并保存本地基础信息。"),
             "credential_saved": credential_saved,
@@ -108,47 +100,6 @@ class AppManager:
             "message": message_text,
         }
 
-    def release(self, path: str | Path = ".", *, message: str) -> dict:
-        summary = self._validate_message(message, command="release")
-        root = self.binding_store.prepare_root(path)
-        binding, credential_result, git_init_result, app_detail = self._prepare_repository(root)
-        git_result = self.git_service.push_all(
-            root,
-            repo_url=binding.repo_url,
-            message=summary,
-        )
-        self._assert_releasable(app_detail)
-        releases = self.client.list_releases(
-            binding.slug,
-            page=1,
-            size=1,
-            is_rollback=False,
-        )
-        publish_result = self.publish_service.publish(
-            binding.slug,
-            commit_sha=git_result["remote_commit_sha"],
-            message=summary,
-            releases_payload=releases,
-            on_event=self.release_event_handler,
-        )
-        final_detail = app_detail
-        if publish_result["status"] != "noop":
-            final_detail = self.client.get_app(binding.slug)
-        return {
-            **self._binding_result(root, binding, ""),
-            **credential_result,
-            **git_init_result,
-            **git_result,
-            **publish_result,
-            "version": (
-                final_detail.get("current_version")
-                or final_detail.get("display_version")
-                or final_detail.get("version")
-            ),
-            "url": final_detail.get("url"),
-            "message": publish_result.get("message") or "AppHub 应用版本已发布。",
-        }
-
     def _prepare_repository(
         self,
         root: Path,
@@ -156,6 +107,7 @@ class AppManager:
         app_slug: str | None = None,
     ) -> tuple[SiteBinding, dict[str, Any], dict[str, Any], dict[str, Any]]:
         binding = self._ensure_binding(root, app_slug=app_slug)
+        self.manifest_store.sync_identity(root, binding)
         app_detail = self.client.get_app(binding.slug)
         git_config = self.client.get_git_config(binding.slug)
         binding = self._refresh_binding(
@@ -164,6 +116,7 @@ class AppManager:
             git_config=git_config,
         )
         self.binding_store.save(root, binding)
+        self.manifest_store.sync_identity(root, binding)
         binding, credential_result = self._ensure_credential(root, binding, git_config)
         git_result = self.git_service.initialize(root, repo_url=binding.repo_url)
         return binding, credential_result, git_result, app_detail
@@ -183,7 +136,7 @@ class AppManager:
                 )
             return binding
 
-        discovered_name, discovered_slug = _discover_app_identity(root)
+        discovered_name, discovered_slug = self.manifest_store.discover_identity(root)
         candidate_slug = slugify_site_name(app_slug) if app_slug else discovered_slug
         app_name = discovered_name or root.name or candidate_slug
 
@@ -215,21 +168,23 @@ class AppManager:
                 detail,
             )
             self.binding_store.save(root, binding)
+            self.manifest_store.sync_identity(root, binding)
             return binding
 
-        app_yaml = AppYaml.from_app_name(app_name, slug=candidate_slug)
-        binding, _ = self._create_binding(root, app_yaml)
+        request = AppCreateRequest.from_app_name(app_name, slug=candidate_slug)
+        binding, _ = self._create_binding(root, request)
         return binding
 
     def _create_binding(
         self,
         root: Path,
-        app_yaml: AppYaml,
+        request: AppCreateRequest,
     ) -> tuple[SiteBinding, bool]:
-        payload = self.client.create_app(app_yaml.to_dict())
-        binding = SiteBinding.from_create_response(app_yaml.title, payload)
-        self.binding_store.save(root, binding)
+        payload = self.client.create_app(request.to_dict())
+        binding = SiteBinding.from_create_response(request.title, payload)
         credential_saved = self._save_inline_credential(root, binding, payload)
+        self.binding_store.save(root, binding)
+        self.manifest_store.sync_identity(root, binding)
         return binding, credential_saved
 
     def _save_inline_credential(
@@ -314,15 +269,6 @@ class AppManager:
             or binding.owner_email,
         )
 
-    def _assert_releasable(self, app_detail: dict[str, Any]) -> None:
-        status = _optional_text(app_detail.get("status"))
-        if status in {"disabled", "archived", "deleted"}:
-            raise AppProjectError(
-                "APP-STATE",
-                f"应用当前状态为 {status}，不能发布版本。",
-                fix_hint="请先在 AppHub 处理应用生命周期状态。",
-            )
-
     def _validate_message(self, message: str, *, command: str) -> str:
         summary = message.strip()
         if not summary:
@@ -344,30 +290,5 @@ class AppManager:
             "binding_file": str(root / ".opscli" / "app.json"),
             "message": message,
         }
-
-
-def _discover_app_identity(root: Path) -> tuple[str | None, str]:
-    app_yaml = root / "app.yaml"
-    values: dict[str, str] = {}
-    if app_yaml.is_file():
-        try:
-            for line in app_yaml.read_text(encoding="utf-8").splitlines():
-                match = _YAML_SCALAR_RE.match(line)
-                if not match:
-                    continue
-                key, raw_value = match.groups()
-                value = raw_value.strip().strip('"').strip("'")
-                if key in {"name", "title"} and value:
-                    values[key] = value
-        except (OSError, UnicodeError) as exc:
-            raise AppProjectError(
-                "APP-BINDING-INVALID",
-                f"读取 app.yaml 失败：{exc}",
-            ) from exc
-    app_name = values.get("title") or values.get("name") or root.name
-    slug = slugify_site_name(values.get("name") or root.name)
-    return app_name, slug
-
-
 def _optional_text(value: Any) -> str | None:
     return None if value in (None, "") else str(value)

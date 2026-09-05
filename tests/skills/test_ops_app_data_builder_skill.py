@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.5"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.5"}
+    assert frontmatter["metadata"]["version"] == "0.1.6"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.6"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -54,7 +54,7 @@ def test_ops_app_data_builder_has_narrow_project_scope():
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
-        "当前工作对象已通过 `opscli app create/init` 完成标准模板初始化",
+        "当前工作对象来自标准模板，并已通过 `opscli app create/init` 完成 AppHub 应用和 Git 仓库绑定",
         "只需要一次临时查询或导出",
         "只搭建静态页面、交互或样式",
         "只分析一次真实数据结果，不修改站点",
@@ -78,10 +78,8 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
     for required in (
         "### 0. 模板初始化门禁",
         ".opscli/app.json",
-        "ops-app.config.appId",
-        "binding 的 `app_id`",
-        "ops-app.config.appName",
-        "binding 的 `slug`",
+        "binding 必须包含有效 `app_id/slug`",
+        ".opscli/app.json.slug == app.yaml.name",
         "只有 binding 而没有模板代码",
         "backend/clients/ops_query_client.py",
         "backend/core/auth.py",
@@ -212,7 +210,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.5"
+    assert templates[SKILL_NAME]["version"] == "v0.1.6"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))
