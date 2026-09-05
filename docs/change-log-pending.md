@@ -25,6 +25,20 @@ master 和 release 各 64 条通过。release 通过 cherry-pick 移植 `42d0643
 
 ---
 
+## 2026-09-05 Skills - 新建模板项目后立即创建并初始化 AppHub 应用
+
+**变更原因**：Codex 使用 `ops-app-build-spec` 创建站点时，原流程只在开始阶段 clone 模板，将 `opscli app create/init` 延后到首次源码交付前，导致业务开发期间项目尚未写入 AppHub binding，模板 `origin` 也仍指向统一模板仓库。
+
+**改动点**：新项目流程调整为 clone 成功后立即执行 `opscli app create "<app-name>" --path "<project-directory>" --json`，随后执行 `opscli app init "<project-directory>" --json`；两步成功并核对 binding、manifest、分支和业务 remote 后才读取项目规范并继续开发。同步更新部署参考和专项契约测试，Skill 版本升至 v0.0.10。
+
+**验证结果**：Skill `quick_validate.py` 校验通过；专项测试文件编译和版本、发布清单 JSON 解析通过；直接执行本次相关的元数据、clone/create/init 顺序、部署合同和正式安装 4 项契约检查全部通过。完整 pytest 被测试环境缺少 `enum_cache` 阻断，未进入专项断言；全文件直接检查另有 1 项既有规范路由断言失败，与本次执行顺序改动无关。
+
+**影响范围**：仅影响 `ops-app-build-spec` 对新建站点的执行顺序；模板仍只通过 Git clone 获取，`create/init` 不生成或覆盖业务源码，既有项目和源码 push 边界不变。
+
+**回滚方式**：还原本条记录及 `ops-app-build-spec` 主流程、部署参考、版本和专项测试改动。
+
+---
+
 ## 2026-09-05 App - 收敛为三命令源码交付工具
 
 **变更原因**：`opscli app release`、AppHub release API 和 SSE 发布跟踪超出应用登记、Git 初始化与源码推送职责，继续保留会让源码交付与线上发布混淆。

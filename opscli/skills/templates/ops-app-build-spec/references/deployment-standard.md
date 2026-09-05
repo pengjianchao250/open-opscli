@@ -21,9 +21,10 @@
 ## 当前 opscli 流程
 
 - 新项目源码已经通过统一模板仓库 clone，不再通过 `opscli app init` 获取模板。
-- `opscli app create`：首次交付前创建或绑定 AppHub 应用。
-- `opscli app init`：将已克隆项目绑定到应用源码仓库并同步 remote，不覆盖已有业务源码；模板 clone 遗留的 `origin` 会在目标仓库预检后替换。
+- 模板 clone 成功后、开始业务开发前，立即执行 `opscli app create "<app-name>" --path "<project-directory>" --json` 创建 AppHub 应用并写入本地 binding。
+- `create` 成功后立即执行 `opscli app init "<project-directory>" --json`，将已克隆项目绑定到应用源码仓库并同步 remote，不覆盖已有业务源码；模板 clone 遗留的 `origin` 会在目标仓库预检后替换。
 - `opscli app init`：目标仓库为空时保留本地源码，不要求远端预先存在 `main`。
+- `create/init` 任一步失败都停止后续开发，并按 `ops-feedback` 规范处理失败。
 - `opscli app push`：整体暂存、提交并普通推送 `HEAD:main`，不执行强制推送。
 - `opscli app push --message` 必填，用于存在工作区修改时创建普通 Git commit。
 - `push` 成功只表示源码到达远端 `main`，不创建 release、不查询版本、不消费发布事件。
