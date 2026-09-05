@@ -1,5 +1,26 @@
 # 待归档变更记录
 
+## 2026-09-05 query - 组件枚举故障不再连累与该字段无关的查询
+
+**变更原因**：`dept_name` 是 `_ENUM_COMPONENT_SPECS` 首项且 `reverse_lookup=True`，用户没提部门也必发一次枚举；再叠加 `_resolve_component_filters` 里"首个失败即 break"，部门组件一坏，连「查昨天总销售额」这种压根不涉及部门的请求也会被整条 blocked。实测形态见生产会话 5384（该轮请求只要销售额，报错却是"部门的授权枚举调用失败"）。
+
+**⚠️ 与原计划的偏差及原因**：计划原文是「用户原文未提及该字段（`requested` 为空）且枚举失败时，不升级为 blocked」。**按字面实现是不安全的**：`requested` 为空只说明"标签形态没抽到值"，而 channel/country/brand/销售/小组 等字段的裸值（如渠道「傲彼瑞」）本就依赖枚举反查识别——枚举一挂就无从判断原文提没提到它，此时放行等于把「查傲彼瑞的销售额」静默变成查全部渠道，正是本文件反复强调的"静默错数比查不到数据危险得多"。故收窄为：**只有配了自定义 `extract`（文本级检测器）的字段才允许跳过**，当前仅部门一个（`_extract_requested_department_value` 能从「查九部销售额」抠出「九部」，不依赖枚举值）。其余字段一律维持 fail-closed。
+
+**改动点**：`opscli/query/services/planner/query_plan.py`
+- 新增 `_has_text_level_detector(spec)`：该字段能否只看原文就判断用户提没提到它（等价于是否配了自定义 `extract`）。
+- 新增 `_disclose_component_unavailable()`：把"某组件枚举不可用、本次未施加该筛选"写进 `answer_contract.required_disclosures_zh`。**跳过必须披露**——放宽查询范围可以，但不能悄悄放宽；披露过的放宽不是静默错数。
+- `_resolve_enum_component_filter` 在三个阻断分支之前插入跳过分支：`enum_errors and not requested and _has_text_level_detector(spec)` 时登记披露并 `return contract` 继续规划。
+
+**验证结果**：新增 10 条测试全通（`tests/query/planner/test_enum_failure_scope.py`）——部门是当前唯一有文本级检测器的组件、无关查询不被部门故障阻断、跳过必留披露、原文点名部门仍阻断、channel/country/brand 三个无检测器字段参数化验证仍 fail-closed、认证类故障同样适用、多组件下只跳过坏的那个其余照常解析、部门被跳过后渠道该澄清仍澄清。
+
+相关面回归（与 master 基线 `f4333af8` 逐条对照，含同批的 P1-1 提交）：分支 `tests/query` 5 failed / **289** passed / 1 error、`tests/mcp` 2 failed / **460** passed / 1 error、`tests/auth` 73 passed、`tests/skills` 13 errors；基线为 5/277/1、2/454/1、73、13 errors。**FAILED + ERROR 清单逐行完全一致，零新增失败**，passed 差值 +18 恰等于两个 commit 新增用例数之和（10 + 2 + 6）。仓库全量 `pytest tests/` 在 master 上同样直接 48 errors（既有环境问题），故按目录对照。
+
+**影响范围**：仅当"部门组件枚举失败 + 原文未识别到部门值"时行为改变（原 blocked → 现继续规划 + 必披露）。其余字段、其余失败形态、原文点名部门的场景一律不变。
+
+**回滚方式**：`git revert` 本 commit。
+
+---
+
 ## 2026-09-05 query/mcp - 换票结果实例内复用，并给缓存 JWT 加可用余量
 
 **变更原因**：两个独立但同源的浪费/风险点。① `QueryClient._get_auth` 在无状态模式下只要 `self.jwt` 为空就重新换票，而它换到票后**不回写 `self.jwt`**——一次规划要对 dept/channel/country/brand 等组件逐个发枚举查询再加一次执行，于是单次取数会打出 N 次 `cli-token`，每次都查一遍 `shared_login_sessions` 并往 `auth_token_records` 插一行，而业务请求本身还会再查一次会话表。② `McpCredentialCache.get_jwt` 只判 `exp > now` 没有任何安全余量（对比 `TokenManager.REFRESH_THRESHOLD` 有 300 秒），一张只剩 1 秒的票照样被发出去，请求到达服务端时已过期、被 `JwtAuthMiddleware` 判 407，表现为"刚拿到票就被登出"。

@@ -2732,6 +2732,40 @@ def _dataset_has_field(
     )
 
 
+def _has_text_level_detector(spec: dict) -> bool:
+    """该字段能否**只看原文**就判断用户有没有提到它。
+
+    只有配了自定义 `extract` 的字段才具备这个能力（当前仅部门：`_extract_requested_department_value`
+    能从「查九部销售额」里抠出「九部」，不依赖授权枚举值）。其余 reverse_lookup 字段
+    靠标签形态 + 枚举反查识别裸值——枚举一挂就无从判断原文里的「傲彼瑞」是不是渠道，
+    此时**必须**保持 fail-closed 阻断，否则「查傲彼瑞的销售额」会被静默放行成查全部渠道。
+    """
+    return spec.get("extract") is not None
+
+
+def _disclose_component_unavailable(
+    contract: dict, label_zh: str, error_summary: str
+) -> None:
+    """登记「某组件枚举不可用、本次未使用该筛选」的必披露事项。
+
+    为什么是披露而不是静默跳过：跳过等于把查询范围放宽到该字段全集，
+    虽然原文没提到它、放宽符合用户意图，但用户有权知道这一轮没有该维度的筛选保障。
+    披露过的放宽不是静默错数——本文件反复强调的危险是"悄悄"，不是"放宽"。
+    """
+    answer_contract = contract.get("answer_contract")
+    if not isinstance(answer_contract, dict):
+        return
+    disclosures = answer_contract.setdefault("required_disclosures_zh", [])
+    if not isinstance(disclosures, list):
+        return
+    message = (
+        f"{label_zh}筛选组件本次不可用（{error_summary}），原文未识别到{label_zh}值，"
+        f"因此本次查询未施加{label_zh}筛选。"
+    )
+    if message not in disclosures:
+        disclosures.append(message)
+
+
 def _block_component_filter(
     contract: dict, execution: dict, *, status: str, state: str, next_action: str, message_zh: str
 ) -> dict:
@@ -2913,6 +2947,14 @@ def _resolve_enum_component_filter(
         return contract
     if not values:
         shown = f"“{requested}”" if requested else ""
+        if enum_errors and not requested and _has_text_level_detector(spec):
+            # 该字段有文本级检测器、且原文里根本没检测到它的值 ⇒ 与本次查询无关，
+            # 不该因为它自己的枚举故障连累整条查询。实测形态：部门组件元数据异常时，
+            # 连「查昨天总销售额」这种压根不涉及部门的请求也被一起 blocked
+            # （dept_name 是 _ENUM_COMPONENT_SPECS 首项，且首个失败即 break）。
+            # 仅限有文本级检测器的字段——没有的字段无从判断原文是否提到，必须继续阻断。
+            _disclose_component_unavailable(contract, label_zh, enum_errors[0])
+            return contract
         if enum_errors:
             if _is_auth_enum_error(enum_errors[0]):
                 # 登录态失效（换 JWT 被后端拒），不是数据集/字段权限问题，更不是组件
