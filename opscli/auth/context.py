@@ -19,6 +19,17 @@ import contextvars
 from dataclasses import dataclass
 
 
+_NULL_LIKE_CREDENTIAL_VALUES = frozenset({"null", "none", "undefined"})
+
+
+def normalize_optional_credential(value: str | None) -> str | None:
+    """归一化可选凭证，将模型常见的字符串化空值转换为 None。"""
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in _NULL_LIKE_CREDENTIAL_VALUES:
+        return None
+    return normalized
+
+
 @dataclass(frozen=True)
 class ExplicitCredentials:
     """用户显式传入的一组授权凭证（不可变）。
