@@ -8,6 +8,40 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_query_metadata_treats_stringified_null_dataset_as_absent(monkeypatch):
+    """dataset 为字符串化空值时应改用同时提供的有效 table_id。"""
+    captured = {}
+
+    class DummyResult:
+        def to_dict(self):
+            return {"dataset": {"table_id": 1}, "fields": [], "source": "remote"}
+
+    class DummyManager:
+        def metadata(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return DummyResult()
+
+    monkeypatch.setattr(
+        helpers, "_get_auth_pair", lambda system, session_id, jwt: ("sid-1", "jwt-1")
+    )
+    monkeypatch.setattr(
+        query_tools, "_query_manager", lambda jwt=None, session_id=None: DummyManager()
+    )
+
+    result = _run(
+        query_tools.query_metadata(
+            dataset=" NULL ", table_id=1, session_id="sid-1", jwt="jwt-1"
+        )
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"] == {
+        "dataset_alias": None,
+        "table_id": 1,
+        "skills_dir": None,
+    }
+
+
 def test_query_catalog_passes_remote_options_to_manager(monkeypatch):
     captured = {}
 
@@ -61,4 +95,3 @@ def test_query_intent_match_reports_mcp_intent_source(monkeypatch):
 
     assert result["success"] is True
     assert captured["kwargs"]["report_source"] == "mcp_intent"
-

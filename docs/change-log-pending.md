@@ -1,5 +1,49 @@
 # 待归档变更记录
 
+## 2026-09-05 query metadata - 保留远端根因并过滤空数据集别名
+
+**变更原因**：生产会话 5392 的远端元数据请求因无效凭证失败后，代码静默回退本地
+缓存，并用 `DATASET_NOT_FOUND` 覆盖原始 `RemoteBusinessError`；同一次调用还将字符串
+`"null"` 数据集别名置于有效 `table_id` 之前，进一步制造“缓存未同步”假象。
+
+**改动点**：`query_metadata` 将 `null`、`none`、`undefined` 字符串别名归一化为空；
+`QueryManager.metadata()` 在远端失败后仅允许本地缓存确实命中时降级成功，本地加载失败
+或目标未命中时重新抛出原始远端异常。远端成功确认目标不存在时仍返回
+`DATASET_NOT_FOUND`。
+
+**验证结果**：两组相关面回归共 131 条通过：第一组
+`tests/query/test_manager.py tests/mcp/test_query_tools.py` 50 passed；第二组覆盖 metadata
+all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模块 `compileall` 通过；当前
+项目虚拟环境未安装 Ruff（`No module named ruff`），未执行 Ruff 检查。
+
+**影响范围**：query metadata 的失败归因与字符串化空别名；成功响应结构不变。
+
+**回滚方式**：回滚本次提交，无配置、数据结构或远端 API 契约变化。
+
+---
+
+## 2026-09-05 auth/query - 阻止字符串化空凭证进入请求
+
+**变更原因**：生产会话 5392 中 MCP 参数将 JSON null 序列化为字符串 `"null"`，
+原有真值判断把它当成真实 session/JWT，最终生成 `Authorization: Bearer null` 和
+`polarisUserToken=null`，被后端误报为“用户不存在”。
+
+**改动点**：在 `auth.context` 增加可选凭证归一化；`mcp.tools.helpers` 的 session、JWT
+及凭证对读取统一过滤 `null`、`none`、`undefined`（忽略大小写和首尾空白）并回退隔离
+凭证缓存；`QueryClient` 构造时再做传输层防御，覆盖绕过 MCP helper 的直接 SDK 调用。
+
+**验证结果**：相关面回归 53 条通过：
+`tests/auth/test_explicit_credentials.py`、`tests/mcp/test_helpers_identity.py`、
+`tests/mcp/test_query_tools.py`、`tests/mcp/test_feedback_tools.py`、
+`tests/test_session_sharing.py`、`tests/query/test_client.py`。
+
+**影响范围**：仅改变不可能成为合法凭证的字符串化空值；正常显式凭证和本地凭证读取
+优先级保持不变。
+
+**回滚方式**：回滚本次提交，无配置、数据结构或远端 API 契约变化。
+
+---
+
 ## 2026-09-05 mcp - 一步登录顺带签发的 JWT 落盘复用（配合后端 P2-1）
 
 **变更原因**：MCP 模式认证是两段式——`/v1/mcp/auth/login` 只产出 session，客户端随后还要打一次 `/v1/auth/cli-token` 才能拿到业务请求用的 Bearer JWT。后端（auto-scheduler `feat/mcp-login-jwt-and-session-renew`）已改为在登录响应里顺带签发一张，客户端落盘即可省掉登录后第一次调用的那一跳。

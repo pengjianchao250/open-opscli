@@ -444,3 +444,15 @@ def test_explicit_jwt_still_skips_exchange(monkeypatch):
     client.cli_simple_query({"tableId": 1})
 
     assert auth.exchanges == 0
+
+
+def test_stringified_null_credentials_fall_back_to_auth_client():
+    """直接构造 QueryClient 时也不能把字符串化空值发进鉴权头和 Cookie。"""
+    client = QueryClient(
+        auth_client=DummyAuthClient(), jwt=" null ", session_id="undefined"
+    )
+
+    headers, cookies = client._get_auth()
+
+    assert headers["Authorization"] == "Bearer jwt-token"
+    assert cookies["polarisUserToken"] == "session-123"
