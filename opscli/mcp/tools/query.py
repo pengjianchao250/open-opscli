@@ -34,6 +34,39 @@ from opscli.query.services.planner import run_flow, run_plan
 from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
+def _contract_needs_reauth(contract: object) -> bool:
+    """判断规划合同是否因「登录态失效」被阻断（对应 query_plan 的 auth_required）。
+
+    只认这一种状态：其余 blocked/clarify_required 都不是重登能解决的，
+    盲目重登既救不了也白白多打一次登录请求。
+    """
+    if not isinstance(contract, dict):
+        return False
+    model_view = contract.get("model_view")
+    if not isinstance(model_view, dict):
+        return False
+    return model_view.get("component_filter_state") == "auth_required"
+
+
+async def _reauth_credentials_for_retry() -> tuple[str | None, str | None]:
+    """撞到认证类阻断后强制重新登录一次，返回可用于重试的 (session_id, jwt)。
+
+    为什么需要强制：ensure_ops_credentials 平时只在 `is_authenticated()` 为假时
+    自动登录，而它只比对本地 `session_expires_at`；被服务端登出/吊销的 Session
+    在本地依然显示未过期，自动登录因此永远不触发，调用方恒拿 401。
+
+    任何失败都返回 (None, None) 由调用方保留原合同——自愈是增强项，
+    不能让重登本身的异常盖掉原本要告诉用户的阻断原因。
+    """
+    try:
+        from opscli.mcp.ops_credentials import ensure_ops_credentials
+
+        binding = await ensure_ops_credentials(force_relogin=True)
+    except Exception:  # noqa: BLE001 自愈失败保留原合同，不改变对外语义
+        return None, None
+    return binding.session_id, binding.jwt
+
+
 async def query_spec_must_read() -> dict:
     """读取 MCP 取数规范（QUERY_SPEC.md）——未安装 Skill 时的完整取数指南。
 
@@ -737,6 +770,18 @@ async def query_plan(
             top_n=top_n,
             query_manager=_query_manager(jwt=jw, session_id=sid),
         )
+        # 登录态失效导致的阻断：强制重登一次并原样重跑一次规划（最多一次，防 401 风暴）
+        if _contract_needs_reauth(contract):
+            retry_sid, retry_jw = await _reauth_credentials_for_retry()
+            if retry_sid:
+                contract = run_plan(
+                    request,
+                    user_email=email,
+                    base_dir=base_dir,
+                    requested_fields=fields,
+                    top_n=top_n,
+                    query_manager=_query_manager(jwt=retry_jw, session_id=retry_sid),
+                )
         return _ok(contract)
     except Exception as exc:
         return _err(exc)
@@ -819,6 +864,22 @@ async def query_flow(
             offset=offset,
             query_manager=_query_manager(jwt=jw, session_id=sid),
         )
+        # 登录态失效导致的阻断：强制重登一次并原样重跑一次（最多一次，防 401 风暴）。
+        # 放在这一层而不是规划器内部的 enum_fn：规划器是同步的，而重登是 async；
+        # 且整轮重跑能一并覆盖同一轮里其它同因失败，语义比只补一次枚举更干净。
+        if _contract_needs_reauth(result):
+            retry_sid, retry_jw = await _reauth_credentials_for_retry()
+            if retry_sid:
+                result = run_flow(
+                    request,
+                    user_email=email,
+                    base_dir=base_dir,
+                    requested_fields=fields,
+                    limit=limit,
+                    order_by=norm_order_by,
+                    offset=offset,
+                    query_manager=_query_manager(jwt=retry_jw, session_id=retry_sid),
+                )
         return _ok(result)
     except Exception as exc:
         return _err(exc)
