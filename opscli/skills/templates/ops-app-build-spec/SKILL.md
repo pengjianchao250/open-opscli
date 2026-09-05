@@ -1,35 +1,37 @@
 ---
 name: ops-app-build-spec
-description: 用于新建站点、新建看板、从零开发运营数据应用或改造未知 Web 项目；全新 opscli app 必须先通过 app create/init 拉取模板，再盘点、开发和执行发布检查，已有项目按受支持技术栈规范化。
+description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 应用，以后端设计和 OpenAPI 合同为主统一前后端开发、取数、安全、迁移和源码交付规范。
 ---
 
 # OPS 应用模板开发
 
 统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`main`。
 
-模板项目负责目录结构、具体开发命令、依赖版本、数据库实现和本地运行说明。当前 Skill 负责跨项目最低开发规范，以及会随 opscli 发版更新的取数、平台、安全、迁移和交付限制。
+新项目通过 Git clone 获取完整模板。Skill 不再生成项目脚手架；它负责维护会随 opscli 发版更新的项目级规范和平台限制。
 
-| 场景                                    | 必须读取                                                                                                       |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| 判断或改造前端                          | `references/frontend-standard.md`                                                                              |
-| 全新站点模板初始化                      | `references/initialization-standard.md`                                                                        |
-| 新建或改造后端                          | `references/backend-standard.md`                                                                               |
-| 后端 SQLite 细则、调用 opscli、红线总表 | `references/sqlite-standard.md`、`references/opscli-integration-standard.md`、`references/backend-redlines.md` |
-| 页面需要真实业务数据                    | `references/data-access-standard.md`                                                                           |
-| 现有项目不是目标结构                    | `references/migration-standard.md`                                                                             |
-| 初始化发布或首次发布                    | `references/deployment-standard.md`                                                                            |
+## 规范归属
+
+- 当前 Skill 是跨项目红线、SQLite、opscli 接入、真实取数、安全、迁移和源码交付规则的维护源。
+- 具体应用以后端实现为事实源：目标项目的 `backend/CLAUDE.md`、`docs/apphub-contract.md`、生成的 OpenAPI 和实际路由共同定义前后端合同。
+- 前端规范只约束前端实现，不得另行定义 API 路径、响应信封、错误码、鉴权或字段语义。
+- 目标项目可以补充业务规则，但不得弱化当前 Skill 的强制限制。
+- 目录现状、辅助函数、依赖版本和具体命令以目标项目实际代码为准；发现与 Skill 冲突时先列出证据，不静默覆盖。
+- `assets/backend/` 只保存项目规范模板，不包含应用代码、数据库、构建或部署脚手架。
 
 ## 按需读取
 
-| 场景                                         | 读取                                 |
-| -------------------------------------------- | ------------------------------------ |
-| 修改前端页面、组件、状态或请求               | `references/frontend-standard.md`    |
-| 修改 FastAPI API、服务、任务或配置           | `references/backend-standard.md`     |
-| 页面使用 OPS、Keepa、SellerSprite 或组合数据 | `references/data-access-standard.md` |
-| 现有项目不符合模板合同                       | `references/migration-standard.md`   |
-| 创建应用、绑定仓库、提交源码或检查部署条件   | `references/deployment-standard.md`  |
+| 场景                                         | 读取                                                                |
+| -------------------------------------------- | ------------------------------------------------------------------- |
+| 修改纯前端页面、组件或状态                   | `references/frontend-standard.md`                                   |
+| 修改前端请求、错误处理或前后端共享类型       | `references/frontend-standard.md`、`references/backend-redlines.md` |
+| 修改 FastAPI API、服务、任务或配置           | `references/backend-redlines.md`                                    |
+| 修改 SQLite 模型、事务、迁移或备份           | `references/sqlite-standard.md`                                     |
+| 后端调用 opscli SDK 或 REST                  | `references/opscli-integration-standard.md`                         |
+| 页面使用 OPS、Keepa、SellerSprite 或组合数据 | `references/data-access-standard.md`                                |
+| 迁移或同步项目规范                           | `references/migration-standard.md`                                  |
+| 创建应用、绑定仓库、提交源码或检查部署条件   | `references/deployment-standard.md`                                 |
 
-不要加载与当前任务无关的参考文件。
+不要加载与当前任务无关的参考文件。普通开发不读取 `assets/` 中的全文规范。
 
 ## 新项目
 
@@ -40,10 +42,12 @@ description: 用于新建站点、新建看板、从零开发运营数据应用�
    git clone --branch main --single-branch http://10.1.13.143:3000/aukeys-admin/template "<project-directory>"
    ```
 
-3. 核对 remote、分支和 HEAD，并确认 `app.yaml`、`AGENTS.md`、`frontend/`、`backend/`、`docs/apphub-contract.md` 存在。
+3. 核对分支和 HEAD，并确认 `app.yaml`、`AGENTS.md`、`frontend/`、`backend/app.py`、`backend/CLAUDE.md` 和 `docs/apphub-contract.md` 存在。
 4. 开发前读取目标项目的 `AGENTS.md`、`docs/apphub-contract.md`、`backend/CLAUDE.md` 和 `README.md`。
 
-不得运行项目生成器、手写替代脚手架或从 Skill 复制项目文件。克隆后的 `origin` 指向模板仓库，业务代码不得推回模板仓库。
+新项目只通过 clone 获取模板，不使用 `opscli app create/init` 代替 clone。克隆后的 `origin` 指向模板仓库，业务代码不得推回模板仓库；首次源码交付前再按部署规范创建应用并绑定业务仓库。
+
+不得运行项目生成器、手写替代脚手架，或从 Skill 复制应用代码和发布资产。
 
 ## 识别模板项目
 
@@ -51,33 +55,40 @@ description: 用于新建站点、新建看板、从零开发运营数据应用�
 
 - 根目录包含 `app.yaml`、`AGENTS.md` 和 `docs/apphub-contract.md`。
 - 存在 `frontend/`、`backend/app.py` 和 `backend/CLAUDE.md`。
-- `app.yaml` 的 runtime、entrypoint 和项目内合同一致。
-- 项目仍使用模板约定的单应用入口，没有另建一套 AppHub 发布结构。
+- `app.yaml` 的 runtime、entrypoint 与项目内合同一致。
+- 项目使用模板约定的单 FastAPI 应用入口，没有另建 Nginx 或前后端双服务发布结构。
 
-合同缺失时读取迁移规范，不在原目录重新初始化或覆盖。
+合同缺失时读取迁移规范，不在原目录重新初始化或批量覆盖。
 
-## 开发项目
+## 开发与规范同步
 
-- 目录、辅助函数、测试命令和数据库迁移方式直接遵循目标项目规范。
-- 修改前端或后端时读取对应简要规范，只执行与当前改动相关的条款。
+- 无论新项目还是已绑定项目，开发前都先读取目标项目的 `AGENTS.md`、`backend/CLAUDE.md`、`docs/apphub-contract.md` 和 `README.md`。
+- 修改前端、后端、SQLite 或 opscli 接入时读取对应规范，只执行与当前改动相关的条款。
+- 前端请求或共享类型变化时，先确认后端路由、Schema 和 OpenAPI，再改前端；不得用前端兼容分支掩盖后端合同漂移。
+- 页面涉及真实数据时必须读取取数规范；不得猜测数据集、字段、凭证、SDK 签名或运行时入口。
 - 只修改当前业务需要的代码，保留用户已有修改和模板基础能力。
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
-- 页面涉及真实数据时必须读取取数规范；不得凭经验猜测数据集、接口、凭证或 SDK 调用。
 - 用户未授权时，不安装依赖、启动服务、执行数据库写入、提交、推送或部署。
 - `app.yaml`、Git 根和 `main` 分支是否满足发布前置。
 - # 支持结论、迁移风险、未识别项及预计文件变更。
 - 页面真实数据用途、现有数据源、调用路径和前端直连或凭证风险。
 - 第三方原始数据、SellerSprite 异步任务和用户私有加工结果是否正确分层。
 
-前后端参考只保留跨项目强制规则，不复制模板的完整开发手册。数据库实现和迁移步骤由目标项目随代码维护。
+克隆项目已有规范文件时，以当前 Skill 规则约束本次开发，不为了同步而覆盖项目特有内容。迁移项目缺少规范时，可按迁移规范使用 `assets/backend/` 补齐：
+
+- `assets/backend/AGENTS.md` → `backend/AGENTS.md`
+- `assets/backend/CLAUDE.md` → `backend/CLAUDE.md`
+- `assets/backend/docs/开发指南/*.md` → `docs/开发指南/*.md`
+
+同步前展示差异，只更新规范文件，并保留目标项目的业务说明和特有约定。
 
 ## 迁移项目
 
-先识别目标是否已经符合模板合同。需要迁移时读取迁移规范，在独立模板目录中搬运业务能力；源项目保持可回退。
+先判断目标是否已经符合模板合同。需要迁移时读取迁移规范，在独立模板目录中搬运业务能力；源项目保持可回退。
 
 ## 提交与部署
 
-用户要求创建应用、绑定仓库、提交源码或部署时读取部署规范。Skill 负责当前 opscli 命令边界和提交前检查；源码推送后的构建、发布、健康状态和回滚由线上 AppHub 处理。
+首次源码交付或后续推送时读取部署规范。Skill 负责配置校验、当前 opscli 命令边界和提交前检查；源码推送后的构建、发布、健康状态和回滚由线上 AppHub 处理。
 
 发布态固定为一个 FastAPI 进程托管 Vite 构建产物、API 和健康检查：
 
@@ -183,7 +194,9 @@ AppHub 发布主路径固定为 Nixpacks：
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器或发布应用。
 
-发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app push <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
+只交付源码且用户已确认时，由 Codex 执行 `opscli app push <root> --message <summary>`。
+发布检查通过且用户已授权发布时，由 Codex 执行 `opscli app release <root> --message <summary>`；本 Skill 不绕过该命令直接创建 release。
+没有 release 终态和线上证据时，不得把 push、构建排队或镜像生成报告成已部署。
 
 ## 错误处理
 
@@ -195,4 +208,4 @@ AppHub 发布主路径固定为 Nixpacks：
 
 ## 输出
 
-简要报告模板识别、修改文件、实际验证、交付状态和阻塞项。未执行的测试、构建或线上部署不得写成通过。
+简要报告模板识别、规范同步、修改文件、实际验证、交付状态和阻塞项。未执行的测试、构建或线上部署不得写成通过。

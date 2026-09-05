@@ -1,5 +1,7 @@
 # OPS 站点数据层构建能力需求与设计
 
+> **opscli app 边界更新**：本文的数据层设计仍可作为历史参考，但其中 `app create/init` 拉模板、固定建站顺序和 `app push` 自动部署描述已于 2026-09-05 失效，相关命令语义以 `docs/design/2026-09-05-opscli-app四命令职责重构需求定稿.md` 为准。
+
 > 文档日期：2026-09-02  
 > 更新日期：2026-09-04  
 > 文档状态：已确认并按标准模板 QueryGateway 优化  
@@ -31,7 +33,7 @@
 
 - `opscli/skills/templates/ops-app-build-spec/SKILL.md`
 - `opscli/skills/templates/ops-app-build-spec/references/frontend-standard.md`
-- `opscli/skills/templates/ops-app-build-spec/references/backend-standard.md`
+- `opscli/skills/templates/ops-app-build-spec/references/backend-redlines.md`
 - `opscli/skills/templates/ops-app-build-spec/references/deployment-standard.md`
 - `docs/spec/API调用规范.md`
 - `docs/spec/SDK调用规范.md`

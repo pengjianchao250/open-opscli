@@ -1,4 +1,4 @@
-"""AppHub 请求模型与本地站点绑定模型。"""
+"""AppHub 创建请求与本地应用绑定模型。"""
 
 from __future__ import annotations
 
@@ -7,15 +7,7 @@ import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any
 
-from opscli.app.domain.constants import (
-    APP_DEFAULT_ENTRYPOINT,
-    APP_DEFAULT_PYTHON,
-    APP_DEFAULT_RUNTIME,
-    APP_TEMPLATE_BRANCH_DEFAULT,
-    APP_TEMPLATE_REPO_DEFAULT,
-    BINDING_SCHEMA_VERSION,
-    GIT_DEFAULT_BRANCH,
-)
+from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, GIT_DEFAULT_BRANCH
 from opscli.app.domain.exceptions import AppProjectError
 
 _SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
@@ -24,22 +16,24 @@ _SLUG_VALID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
 
 @dataclass(frozen=True)
 class AppYaml:
-    """第一阶段 create 使用的完整 AppYaml 默认配置。"""
+    """AppHub 创建应用请求。"""
 
     name: str
     title: str
     description: str = ""
     contact: str | None = None
-    runtime: str = APP_DEFAULT_RUNTIME
-    python: str = APP_DEFAULT_PYTHON
-    entrypoint: str = APP_DEFAULT_ENTRYPOINT
+
+    @classmethod
+    def from_app_name(cls, app_name: str, *, slug: str | None = None) -> "AppYaml":
+        title = app_name.strip()
+        if not title:
+            raise AppProjectError("APP-ARGUMENT", "应用名称不能为空。")
+        normalized_slug = slugify_site_name(slug) if slug else slugify_site_name(title)
+        return cls(name=normalized_slug, title=title)
 
     @classmethod
     def from_site_name(cls, site_name: str) -> "AppYaml":
-        title = site_name.strip()
-        if not title:
-            raise AppProjectError("APP-ARGUMENT", "站点名称不能为空。")
-        return cls(name=slugify_site_name(title), title=title)
+        return cls.from_app_name(site_name)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -48,11 +42,8 @@ class AppYaml:
             "title": self.title,
             "description": self.description,
             "contact": self.contact,
-            "runtime": self.runtime,
-            "python": self.python,
-            "entrypoint": self.entrypoint,
             "resources": {"cpu": None, "memory": None},
-            "services": {"sqlite": False},
+            "database": {"path": None},
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
@@ -64,7 +55,7 @@ class SiteBinding:
     """本地目录与 AppHub 应用、独立源码仓库的非敏感绑定。"""
 
     app_id: str
-    site_name: str
+    app_name: str
     slug: str
     repo_url: str
     default_branch: str = GIT_DEFAULT_BRANCH
@@ -72,18 +63,34 @@ class SiteBinding:
     owner_user_id: str | None = None
     owner_email: str | None = None
     created_at: str | None = None
-    template_repo_url: str = APP_TEMPLATE_REPO_DEFAULT
-    template_branch: str = APP_TEMPLATE_BRANCH_DEFAULT
     schema_version: int = BINDING_SCHEMA_VERSION
+
+    @property
+    def site_name(self) -> str:
+        """兼容旧 SDK 字段名。"""
+        return self.app_name
 
     @classmethod
     def from_create_response(
         cls,
-        site_name: str,
+        app_name: str,
         payload: dict[str, Any],
-        *,
-        template_repo_url: str,
-        template_branch: str,
+    ) -> "SiteBinding":
+        return cls._from_remote_payload(app_name, payload)
+
+    @classmethod
+    def from_app_detail(
+        cls,
+        app_name: str,
+        payload: dict[str, Any],
+    ) -> "SiteBinding":
+        return cls._from_remote_payload(app_name, payload)
+
+    @classmethod
+    def _from_remote_payload(
+        cls,
+        app_name: str,
+        payload: dict[str, Any],
     ) -> "SiteBinding":
         slug = _required_text(payload, "slug")
         repo_url = _required_text(payload, "repo_url")
@@ -92,7 +99,7 @@ class SiteBinding:
         ) or slug
         return cls(
             app_id=app_id,
-            site_name=str(payload.get("site_name") or payload.get("title") or site_name),
+            app_name=str(payload.get("title") or payload.get("site_name") or app_name),
             slug=slug,
             repo_url=repo_url,
             git_username=_optional_text(
@@ -102,8 +109,6 @@ class SiteBinding:
             owner_user_id=_optional_text(payload.get("owner_user_id")),
             owner_email=_optional_text(payload.get("owner_email") or payload.get("owner")),
             created_at=_optional_text(payload.get("created_at")),
-            template_repo_url=template_repo_url,
-            template_branch=template_branch,
         )
 
     @classmethod
@@ -111,18 +116,18 @@ class SiteBinding:
         try:
             source_version = int(payload.get("schema_version", 1))
         except (TypeError, ValueError) as exc:
-            raise AppProjectError("APP-BINDING-INVALID", "站点绑定版本格式错误。") from exc
-        if source_version not in (1, BINDING_SCHEMA_VERSION):
+            raise AppProjectError("APP-BINDING-INVALID", "应用绑定版本格式错误。") from exc
+        if source_version not in (1, 2, BINDING_SCHEMA_VERSION):
             raise AppProjectError(
                 "APP-BINDING-VERSION",
-                f"不支持的站点绑定版本：{source_version}",
+                f"不支持的应用绑定版本：{source_version}",
             )
         try:
             app_id = payload.get("app_id") or payload.get("site_id")
             binding = cls(
                 schema_version=source_version,
                 app_id=str(app_id),
-                site_name=str(payload["site_name"]),
+                app_name=str(payload.get("app_name") or payload["site_name"]),
                 slug=str(payload["slug"]),
                 repo_url=str(payload["repo_url"]),
                 default_branch=str(payload.get("default_branch") or GIT_DEFAULT_BRANCH),
@@ -132,20 +137,14 @@ class SiteBinding:
                     payload.get("owner_email") or payload.get("created_by")
                 ),
                 created_at=_optional_text(payload.get("created_at")),
-                template_repo_url=str(
-                    payload.get("template_repo_url") or APP_TEMPLATE_REPO_DEFAULT
-                ),
-                template_branch=str(
-                    payload.get("template_branch") or APP_TEMPLATE_BRANCH_DEFAULT
-                ),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise AppProjectError(
                 "APP-BINDING-INVALID",
-                "站点绑定文件字段不完整或格式错误。",
+                "应用绑定文件字段不完整或格式错误。",
             ) from exc
         if not binding.app_id or binding.app_id == "None":
-            raise AppProjectError("APP-BINDING-INVALID", "站点绑定缺少 app_id/site_id。")
+            raise AppProjectError("APP-BINDING-INVALID", "应用绑定缺少 app_id/site_id。")
         return binding
 
     def migrated(self, **changes: Any) -> "SiteBinding":
@@ -158,7 +157,7 @@ class SiteBinding:
 
 
 def slugify_site_name(value: str) -> str:
-    """把显示名称稳定转换为 AppHub 接受的 slug。"""
+    """把名称稳定转换为 AppHub 接受的 slug。"""
     normalized = _SLUG_INVALID_RE.sub("-", value.strip().lower()).strip("-")
     if not normalized or not normalized[0].isalpha():
         digest = hashlib.sha256(value.strip().encode("utf-8")).hexdigest()[:12]
@@ -167,17 +166,14 @@ def slugify_site_name(value: str) -> str:
     if len(normalized) < 3:
         normalized = f"app-{normalized}".rstrip("-")
     if not _SLUG_VALID_RE.fullmatch(normalized):
-        raise AppProjectError("APP-SLUG-INVALID", f"无法生成合法站点 slug：{normalized}")
+        raise AppProjectError("APP-SLUG-INVALID", f"无法生成合法应用 slug：{normalized}")
     return normalized
 
 
 def _required_text(payload: dict[str, Any], key: str) -> str:
     value = _optional_text(payload.get(key))
     if value is None:
-        raise AppProjectError(
-            "APPHUB-PROTOCOL",
-            f"AppHub 响应缺少字段：{key}",
-        )
+        raise AppProjectError("APPHUB-PROTOCOL", f"AppHub 响应缺少字段：{key}")
     return value
 
 

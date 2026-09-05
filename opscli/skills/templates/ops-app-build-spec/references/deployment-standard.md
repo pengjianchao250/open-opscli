@@ -16,22 +16,26 @@
 
 ## 当前 opscli 流程
 
-- `opscli app create`：创建或绑定 AppHub 应用。
-- `opscli app init`：同步本地绑定和应用源码仓库 remote，不覆盖已有业务源码。
+- 新项目源码已经通过统一模板仓库 clone，不再通过 `opscli app init` 获取模板。
+- `opscli app create`：首次交付前创建或绑定 AppHub 应用。
+- `opscli app init`：将已克隆项目绑定到应用源码仓库并同步 remote，不覆盖已有业务源码。
 - `opscli app push`：整体暂存、提交并普通推送 `HEAD:main`，不执行强制推送。
+- `opscli app release`：确保源码已推送，再基于远端 `main` 创建并跟踪 AppHub release。
 
 执行会修改 Git 或远端状态的命令前：
 
 1. 展示工作区状态和本次包含的文件。
 2. 展示准确 remote、目标仓库和目标分支。
 3. 说明 `opscli app push` 会整体暂存当前项目改动。
-4. 取得用户明确确认后执行。
+4. 仅推送源码时执行 `opscli app push`；用户明确要求发布时执行 `opscli app release`。
+5. 取得用户明确确认后执行。
 
 不得把业务代码推回统一模板仓库。remote 与本地应用绑定不一致时停止，先完成核对或重新初始化绑定。
 
 ## 线上边界
 
 - push 成功只表示源码到达远端。
+- release 成功才表示 AppHub 已完成当前版本发布；以 release 终态和线上 URL 为准。
 - 构建排队、镜像生成、发布成功、健康状态和回滚是不同状态，必须分别读取线上结果。
 - 没有线上状态或运行证据时，不得报告“部署成功”。
 - Skill 不通过本地 Compose、Docker 启动或临时服务器替代 AppHub 线上验收。

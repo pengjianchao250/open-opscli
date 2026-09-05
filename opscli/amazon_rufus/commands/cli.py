@@ -13,7 +13,7 @@ from opscli.amazon_rufus.domain.exceptions import (
     InvalidRufusPlatformError,
     RufusError,
 )
-from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
+from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 
@@ -42,9 +42,10 @@ def _emit(payload: dict, pretty: bool) -> None:
 
 
 def _emit_answer_report(data: dict) -> None:
-    """将前端风格的 Rufus 答案报告写入运行目录。"""
-    report_path = AnswerReportWriter().write(data)
-    typer.echo(f"Rufus 答案报告已保存：{report_path.as_posix()}")
+    """写入并发布 Rufus 答案报告。"""
+    report = AnswerReportPublisher().publish(data)
+    typer.echo(f"Rufus 答案报告已保存：{report.path.as_posix()}")
+    typer.echo(f"Rufus 答案报告地址：{report.url}")
 
 
 def _error_payload(command: str, exc: Exception) -> dict:
@@ -90,10 +91,10 @@ def get_backend(
             include_upload_payload=include_upload_payload or submit_upload,
             submit_upload=submit_upload,
         )
+        _emit_answer_report(data)
     except Exception as exc:
         _emit(_error_payload("amazon-rufus get-backend", exc), pretty)
         raise typer.Exit(1)
-    _emit_answer_report(data)
 
 
 @app.command("init")

@@ -29,19 +29,14 @@ def test_parse_git_version() -> None:
     assert _parse_git_version("git version 2.45.2.windows.1") == (2, 45, 2)
 
 
-def test_empty_project_bases_main_on_origin_then_applies_template(tmp_path: Path) -> None:
+def test_empty_project_bases_main_on_origin_without_template(tmp_path: Path) -> None:
     remote_sha = "a" * 40
     runner = FakeRunner(
         {
             ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
             ("remote", "get-url", "origin"): GitCommandResult(2, "", "missing"),
-            (
-                "rev-parse",
-                "--verify",
-                "origin/main",
-            ): GitCommandResult(0, remote_sha, ""),
+            ("rev-parse", "--verify", "origin/main"): GitCommandResult(0, remote_sha, ""),
             ("rev-parse", "--verify", "HEAD"): GitCommandResult(1, "", "missing"),
-            ("remote", "get-url", "template"): GitCommandResult(2, "", "missing"),
             (
                 "ls-remote",
                 "https://gitea.example/apps/demo.git",
@@ -49,31 +44,53 @@ def test_empty_project_bases_main_on_origin_then_applies_template(tmp_path: Path
             ): GitCommandResult(0, f"{remote_sha}\trefs/heads/main", ""),
         }
     )
-    service = GitService(runner=runner)
 
-    result = service.initialize(
+    result = GitService(runner=runner).initialize(
         tmp_path,
         repo_url="https://gitea.example/apps/demo.git",
-        template_repo_url="https://git.example/templates/sites.git",
-        template_branch="main",
-        apply_template=True,
     )
 
-    assert result["template_applied"] is True
+    assert result["git_created"] is True
     assert ["fetch", "origin", "main:refs/remotes/origin/main"] in runner.calls
     assert ["reset", "--mixed", "origin/main"] in runner.calls
-    assert [
-        "-c",
-        "credential.helper=",
-        "-c",
-        "core.askPass=",
-        "fetch",
-        "template",
-        "main",
-    ] in runner.calls
-    assert ["checkout", "FETCH_HEAD", "--", "."] in runner.calls
-    assert ["remote", "remove", "template"] in runner.calls
     assert ["remote", "add", "origin", "https://gitea.example/apps/demo.git"] in runner.calls
+    assert not any("template" in call for call in runner.calls)
+
+
+def test_init_prepares_unrelated_history_without_creating_commit(tmp_path: Path) -> None:
+    remote_sha = "a" * 40
+    local_sha = "b" * 40
+    runner = FakeRunner(
+        {
+            ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
+            ("remote", "get-url", "origin"): GitCommandResult(
+                0, "https://gitea.example/apps/demo.git", ""
+            ),
+            ("rev-parse", "--verify", "origin/main"): GitCommandResult(0, remote_sha, ""),
+            ("rev-parse", "--verify", "HEAD"): GitCommandResult(0, local_sha, ""),
+            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(1, "", ""),
+            (
+                "ls-remote",
+                "https://gitea.example/apps/demo.git",
+                "refs/heads/main",
+            ): GitCommandResult(0, f"{remote_sha}\trefs/heads/main", ""),
+        }
+    )
+
+    GitService(runner=runner).initialize(
+        tmp_path,
+        repo_url="https://gitea.example/apps/demo.git",
+    )
+
+    assert [
+        "merge",
+        "--allow-unrelated-histories",
+        "-s",
+        "ours",
+        "--no-commit",
+        "origin/main",
+    ] in runner.calls
+    assert not any(call and call[0] == "commit" for call in runner.calls)
 
 
 def test_push_fetches_checks_fast_forward_and_never_forces(tmp_path: Path) -> None:
@@ -86,13 +103,9 @@ def test_push_fetches_checks_fast_forward_and_never_forces(tmp_path: Path) -> No
             ("remote", "get-url", "origin"): GitCommandResult(
                 0, "https://gitea.example/apps/demo.git", ""
             ),
-            ("rev-parse", "--verify", "origin/main"): GitCommandResult(
-                0, remote_before, ""
-            ),
+            ("rev-parse", "--verify", "origin/main"): GitCommandResult(0, remote_before, ""),
             ("rev-parse", "--verify", "HEAD"): GitCommandResult(0, sha, ""),
-            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(
-                0, "", ""
-            ),
+            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(0, "", ""),
             ("status", "--porcelain"): GitCommandResult(0, " M index.html", ""),
             (
                 "ls-remote",
@@ -101,9 +114,8 @@ def test_push_fetches_checks_fast_forward_and_never_forces(tmp_path: Path) -> No
             ): GitCommandResult(0, f"{sha}\trefs/heads/main", ""),
         }
     )
-    service = GitService(runner=runner)
 
-    result = service.push_all(
+    result = GitService(runner=runner).push_all(
         tmp_path,
         repo_url="https://gitea.example/apps/demo.git",
         message="优化首页",
@@ -111,10 +123,37 @@ def test_push_fetches_checks_fast_forward_and_never_forces(tmp_path: Path) -> No
 
     assert ["add", "-A"] in runner.calls
     assert ["commit", "-m", "优化首页"] in runner.calls
-    push = ["push", "-u", "origin", "HEAD:main"]
-    assert push in runner.calls
+    assert ["push", "-u", "origin", "HEAD:main"] in runner.calls
     assert all("--force" not in call for call in runner.calls)
     assert result["remote_commit_sha"] == sha
+    assert result["pushed"] is True
+
+
+def test_push_is_noop_when_local_and_remote_are_equal(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    sha = "a" * 40
+    runner = FakeRunner(
+        {
+            ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
+            ("remote", "get-url", "origin"): GitCommandResult(
+                0, "https://gitea.example/apps/demo.git", ""
+            ),
+            ("rev-parse", "--verify", "origin/main"): GitCommandResult(0, sha, ""),
+            ("rev-parse", "--verify", "HEAD"): GitCommandResult(0, sha, ""),
+            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(0, "", ""),
+            ("status", "--porcelain"): GitCommandResult(0, "", ""),
+        }
+    )
+
+    result = GitService(runner=runner).push_all(
+        tmp_path,
+        repo_url="https://gitea.example/apps/demo.git",
+        message="无变化",
+    )
+
+    assert result["pushed"] is False
+    assert result["committed"] is False
+    assert not any(call and call[0] == "push" for call in runner.calls)
 
 
 def test_push_rejects_non_fast_forward(tmp_path: Path) -> None:
@@ -127,9 +166,7 @@ def test_push_rejects_non_fast_forward(tmp_path: Path) -> None:
             ),
             ("rev-parse", "--verify", "origin/main"): GitCommandResult(0, "a" * 40, ""),
             ("rev-parse", "--verify", "HEAD"): GitCommandResult(0, "b" * 40, ""),
-            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(
-                1, "", ""
-            ),
+            ("merge-base", "--is-ancestor", "origin/main", "HEAD"): GitCommandResult(1, "", ""),
         }
     )
 
@@ -145,72 +182,12 @@ def test_push_rejects_non_fast_forward(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
-def test_real_git_init_uses_remote_main_as_ancestor(tmp_path: Path) -> None:
-    target_work = tmp_path / "target-work"
-    target_work.mkdir()
-    _git(target_work, "init")
-    _configure_author(target_work)
-    (target_work / "README.md").write_text("apphub", encoding="utf-8")
-    _git(target_work, "add", "-A")
-    _git(target_work, "commit", "-m", "initialize main")
-    _git(target_work, "branch", "-M", "main")
-    target_bare = tmp_path / "target.git"
-    subprocess.run(
-        ["git", "clone", "--bare", str(target_work), str(target_bare)],
-        check=True,
-        capture_output=True,
-    )
-
-    template_work = tmp_path / "template-work"
-    template_work.mkdir()
-    _git(template_work, "init")
-    _configure_author(template_work)
-    (template_work / "index.html").write_text("template", encoding="utf-8")
-    _git(template_work, "add", "-A")
-    _git(template_work, "commit", "-m", "template")
-    _git(template_work, "branch", "-M", "template")
-    template_bare = tmp_path / "template.git"
-    subprocess.run(
-        ["git", "clone", "--bare", str(template_work), str(template_bare)],
-        check=True,
-        capture_output=True,
-    )
-
-    site = tmp_path / "site"
-    (site / ".opscli").mkdir(parents=True)
-    binding = site / ".opscli" / "app.json"
-    binding.write_text('{"app_id":"app-1"}\n', encoding="utf-8")
-
-    service = GitService()
-    initialized = service.initialize(
-        site,
-        repo_url=str(target_bare),
-        template_repo_url=str(template_bare),
-        template_branch="template",
-        apply_template=True,
-    )
-
-    assert initialized["template_applied"] is True
-    assert (site / "README.md").read_text(encoding="utf-8") == "apphub"
-    assert (site / "index.html").read_text(encoding="utf-8") == "template"
-    assert binding.is_file()
-
-    _configure_author(site)
-    pushed = service.push_all(site, repo_url=str(target_bare), message="应用模板")
-
-    assert pushed["committed"] is True
-    assert _git(target_bare, "rev-parse", "refs/heads/main") == pushed["commit_sha"]
-    assert _git(site, "merge-base", "--is-ancestor", "origin/main", "HEAD") == ""
-
-
-@pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
-def test_real_git_existing_source_is_not_overwritten(tmp_path: Path) -> None:
+def test_real_git_init_preserves_existing_source_and_pushes(tmp_path: Path) -> None:
     target_work = tmp_path / "target-work"
     target_work.mkdir()
     _git(target_work, "init")
     _configure_author(target_work)
     (target_work / "README.md").write_text("remote readme", encoding="utf-8")
-    (target_work / "index.html").write_text("remote index", encoding="utf-8")
     _git(target_work, "add", "-A")
     _git(target_work, "commit", "-m", "initialize main")
     _git(target_work, "branch", "-M", "main")
@@ -221,21 +198,23 @@ def test_real_git_existing_source_is_not_overwritten(tmp_path: Path) -> None:
         capture_output=True,
     )
 
-    site = tmp_path / "site"
-    site.mkdir()
-    (site / "index.html").write_text("local index", encoding="utf-8")
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    (app_root / "index.html").write_text("local index", encoding="utf-8")
     service = GitService()
 
-    service.initialize(
-        site,
-        repo_url=str(target_bare),
-        template_repo_url=str(target_bare),
-        template_branch="main",
-        apply_template=False,
-    )
+    initialized = service.initialize(app_root, repo_url=str(target_bare))
 
-    assert (site / "index.html").read_text(encoding="utf-8") == "local index"
-    assert (site / "README.md").read_text(encoding="utf-8") == "remote readme"
+    assert initialized["git_created"] is True
+    assert (app_root / "index.html").read_text(encoding="utf-8") == "local index"
+    assert (app_root / "README.md").read_text(encoding="utf-8") == "remote readme"
+
+    _configure_author(app_root)
+    pushed = service.push_all(app_root, repo_url=str(target_bare), message="提交源码")
+
+    assert pushed["committed"] is True
+    assert pushed["pushed"] is True
+    assert _git(target_bare, "rev-parse", "refs/heads/main") == pushed["commit_sha"]
 
 
 def _configure_author(cwd: Path) -> None:

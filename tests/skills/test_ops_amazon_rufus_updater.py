@@ -317,8 +317,8 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         assert forbidden not in docs
 
 
-def test_ops_amazon_rufus_docs_require_fresh_report_path():
-    """约束 Agent 只读取本次 Rufus 获取返回的最新报告路径。"""
+def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
+    """约束 Agent 成对使用本次 Rufus 获取返回的报告路径和 URL。"""
     skill_dirs = [
         Path("opscli/skills/templates/ops-amazon-rufus"),
         Path(".agents/skills/ops-amazon-rufus"),
@@ -328,12 +328,37 @@ def test_ops_amazon_rufus_docs_require_fresh_report_path():
         skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         readme_text = (skill_dir / "README.md").read_text(encoding="utf-8")
         workflow_text = (skill_dir / "references" / "rufus-mcp-workflow.md").read_text(encoding="utf-8")
+        formatting_text = (skill_dir / "references" / "rufus-report-formatting.md").read_text(encoding="utf-8")
 
-        assert "本次工具返回的 `report_path`" in skill_text
-        assert "不得返回历史 ASIN 报告" in readme_text
+        assert "`report_path` 和 `report_url`" in skill_text
+        assert "`report_path` 和 `report_url` 成对替换旧值" in skill_text
+        assert "Rufus 报告：<report_url>" in skill_text
+        assert "`report_path` 和 `report_url` 是不可拆分的一对" in readme_text
+        assert "不得返回历史 ASIN 报告或历史 URL" in readme_text
         assert "报告新鲜度约束" in workflow_text
         assert "禁止仅凭 ASIN" in workflow_text
-        assert "本次 `report_path`" in workflow_text
+        assert "`report_path` 和 `report_url` 成对替换旧值" in workflow_text
+        assert "不得使用历史 `report_path`、历史 `report_url`" in workflow_text
+        assert "Rufus 报告：<report_url>" in workflow_text
+        assert "<ASIN>-<YYYYMMDD-HHMMSS>-<UUID>.md" in formatting_text
+
+        docs = "\n".join([skill_text, readme_text, workflow_text])
+        assert "`--no-upload-payload` 只关闭旧 Rufus `upload_payload`" in docs
+        assert "不关闭 Markdown 报告上传" in docs
+
+
+def test_ops_amazon_rufus_template_matches_installed_copy():
+    """模板契约和仓库安装副本必须完全一致。"""
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus")
+    installed_dir = Path(".agents/skills/ops-amazon-rufus")
+
+    for relative_path in [
+        Path("SKILL.md"),
+        Path("README.md"),
+        Path("references/rufus-mcp-workflow.md"),
+        Path("references/rufus-report-formatting.md"),
+    ]:
+        assert (template_dir / relative_path).read_bytes() == (installed_dir / relative_path).read_bytes()
 
 
 def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():

@@ -2,7 +2,7 @@
 name: ops-app-data-builder
 description: 用于 Codex 中为已经通过 opscli app create/init 拉取标准模板的站点构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未初始化项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.4
+  version: 0.1.5
 ---
 
 # OPS 应用数据层构建
@@ -160,7 +160,7 @@ frontend/src/types/          与 Pydantic 对齐的前端类型
 
 后端路由只做协议转换、参数校验和错误映射；网络调用与业务加工进入 client/service；SQLite 访问进入 repository/db。跨来源组合必须在 service 完成，不得放到浏览器。
 
-Keepa 和 SellerSprite 后端 Client 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，使用 Bearer Header；不得引入 `OPSCLI_SELLER_SPRITE_E2E_*` 运行时别名。Keepa 页面运行时只调用 `POST /api/v1/keepa/run`。SellerSprite 使用正式普通 jobs 或 Listing Analysis 专用异步接口，保存并复用 `queued/running` 任务的 `job_id`；只有 `succeeded` 的 JSON 结果写入共享快照。
+Keepa 和 SellerSprite 线上取数服务统一使用生产根域名 `https://ops.mcp.xenkee.com`。后端 Client 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 和同一个 `ThirdPartyApiClient`：`OPSCLI_API_BASE_URL` 是后端普通配置，默认值为该生产根域名，且必须是纯根域名，不得包含 `/api`、接口路径或末尾 `/`；`OPSCLI_API_KEY` 只从后端 Secret 注入，缺失时必须快速失败。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得为 Keepa 或 SellerSprite 增设独立 Base URL，不得引入 `OPSCLI_SELLER_SPRITE_E2E_*` 运行时别名。Keepa 页面运行时只调用 `POST /api/v1/keepa/run`。SellerSprite 使用正式普通 jobs 或 Listing Analysis 专用异步接口，保存并复用 `queued/running` 任务的 `job_id`；只有 `succeeded` 的 JSON 结果写入共享快照。
 
 用户私有表的创建、列表、读取、更新、删除、索引和唯一约束都必须包含当前 `owner_user_id`。第三方共享快照使用 `UNIQUE(provider, request_hash)`；SellerSprite 当前任务表同样按 `provider + request_hash` 唯一，用户查询历史另存用户私有表。
 
@@ -179,7 +179,9 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
 - OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
-- Keepa 和 SellerSprite API Key 只从后端 Secret 注入，代码只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
+- Keepa 和 SellerSprite 共用生产根域名 `https://ops.mcp.xenkee.com`、同一个 `ThirdPartyApiClient` 和 `OPSCLI_API_BASE_URL`，未出现 provider 专属 Base URL。
+- `OPSCLI_API_BASE_URL` 只包含纯根域名，统一通过 `base_url.rstrip("/") + path` 拼接固定接口路径；不存在重复 `/api/api` 或双斜杠。
+- `OPSCLI_API_KEY` 只从后端 Secret 注入，缺失时快速失败，未进入前端、源码、日志或 SQLite。
 - Keepa 同时检查 HTTP 状态和响应 `success`，失败不清空最后有效快照。
 - SellerSprite pending 任务复用 `job_id`，`failed/cancelled` 停止轮询，HTTP 202 不被当作完成。
 - JSON 原始业务数据与用户加工结果分表；XLS/XLSX、二进制和临时下载 URL 未写入 SQLite。

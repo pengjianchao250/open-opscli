@@ -1,5 +1,7 @@
 # opscli app 自然语言建站编排需求定稿
 
+> **历史方案，已被取代**：2026-09-05 起自然语言建站编排由 Skill 负责，`opscli app` 只提供 create/init/push/release 四个原子命令。
+
 > 日期：2026-09-03  
 > 状态：需求定稿并落地  
 > 关联：`docs/design/2026-09-03-opscli-app模板先行建站流程需求定稿.md`
@@ -112,7 +114,6 @@ Git push、AppHub release、构建部署和 SSE 结果
 ### 修改
 
 - `ops-app-build-spec/SKILL.md`：增加自然语言新建意图和模板门禁；
-- `references/initialization-standard.md`：改为模板先行初始化规范；
 - Skill 版本和契约测试；
 - AppHub 使用指南、模板先行需求文档和开发规范。
 

@@ -1,5 +1,7 @@
 # opscli app 与 AppHub API 全量分析及改造方案
 
+> **历史方案，已被取代**：2026-09-05 起以 `docs/design/2026-09-05-opscli-app四命令职责重构需求定稿.md` 为准。API 前缀、四命令职责以及 push/release 边界均以新文档为准。
+
 > 日期：2026-09-02  
 > 范围：Apifox 中 AppHub 68 个正式 API、`opscli/app` 当前实现、AppHub 架构与 CLI 任务设计。  
 > 前提：一个站点对应一个 Gitea 仓库，仓库路径为 `apps/{slug}`，默认分支为 `main`。
