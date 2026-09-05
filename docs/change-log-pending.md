@@ -1,5 +1,21 @@
 # 待归档变更记录
 
+## 2026-09-05 query/mcp - 换票结果实例内复用，并给缓存 JWT 加可用余量
+
+**变更原因**：两个独立但同源的浪费/风险点。① `QueryClient._get_auth` 在无状态模式下只要 `self.jwt` 为空就重新换票，而它换到票后**不回写 `self.jwt`**——一次规划要对 dept/channel/country/brand 等组件逐个发枚举查询再加一次执行，于是单次取数会打出 N 次 `cli-token`，每次都查一遍 `shared_login_sessions` 并往 `auth_token_records` 插一行，而业务请求本身还会再查一次会话表。② `McpCredentialCache.get_jwt` 只判 `exp > now` 没有任何安全余量（对比 `TokenManager.REFRESH_THRESHOLD` 有 300 秒），一张只剩 1 秒的票照样被发出去，请求到达服务端时已过期、被 `JwtAuthMiddleware` 判 407，表现为"刚拿到票就被登出"。
+
+**改动点**：
+- `opscli/query/transport/client.py`：`_get_auth` 换票成功后写回 `self.jwt`，本实例内复用。**只记在进程内存里、不落盘**——跨调用持久化要写同一份 `credentials.bin`（`CredentialStore.save_token` 是无锁 read-modify-write，多进程并发会损坏），且显式传入的 `session_id` 可能属于别的账号，落盘会串号；风险大于收益，故不做。
+- `opscli/mcp/credential_cache.py`：`get_jwt` 引入 `_JWT_USABLE_MARGIN_SECONDS = 300`（与 `TokenManager.REFRESH_THRESHOLD` 同值），余量不足的票视同不可用并移出内存缓存，由调用方换新。
+
+**验证结果**：新增 8 条测试全通——`tests/query/test_client.py` 2 条（两次请求只换一次票且 Authorization 一致；显式传 JWT 时一次都不换，既有行为不回归）、`tests/mcp/test_credential_cache.py` 6 条（余量 5 种边界参数化：1 小时/刚好超余量/余量不足/只剩 1 分钟/已过期，以及废票被移出缓存）。
+
+**影响范围**：所有走无状态凭证的 MCP 取数调用（换票次数由 N 降为 1）；`get_jwt` 的判定收紧，剩余寿命 <300 秒的缓存票会被当作缺失而触发一次换票——多一次换票，换掉一次必然的 407。
+
+**回滚方式**：`git revert` 本 commit；两处改动互相独立，也可只回退其中一处。
+
+---
+
 ## 2026-09-05 query/mcp - 登录态失效的枚举失败单独归因，并自愈重登重试一次
 
 **变更原因**：远端 MCP 上的登录 Session 失效后（TTL 30 天且使用时不续期，或被服务端登出置 `is_valid=0`），opscli 拿它去 `POST /api/v1/auth/cli-token` 换 JWT 恒 401 抛 `TokenFetchError`。规划器 `_auto_enum_component_values` 对枚举异常只做 `except Exception` 不分类型，`enum_failed` 分支一律按「通常是该筛选组件的元数据配置异常，重试无效，请提交反馈由平台侧核查」归因——把一个"重新登录就能恢复"的问题误导成平台缺陷，用户只能提反馈干等。生产实测（ops-agent `dm_messages` 全库检索）2026-08-04 起 **59 个会话 / 17 个用户**被这条文案误导，代表案例为会话 5384「部门的授权枚举调用失败（TokenFetchError: 获取 ops JWT 失败: 401）」。放大因素：`dept_name` 是 `_ENUM_COMPONENT_SPECS` 首项且 `reverse_lookup=True`，用户没提部门也必发一次枚举，因此认证一坏任何一次规划都 100% 卡在"部门"。
