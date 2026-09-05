@@ -1,5 +1,28 @@
 # 待归档变更记录
 
+## 2026-09-05 MCP query - 生产分支补齐全局币种参数
+
+**变更原因**：生产会话 5397 使用手工查询路径时，远端 opscli MCP `0.0.131`
+暴露的 `query_simple` schema 不含 `global_currency`，FastMCP 在业务函数执行前以
+`unexpected_keyword_argument` 拒绝请求。该能力已存在于 `QueryManager` 和后端接口，
+但此前只合入 release 分支，没有进入生产 master 发布线。
+
+**改动点**：`query_simple`、`query_build`、`query_build_and_run` 三个 MCP 工具新增
+`global_currency` 可选参数并透传给 `QueryManager`；工具说明明确币种是服务端换算参数，
+不是数据集字段。新增直接透传、默认不传及 FastMCP `inputSchema` 暴露测试。
+
+**验证结果**：相关面回归
+`tests/mcp/test_query_tools.py tests/mcp/test_tools.py tests/query/test_manager.py`
+共 62 条通过；其中 schema 守卫直接通过 FastMCP `list_tools()` 断言
+`query_simple.inputSchema.properties.global_currency` 存在。
+
+**影响范围**：仅影响 MCP 手工构造查询的币种参数；规划器 `query_flow`、未传币种的
+现有查询及后端 API 契约不变。
+
+**回滚方式**：回滚本次提交，无配置、数据库或远端 API 结构变更。
+
+---
+
 ## 2026-09-05 query metadata - 保留远端根因并过滤空数据集别名
 
 **变更原因**：生产会话 5392 的远端元数据请求因无效凭证失败后，代码静默回退本地

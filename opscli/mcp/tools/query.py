@@ -312,6 +312,7 @@ async def query_build(
     data_comparison: str | None = None,
     output_path: str | None = None,
     skills_dir: str | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """基于简化参数构造标准 query payload（不执行查询）。不需要认证。
 
@@ -334,6 +335,9 @@ async def query_build(
         data_comparison:   数据对比，格式 field,start_date,end_date，如 "date_id,2026-03-01,2026-03-22"
         output_path:       可选，将 payload 写入指定文件路径
         skills_dir:        可选，自定义 Skills 目录
+        global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），写入 payload 顶层
+                           globalCurrency 由服务端换算金额指标；币种不是维度或筛选字段，
+                           未识别到币种意图时不传
     """
     # 容错：AI 有时将 list 参数以 JSON 字符串形式传入，统一解析
     try:
@@ -361,6 +365,7 @@ async def query_build(
             data_comparison=data_comparison,
             output_path=output_path,
             skills_dir=skills_dir,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:
@@ -413,6 +418,7 @@ async def query_simple(
     skills_dir: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
@@ -459,6 +465,13 @@ async def query_simple(
         skills_dir:      可选，自定义 Skills 目录
         session_id:      可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:             可选，已有 JWT（为空则自动加载本地缓存的）
+        global_currency: 可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），见下方【币种】
+
+    【币种】币种是服务端换算参数，**不是维度或筛选字段**：用户要求“用美元/按 EUR 口径”时传
+    global_currency="USD"，由服务端换算金额类指标。数据集元数据里没有 currency 字段属正常，
+    不要去找该字段，更不得因此判定“不支持币种”，也不得改用 _cny / 原币字段代替该参数。
+    多币种（如“分别用美元和欧元”）需每个币种各调用一次本工具，除 global_currency 外其余参数
+    完全一致；禁止查一次后用汇率换算。结论中的币种以返回的 meta.currency 为准。
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -498,6 +511,7 @@ async def query_simple(
             dry_run=dry_run,
             validate_fields=True,
             skills_dir=skills_dir,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:
@@ -572,6 +586,7 @@ async def query_build_and_run(
     intent_code: str | None = None,
     selection_source: str | None = None,
     match_record_id: int | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果（CLI 风格字符串参数）。
 
@@ -607,6 +622,8 @@ async def query_build_and_run(
         intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
         selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
         match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
+        global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），由服务端换算金额指标；
+                           币种不是维度或筛选字段，多币种须逐币种各执行一次
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -646,6 +663,7 @@ async def query_build_and_run(
             intent_code=intent_code,
             selection_source=selection_source,
             match_record_id=match_record_id,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:

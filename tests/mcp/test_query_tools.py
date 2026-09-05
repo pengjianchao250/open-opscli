@@ -95,3 +95,90 @@ def test_query_intent_match_reports_mcp_intent_source(monkeypatch):
 
     assert result["success"] is True
     assert captured["kwargs"]["report_source"] == "mcp_intent"
+
+
+def test_query_simple_forwards_global_currency(monkeypatch):
+    """MCP query_simple 必须把 global_currency 透传给 QueryManager。"""
+    captured = {}
+
+    class DummyManager:
+        def build_simple_and_run(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return {
+                "payload": {"globalCurrency": kwargs.get("global_currency")},
+                "result": {},
+            }
+
+    monkeypatch.setattr(
+        helpers, "_get_auth_pair", lambda system, session_id, jwt: ("sid-1", "jwt-1")
+    )
+    monkeypatch.setattr(
+        query_tools, "_query_manager", lambda jwt=None, session_id=None: DummyManager()
+    )
+
+    result = _run(
+        query_tools.query_simple(
+            table_id=1,
+            metrics=["price:SUM"],
+            global_currency="USD",
+        )
+    )
+
+    assert result["success"] is True
+    assert captured["kwargs"]["global_currency"] == "USD"
+
+
+def test_query_simple_omits_global_currency_by_default(monkeypatch):
+    """未识别到币种意图时不传该参数，由后端按原始币种返回。"""
+    captured = {}
+
+    class DummyManager:
+        def build_simple_and_run(self, **kwargs):
+            captured["kwargs"] = kwargs
+            return {"payload": {}, "result": {}}
+
+    monkeypatch.setattr(
+        helpers, "_get_auth_pair", lambda system, session_id, jwt: ("sid-1", "jwt-1")
+    )
+    monkeypatch.setattr(
+        query_tools, "_query_manager", lambda jwt=None, session_id=None: DummyManager()
+    )
+
+    _run(query_tools.query_simple(table_id=1, metrics=["price:SUM"]))
+
+    assert captured["kwargs"]["global_currency"] is None
+
+
+def test_query_build_and_build_and_run_forward_global_currency(monkeypatch):
+    """query_build 与 query_build_and_run 同样透传币种参数。"""
+    captured = {}
+
+    class DummyManager:
+        def build(self, **kwargs):
+            captured["build"] = kwargs
+            return {"payload": {}}
+
+        def build_and_run(self, **kwargs):
+            captured["build_and_run"] = kwargs
+            return {"payload": {}, "result": {}}
+
+    monkeypatch.setattr(
+        helpers, "_get_auth_pair", lambda system, session_id, jwt: ("sid-1", "jwt-1")
+    )
+    monkeypatch.setattr(
+        query_tools, "_query_manager", lambda jwt=None, session_id=None: DummyManager()
+    )
+
+    _run(
+        query_tools.query_build(
+            table_id=1, metrics=["price:SUM"], global_currency="EUR"
+        )
+    )
+    _run(
+        query_tools.query_build_and_run(
+            table_id=1, metrics=["price:SUM"], global_currency="EUR"
+        )
+    )
+
+    assert captured["build"]["global_currency"] == "EUR"
+    assert captured["build_and_run"]["global_currency"] == "EUR"
