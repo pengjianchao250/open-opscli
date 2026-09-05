@@ -207,3 +207,129 @@ def test_stdio_binding_preserves_explicit_runtime_credentials(monkeypatch):
     assert binding.session_id == "local-session"
     assert binding.jwt == "local-jwt"
     assert binding.runtime_auth == ("local-session", "local-jwt")
+
+
+def test_force_relogin_renews_session_even_when_locally_unexpired(monkeypatch, tmp_path):
+    """force_relogin 必须无视 is_authenticated()，强制换一张新 Session。
+
+    回归防护：is_authenticated() 只比对本地 session_expires_at，而服务端还会校验
+    is_valid 与真实有效期。被登出/吊销的 Session 本地依然显示未过期，自动登录因此
+    永远不触发，调用方恒拿 401（生产会话 5384 即此形态）。
+    """
+    from opscli.mcp import ops_credentials
+
+    state = {"session": "stale-session", "logins": 0}
+
+    class FakeCache:
+        def is_authenticated(self):
+            return True  # 本地看着没过期，但服务端已判无效
+
+        def get_session_id(self):
+            return state["session"]
+
+        def get_jwt(self, system):
+            return "fresh-jwt"
+
+        def get_email(self):
+            return "user@example.com"
+
+    async def fake_login():
+        state["logins"] += 1
+        state["session"] = "fresh-session"
+        return {"success": True}
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials, "_get_isolated_credential_cache", lambda credential_dir: FakeCache()
+    )
+    monkeypatch.setattr(
+        ops_credentials, "_get_authenticated_user_email", lambda: "user@example.com"
+    )
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", fake_login)
+
+    binding = asyncio.run(ops_credentials.ensure_ops_credentials(force_relogin=True))
+
+    assert state["logins"] == 1
+    assert binding.session_id == "fresh-session"
+
+
+def test_force_relogin_skips_when_another_request_already_renewed(monkeypatch, tmp_path):
+    """并发下别的请求已经换过新 Session 时不再重复登录。
+
+    single-flight 的二次检查在 force 路径下必须以「session_id 是否换了新的」为判据：
+    只看 is_authenticated() 会把并发前那张被服务端拒掉的旧 Session 当成有效。
+    """
+    from opscli.mcp import ops_credentials
+
+    state = {"logins": 0}
+
+    class FakeCache:
+        def is_authenticated(self):
+            return True
+
+        def get_session_id(self):
+            # 取锁前后返回不同值，模拟并发请求已完成重登
+            state.setdefault("reads", 0)
+            state["reads"] += 1
+            return "stale-session" if state["reads"] == 1 else "renewed-by-peer"
+
+        def get_jwt(self, system):
+            return "peer-jwt"
+
+        def get_email(self):
+            return "user@example.com"
+
+    async def fake_login():
+        state["logins"] += 1
+        return {"success": True}
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials, "_get_isolated_credential_cache", lambda credential_dir: FakeCache()
+    )
+    monkeypatch.setattr(
+        ops_credentials, "_get_authenticated_user_email", lambda: "user@example.com"
+    )
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", fake_login)
+
+    binding = asyncio.run(ops_credentials.ensure_ops_credentials(force_relogin=True))
+
+    assert state["logins"] == 0
+    assert binding.session_id == "renewed-by-peer"
+
+
+def test_default_path_still_skips_login_for_valid_session(monkeypatch, tmp_path):
+    """不传 force_relogin 时行为不变：本地有效即复用，不触发登录。"""
+    from opscli.mcp import ops_credentials
+
+    class FakeCache:
+        def is_authenticated(self):
+            return True
+
+        def get_session_id(self):
+            return "isolated-session"
+
+        def get_jwt(self, system):
+            return "isolated-jwt"
+
+        def get_email(self):
+            return "user@example.com"
+
+    async def unexpected_login():
+        raise AssertionError("默认路径不应重登")
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials, "_get_isolated_credential_cache", lambda credential_dir: FakeCache()
+    )
+    monkeypatch.setattr(
+        ops_credentials, "_get_authenticated_user_email", lambda: "user@example.com"
+    )
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", unexpected_login)
+
+    binding = asyncio.run(ops_credentials.ensure_ops_credentials())
+
+    assert binding.session_id == "isolated-session"
