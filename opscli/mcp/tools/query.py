@@ -34,6 +34,17 @@ from opscli.query.services.planner import run_flow, run_plan
 from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
+_NULL_LIKE_OPTIONAL_TEXT_VALUES = frozenset({"null", "none", "undefined"})
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    """归一化模型传入的可选文本，过滤字符串化空值。"""
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in _NULL_LIKE_OPTIONAL_TEXT_VALUES:
+        return None
+    return normalized
+
+
 def _contract_needs_reauth(contract: object) -> bool:
     """判断规划合同是否因「登录态失效」被阻断（对应 query_plan 的 auth_required）。
 
@@ -169,6 +180,8 @@ async def query_metadata(
     )
 
     sid, jw = _get_auth_pair("ops", session_id, jwt)
+    # 模型传 dataset="null" 且同时给出 table_id 时，必须让有效的 table_id 生效。
+    dataset = _normalize_optional_text(dataset)
     try:
         if include_all_fields:
             # 全量元数据需已验证账号（缓存隔离维度）与隔离目录，同 query_plan 身份解析
