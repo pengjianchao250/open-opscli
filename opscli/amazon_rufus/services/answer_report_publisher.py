@@ -26,7 +26,8 @@ class AnswerReportPublisher:
         writer: AnswerReportWriter | None = None,
         file_upload_client: FileUploadClient | None = None,
     ) -> None:
-        self.writer = writer or AnswerReportWriter(unique_filenames=True)
+        # OSS 不保留 charset 参数，使用 BOM 让中文报告自带 UTF-8 编码标识。
+        self.writer = writer or AnswerReportWriter(unique_filenames=True, encoding="utf-8-sig")
         self.file_upload_client = file_upload_client or FileUploadClient()
 
     def publish(self, data: dict) -> PublishedAnswerReport:
