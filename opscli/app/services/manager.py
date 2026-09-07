@@ -37,6 +37,7 @@ class AppManager:
         self.client.close()
 
     def create_app(self, app_name: str, *, path: str | Path | None = None) -> dict:
+        """创建并绑定应用，不消费或保存创建响应中的 Git 凭据。"""
         request = AppCreateRequest.from_app_name(app_name)
         root = self.binding_store.prepare_root(path if path is not None else request.name)
         if self.binding_store.is_bound(root):
@@ -51,10 +52,10 @@ class AppManager:
             self.manifest_store.sync_identity(root, binding)
             return self._binding_result(root, binding, "目录已绑定该应用，无需重复创建。")
 
-        binding, credential_saved = self._create_binding(root, request)
+        binding = self._create_binding(root, request)
         return {
             **self._binding_result(root, binding, "应用和独立仓库已创建并保存本地基础信息。"),
-            "credential_saved": credential_saved,
+            "credential_saved": False,
         }
 
     def create_site(self, site_name: str, *, path: str | Path | None = None) -> dict:
@@ -172,41 +173,19 @@ class AppManager:
             return binding
 
         request = AppCreateRequest.from_app_name(app_name, slug=candidate_slug)
-        binding, _ = self._create_binding(root, request)
-        return binding
+        return self._create_binding(root, request)
 
     def _create_binding(
         self,
         root: Path,
         request: AppCreateRequest,
-    ) -> tuple[SiteBinding, bool]:
+    ) -> SiteBinding:
+        """保存应用基础绑定，忽略创建响应中的内联 Git 凭据。"""
         payload = self.client.create_app(request.to_dict())
         binding = SiteBinding.from_create_response(request.title, payload)
-        credential_saved = self._save_inline_credential(root, binding, payload)
         self.binding_store.save(root, binding)
         self.manifest_store.sync_identity(root, binding)
-        return binding, credential_saved
-
-    def _save_inline_credential(
-        self,
-        root: Path,
-        binding: SiteBinding,
-        payload: dict[str, Any],
-    ) -> bool:
-        credential = payload.get("git_credential")
-        if not isinstance(credential, dict):
-            return False
-        token = credential.get("token")
-        username = credential.get("username") or binding.git_username
-        if not token or not username:
-            return False
-        self.credential_store.save_credential(
-            root,
-            repo_url=binding.repo_url,
-            username=str(username),
-            token=str(token),
-        )
-        return True
+        return binding
 
     def _ensure_credential(
         self,

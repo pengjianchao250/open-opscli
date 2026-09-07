@@ -10,11 +10,18 @@ import pytest
 from opscli.app.domain.exceptions import AppHubHttpError
 from opscli.app.domain.models import AppCreateRequest
 from opscli.app.transport.client import AppHubClient
+from opscli.config import __version__
 
 
 class FakeAuth:
-    def build_session_headers(self):
-        return {"X-Session-Id": "session", "X-Opscli-Version": "0.0.1"}
+    def __init__(self, tokens: list[str] | None = None) -> None:
+        self.token_aliases: list[str] = []
+        self.tokens = iter(tokens or ["ops-jwt"])
+
+    def get_token(self, alias: str) -> str:
+        """按调用顺序返回 JWT，模拟 AuthClient 刷新结果。"""
+        self.token_aliases.append(alias)
+        return next(self.tokens)
 
 
 def test_client_uses_current_apphub_api_prefix(monkeypatch) -> None:
@@ -35,6 +42,7 @@ def test_client_uses_current_apphub_api_prefix(monkeypatch) -> None:
 
 def test_create_app_sends_current_contract_without_cookie() -> None:
     observed = {}
+    auth = FakeAuth()
 
     def handler(request: httpx.Request) -> httpx.Response:
         observed["request"] = request
@@ -51,7 +59,7 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
 
     client = AppHubClient(
         base_url="https://apphub.example",
-        auth_client=FakeAuth(),
+        auth_client=auth,
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
@@ -61,8 +69,11 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
 
     request = observed["request"]
     assert request.url == "https://apphub.example/api/v1/apps"
-    assert request.headers["X-Session-Id"] == "session"
+    assert request.headers["Authorization"] == "Bearer ops-jwt"
+    assert request.headers["X-Opscli-Version"] == __version__
+    assert "x-session-id" not in request.headers
     assert "cookie" not in request.headers
+    assert auth.token_aliases == ["ops"]
     body = json.loads(request.content)
     assert body["apiVersion"] == "apps.aukeys/v1"
     assert body["database"] == {"path": None}
@@ -72,6 +83,49 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     assert "entrypoint" not in body
     assert "services" not in body
     assert payload["app_id"] == "app-1"
+
+
+def test_client_fetches_latest_jwt_for_every_request() -> None:
+    authorizations = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        authorizations.append(request.headers["Authorization"])
+        return httpx.Response(200, json={"apps": []})
+
+    auth = FakeAuth(["jwt-before-refresh", "jwt-after-refresh"])
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=auth,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    client.list_accessible_apps()
+    client.list_accessible_apps()
+
+    assert authorizations == ["Bearer jwt-before-refresh", "Bearer jwt-after-refresh"]
+    assert auth.token_aliases == ["ops", "ops"]
+
+
+def test_client_does_not_replay_response_cookie() -> None:
+    cookies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        cookies.append(request.headers.get("Cookie"))
+        headers = {"Set-Cookie": "apphub_session=server-cookie; Path=/"}
+        return httpx.Response(200, json={"apps": []}, headers=headers)
+
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(["jwt-first", "jwt-second"]),
+        http_client=http,
+    )
+
+    client.list_accessible_apps()
+    client.list_accessible_apps()
+
+    assert http.cookies.get("apphub_session") == "server-cookie"
+    assert cookies == [None, None]
 
 
 def test_list_accessible_apps_uses_current_path() -> None:

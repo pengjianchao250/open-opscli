@@ -4,6 +4,7 @@
 > 状态：已确认，按本文完成代码落地  
 > 范围：`opscli/app`、AppHub API 调用边界、Git 源码交付、相关 Skill、测试和使用文档  
 > API 依据：AppHub Control API 最新目录 `https://s.apifox.cn/9c71c630-8d57-44b7-becd-f09fbe370f5e/509871234e0`
+> 2026-09-07 修订：AppHub 请求统一使用自动刷新的 Bearer JWT；创建不再内联 Git 凭据，`init/push` 继续使用独立凭据接口。
 
 ## 1. 需求背景
 
@@ -53,7 +54,7 @@ opscli app create 销售日报 --path .\sales-dashboard
 - 已绑定其他应用时返回冲突。
 - 无 binding 时调用 `POST /api/v1/apps` 创建 AppHub 应用。
 - 保存 AppHub 返回的 `app_id`、`slug`、`repo_url` 和其他非敏感绑定信息。
-- 将一次性 Git 凭据写入本机 Git credential helper。
+- 创建响应不读取或保存 Git Token。
 - 如果已有 `app.yaml`，同步真实的 `name/title`。
 
 `create` 不执行：
@@ -124,6 +125,8 @@ opscli app push .\sales-dashboard -m 优化库存风险筛选
 `push --message` 继续为必填参数，因为它用于工作区有修改时创建 Git commit。`push` 不需要生成 release message，也不需要根据用户和时间生成默认发布说明。
 
 ## 4. AppHub API 调用边界
+
+所有 AppHub 请求通过 `AuthClient.get_token("ops")` 获取或刷新 JWT，只发送 `Authorization: Bearer <JWT>` 与 `X-Opscli-Version`。不发送 `X-Session-Id`、登录 Cookie 或 CSRF 头。Bearer 只负责认证，端点权限仍由 AppHub 根据稳定用户 ID 和真实 owner/member/admin/it 角色判断。
 
 ### 4.1 `opscli/app` 保留的 API
 
@@ -292,12 +295,14 @@ opscli app push .\sales-dashboard -m 优化库存风险筛选
 - 不同应用绑定返回冲突。
 - 损坏 binding 返回明确错误。
 - `create` 成功后保存真实 AppHub binding。
+- `create` 不内联获取或保存 Git 凭据，凭据只由 `init/push` 按需通过独立接口获取。
 - 已有 `app.yaml` 时只同步 `name/title`，不覆盖其他字段。
 - `create` 不执行 Git 初始化。
 - `init` 不拉取模板、不生成业务代码、不调用 release API。
 
 ### 8.3 Git 安全
 
+- AppHub HTTP 请求只携 Bearer JWT 与版本头，不携登录 Cookie 或旧 `X-Session-Id`。
 - `origin` 必须与 AppHub 返回的仓库一致。
 - 禁止 force push。
 - 远端领先时拒绝 non-fast-forward。

@@ -32,6 +32,8 @@ AppHub 服务根地址使用 `OPSCLI_APPHUB_URL`。配置值只包含服务根�
 
 源码仓库地址不由 opscli 拼接。`POST /api/v1/apps` 和 `GET /api/v1/apps/{slug}/git-config` 返回的完整 `repo_url` 是仓库事实源。
 
+AppHub 请求通过 `AuthClient.get_token("ops")` 获取或刷新运营 JWT，只发送 `Authorization: Bearer <JWT>` 与 `X-Opscli-Version`。不发送 `X-Session-Id`、登录 Cookie 或 CSRF 头；无效 Bearer 由 AppHub 返回 401，身份服务不可用返回 503。
+
 ## 3. 应用身份文件
 
 ### 3.1 `app.yaml`
@@ -77,10 +79,10 @@ opscli app create "销售日报" --path .\sales-dashboard
 2. 同目录已绑定相同 slug 时幂等返回，不重复调用创建 API。
 3. 同目录已绑定其他应用时返回 `APP-ALREADY-BOUND`。
 4. 无 binding 时调用 `POST /api/v1/apps`。
-5. 保存一次性 Git 凭据和 `.opscli/app.json`。
+5. 保存 `.opscli/app.json`；创建响应不包含 Git Token。
 6. 如果目录中已有 `app.yaml`，只回填真实 `name/title`。
 
-未指定 `--path` 时，默认目录为应用 slug，同样会先检查该目录是否已经绑定。`create` 不执行 `git init`、commit 或 push。
+未指定 `--path` 时，默认目录为应用 slug，同样会先检查该目录是否已经绑定。`create` 不签发 Git 凭据，也不执行 `git init`、commit 或 push。
 
 ## 5. 初始化 Git
 
@@ -152,6 +154,7 @@ push 成功只能说明：
 
 ## 9. 安全边界
 
+- AppHub API 只携 Bearer JWT 与版本头，不携登录 Cookie 或旧 `X-Session-Id`。
 - 不调用 Gitea 管理 API，不持有管理员凭据。
 - remote URL 不嵌入用户名或 Token。
 - `.opscli/app.json` 不进入 Git。
