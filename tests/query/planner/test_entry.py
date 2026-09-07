@@ -730,3 +730,76 @@ def test_extract_enum_values_from_raw_simple_result():
         "meta": {"rowCount": 2},
     }
     assert entry._extract_enum_values(result, "platform_name") == ["Temu"]
+
+
+# ── 2026-09-07 第二轮 E2E 验收：执行期披露口径 ────────────────────────────────
+
+
+def _planned_with_labels(order_by=None, time_scope=None):
+    """带中文标签与时间口径的 planned 合同（第二轮验收缺陷回归用）。"""
+    template = {
+        "tableId": 1,
+        "dimensions": [{"field": "date_id", "alias": "date_id"}],
+        "metrics": [{"field": "price", "alias": "price", "aggregation": "SUM"}],
+        "filters": [],
+        "orderBy": order_by,
+        "limit": None,
+    }
+    contract = {
+        "contract": "query_plan_model_contract_v2",
+        "query_mode": "dataset_query",
+        "status": "planned",
+        "model_view": {"dataset_name_zh": "即时综合数据集"},
+        "execution_ref": {
+            "dimensions": [{"field_name": "date_id", "label_zh": "日期"}],
+            "metrics": [{"field_name": "price", "label_zh": "销售额"}],
+            "query_template": template,
+        },
+    }
+    if time_scope:
+        contract["execution_ref"]["time_scope"] = time_scope
+    return contract
+
+
+class _RowsQM:
+    def __init__(self, rows, currency="CNY"):
+        self._rows = rows
+        self._currency = currency
+
+    def run_query_template(self, execution_ref):
+        return {
+            "success": True,
+            "data": list(self._rows),
+            "meta": {"rowCount": len(self._rows), "totalCount": len(self._rows), "currency": self._currency},
+            "error": None,
+        }
+
+
+def test_order_disclosure_uses_chinese_label(monkeypatch):
+    """排序披露面向最终回答，必须用中文标签（销售额）而不是技术字段名（price）。"""
+    contract = _planned_with_labels(order_by=[{"field": "price", "desc": True}])
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: contract)
+    rows = [{"date_id": "2026-09-01", "price": 9}, {"date_id": "2026-09-02", "price": 3}]
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_RowsQM(rows))
+    assert out["result_disclosures"]["order_disclosure_zh"] == "排序已生效：按「销售额」降序"
+
+
+def test_window_including_today_without_freshness_is_disclosed(monkeypatch):
+    """查询窗口含今天且返回未声明新鲜度时，必须披露末日数值可能未刷新完成。"""
+    scope = {"start": "2026-09-01", "end": "2026-09-07", "reference_date": "2026-09-07"}
+    contract = _planned_with_labels(time_scope=scope)
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: contract)
+    rows = [{"date_id": "2026-09-06", "price": 9}, {"date_id": "2026-09-07", "price": 0}]
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_RowsQM(rows))
+    note = out["result_disclosures"]["freshness_disclosure_zh"]
+    assert "2026-09-07" in note and "未声明" in note
+    assert out["evidence_contract"]["freshness_status"] == ""
+
+
+def test_closed_window_has_no_freshness_disclosure(monkeypatch):
+    """窗口不含今天（昨天及更早）时不加新鲜度披露，避免对已完整的数据制造噪音。"""
+    scope = {"start": "2026-09-01", "end": "2026-09-06", "reference_date": "2026-09-07"}
+    contract = _planned_with_labels(time_scope=scope)
+    monkeypatch.setattr(entry, "run_plan", lambda *a, **k: contract)
+    out = entry.run_flow("查询", user_email="u@x.com", query_manager=_RowsQM([{"date_id": "2026-09-06", "price": 9}]))
+    assert "freshness_disclosure_zh" not in out["result_disclosures"]

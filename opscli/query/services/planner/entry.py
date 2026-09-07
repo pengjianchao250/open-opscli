@@ -264,6 +264,15 @@ def _apply_order_fallback(
     return corrected, note
 
 
+def _field_label_zh(execution_ref: dict, field_name: str) -> str:
+    """按技术字段名在执行引用的维度/指标里找中文标签，找不到返回空串。"""
+    for key in ("metrics", "dimensions"):
+        for item in execution_ref.get(key) or []:
+            if isinstance(item, dict) and item.get("field_name") == field_name and item.get("label_zh"):
+                return str(item["label_zh"])
+    return ""
+
+
 def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
     """构造注入规划器的 refresh_fn / enum_fn 回调。
 
@@ -598,9 +607,14 @@ def _execute_planned_contract(
             # 本地重排后行数已按 limit 切片，披露口径必须同步刷新
             result_disclosures["row_count_returned"] = len(rows)
     if effective_order_by and not order_note:
+        # 披露面向最终回答：有中文标签时用标签（第二轮验收实测回显了 price 这类技术字段名）
+        order_field = str(effective_order_by[0]["field"])
+        order_label = _field_label_zh(execution_ref, order_field)
+        descending = bool(effective_order_by[0].get("desc"))
         result_disclosures["order_disclosure_zh"] = (
-            f"排序已生效：按 {effective_order_by[0]['field']} "
-            f"{'DESC' if effective_order_by[0].get('desc') else 'ASC'}"
+            f"排序已生效：按「{order_label}」{'降序' if descending else '升序'}"
+            if order_label
+            else f"排序已生效：按 {order_field} {'DESC' if descending else 'ASC'}"
         )
     # 证据合同（K3 内核化）：与 skill run_query.py 内嵌证据合同的接入位置一致——
     # 排在排序兜底修正之后、落盘/预览限幅之前，此时 run_result 已是"最终"行状态
@@ -621,6 +635,22 @@ def _execute_planned_contract(
         )
     except Exception as error:  # noqa: BLE001 —— 证据合同失败不阻断查询结果
         evidence_contract_error = str(error)[:120]
+    # 新鲜度披露：后端返回不带刷新完成度（freshness_status 恒为空），而查询窗口含今天时
+    # 末日数值往往尚未刷新完成——SKILL.md 要求「没有刷新完成度就不把末日异常当业务事实」，
+    # 合同必须给出这个可执行的信号（第二轮验收实测今日 price=0 却无任何提示）
+    scope = execution_ref.get("time_scope") if isinstance(execution_ref, dict) else None
+    freshness_status = str((contract_evidence or {}).get("freshness_status") or "")
+    if (
+        isinstance(scope, dict)
+        and scope.get("end")
+        and scope.get("reference_date")
+        and str(scope["end"]) >= str(scope["reference_date"])
+        and not freshness_status
+    ):
+        result_disclosures["freshness_disclosure_zh"] = (
+            f"本次返回未声明数据新鲜度，且查询窗口包含今天（{scope['reference_date']}）："
+            "今日/末日数值偏低不得当作业务事实，结论须说明该日数据可能尚未刷新完成。"
+        )
     if result_dir is not None:
         # 全量结果落盘 + 预览限幅（K2 内核化，与 skill run_query.py:734-747/531-541 等价迁入）：
         # 此时 run_result 的嵌套行容器已与排序兜底修正后的 rows 一致（见上方

@@ -9484,3 +9484,22 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：`git checkout -- opscli/query/services/planner/agent_query_planner.py opscli/query/services/planner/query_plan.py tests/query/planner/test_query_plan.py opscli/skills/templates/ops-dataset-query && rm tests/query/planner/test_acceptance_defects.py`，再重新安装 Skill。
 ---
+
+## 2026-09-07 query planner / entry / chart - 第二轮 E2E 验收缺陷修复（快照指标口径 / 未授权国家 / 趋势排序 / 分组维度门禁 / 别名披露 / 图表证据合同）
+
+**变更原因**：第二轮多代理 E2E 验收（E1/E2/E3/E4 + 本地后端联动）发现：①快照指标（总库存等）多日窗口被服务端 SUM 成各日之和；②「只看德国」这类无字段标签的未授权国家被静默放行成全部国家（P0）；③趋势/按日查询不下发日期排序，返回乱序序列；④「各仓库」分组维度不在数据集时静默丢失；⑤「前3」无单位 TopN 既不解析也不披露；⑥「订单量→销量」静默替换称呼；⑦返回无新鲜度时末日异常无可执行判据；⑧排序披露回显技术字段名、平台成员回显内部键；⑨随包 `scripts/evidence_contract.py` 仍是旧实现，图表路径没有可用证据合同。详见 `docs/analysis/取数底座内核版第二轮E2E验收报告.md`。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`：新增 `_snapshot_scope` 与快照口径门禁（全部为快照指标且未按时间粒度分组的多日窗口收敛为最新完整快照日，写 `execution_ref.snapshot_policy` 并强制披露；快照+流量混查转 `snapshot_metric_window_conflict` 澄清）；国家字段接入 `_KNOWN_COUNTRY_VALUES` 词表与 `_mentioned_known_value`，反查零命中时识别未授权国家转 `component_filter_unauthorized`；`_LIMIT_RE` 接受无单位 TopN（`_TIME_UNIT_AFTER_COUNT` 排除时间表述）；新增 `_unmatched_group_dimension_terms` → `dimension_not_in_dataset` 澄清 + `field_suggestions_zh`；新增 `_field_alias_mappings` → `model_view.field_alias_mappings_zh` + 强制披露；含时间粒度维度且未点名排序时默认 `orderBy` 升序；`PLATFORM_MEMBER_LABELS` 补全非亚马逊平台展示名；删除 `refresh_in_progress` 死分支；`CLARIFICATION_MESSAGES` 补 `snapshot_metric_window_conflict` / `dimension_not_in_dataset`。
+- `opscli/query/services/planner/entry.py`：`order_disclosure_zh` 改用中文标签（`_field_label_zh`）；新增 `result_disclosures.freshness_disclosure_zh`（窗口含今天且证据合同 `freshness_status` 为空时）。
+- `opscli/query/services/planner/evidence_contract.py`：新增 `attach_chart_evidence`（只取 `merged` 段生成证据合同，失败写 `evidence_contract_error`）；`opscli/query/commands/cli.py` 的 `chart --run` 与 `opscli/mcp/tools/query.py` 的 `query_chart(run=True)` 接入。
+- `opscli/skills/templates/ops-dataset-query/scripts/evidence_contract.py`：改为内核薄壳（导入 `opscli.query.services.planner.evidence_contract`，不再携带第二份算法副本；未装 opscli 时给出明确环境提示）。
+- Skill 文档（SKILL.md / QUERY_SPEC.md / references/*.md / data/README-字段使用.md）按验收报告 3.3 同步，版本升至 1.4.1（`data/VERSION.json` 同步）。
+- 测试：新增 `tests/query/planner/test_snapshot_policy.py`（5 条）、`tests/query/planner/test_round2_defects.py`（11 条）、`tests/query/planner/test_entry.py` 追加 3 条、`tests/query/test_cli.py` 图表用例补证据合同断言、`tests/skills/test_dataset_query_template.py` 追加随包脚本与内核同口径守卫；`tests/query/planner/test_unauthorized_filter_injection.py` 的「已知限制」锚点用例按其 docstring 约定改为「阻断+披露」；`test_query_plan.py` 守卫集合补 2 个澄清码。
+
+**验证结果**：先红后绿（新用例初次 10 failed，实现后全绿）；`tests/query/planner` 417 passed；`tests/query` 594 passed；`tests/skills`（跳过 test_packaging.py）13 failed / 255 passed、`tests/mcp`（跳过 test_shopify_tools.py）1 failed / 456 passed，失败清单与预存基线一致；`tests/auth` 1 条 `test_apphub_url_defaults_to_production` 失败为 worktree 无 `.env` 导致的环境差异，与本次无关。本地后端（http://ops.cm，QA 库）实跑六条请求全部符合预期（快照日收敛、未授权国家澄清、趋势按日期升序、前3 限行、分组维度澄清、Temu 展示名），记录在验收报告第四节。
+
+**影响范围**：规划合同新增键 `execution_ref.snapshot_policy`、`model_view.field_alias_mappings_zh`、澄清码 `snapshot_metric_window_conflict` / `dimension_not_in_dataset`；执行结果新增 `result_disclosures.freshness_disclosure_zh`，`order_disclosure_zh` 文案改为中文标签；快照指标多日请求的时间过滤由多日改为单日；趋势/时间粒度查询多一条 `orderBy`；图表执行结果多 `evidence_contract` 键；未授权国家点名的请求由 planned 变为澄清。
+
+**回滚方式**：`git revert` 本次提交；或 `git checkout -- opscli/query/services/planner opscli/query/commands/cli.py opscli/mcp/tools/query.py opscli/skills/templates/ops-dataset-query tests/query tests/skills/test_dataset_query_template.py && rm tests/query/planner/test_snapshot_policy.py tests/query/planner/test_round2_defects.py`，再重新安装 Skill。
+---

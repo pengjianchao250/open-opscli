@@ -410,6 +410,10 @@ def test_chart_run_outputs_merged_results(monkeypatch):
     assert payload["success"] is True
     assert payload["command"] == "query chart-run"
     assert payload["data"]["merged"]["meta"]["rowCount"] == 0
+    # 图表执行结果必须自带证据合同（第二轮 E2E：图表路径此前没有任何可用证据合同）
+    evidence = payload["data"]["evidence_contract"]
+    assert evidence["contract"] == "evidence_contract_v1"
+    assert "zero_rows_not_business_zero" in evidence["required_disclosure_codes"]
 
 
 def test_chart_dry_run_passes_flag(monkeypatch):

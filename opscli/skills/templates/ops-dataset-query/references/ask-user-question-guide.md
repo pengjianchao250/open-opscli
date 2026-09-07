@@ -36,11 +36,23 @@ description: 当前授权范围内的模式感知澄清规划器
 
 - 用户表达了明确币种意图（仅支持 USD/GBP/CAD/EUR/JPY/CNY）→ 属换算参数，规划器自动写入 `globalCurrency`（手工路线传 `--global-currency` / `global_currency=`），不必提问；输出时按返回的 `meta.currency` 声明币种。
 - 用户要求多个币种（"分别用人民币和加拿大元"）→ 按币种各查一次，不做汇率换算，无需为此提问。
+- 用户请求 USD/GBP/CAD/EUR/JPY/CNY 之外的币种（如港币 HKD）→ 规划器返回 `clarify_required`（澄清码 `unsupported_currency`，`model_view.unsupported_currencies` 列出识别到的代码）：告知仅支持上述六种，让用户改选支持的币种或确认按默认币种查询，确认后把口径写回原请求重跑；不得直接执行后把结果当作该币种。
 - 已选数据集同时提供原币与 `_cny` 字段，且用户要求原币/站点币种或精准对账口径 → 才用结构化提问确认字段口径：CNY 字段 / 原币字段 / 指定全局币种；不静默选择任一币种，也不跨币种相加。
 
 ### 筛选枚举
 
-用户明确筛选值不在当前账号组件枚举中时，规划器返回 `clarify_required`（`component_filter_value_unmatched` / `component_filter_unauthorized` / `component_filter_field_ambiguous`），并在 `model_view.component_candidates_zh` 下发该组件当前账号可见的取值（`field_zh` / `values_zh` / `total`）：直接展示这些候选让用户选择。规范化后唯一完整等值命中时直接使用枚举原值，不二次确认。组件 alias 缺失时只阻断该筛选，不引入替代来源。
+用户明确的筛选值无法唯一锁定时，规划器返回 `clarify_required` 并撤下可执行模板；候选来源按澄清码区分，不要一律去读同一个键：
+
+- `component_filter_value_unmatched`（没有唯一完整等值成员）与 `component_filter_unauthorized`（点名值全部不在当前账号授权范围）：`model_view.component_candidates_zh` 下发该组件当前账号可见的取值（`field_zh` / `values_zh` / `total`），直接展示这些候选让用户选择。
+- `component_filter_field_ambiguous`（同一取值同时属于多个筛选字段）：**不下发** `component_candidates_zh`；候选字段名写在 `model_view.clarification_messages_zh` 的文案内（形如「“X”同时是“A”“B”的授权值，无法确定你要按哪个字段筛选」），从该文案取候选让用户指明字段。
+
+规范化后唯一完整等值命中时直接使用枚举原值，不二次确认。组件 alias 缺失时只阻断该筛选，不引入替代来源。
+
+### 指标与维度口径
+
+- `metric_not_in_dataset` / `dimension_not_in_dataset`：用户点名的指标 / 分组维度（「各X」「每个X」里的 X）不在当前数据集。近似字段在 `model_view.field_suggestions_zh`（形态 `[{requested, candidates_zh[]}]`），点名却找不到的字段列在 `model_view.unknown_requested_fields`：展示近似字段让用户改选，或让用户换数据集，不得静默替换成别的字段。
+- `snapshot_metric_window_conflict`：快照指标（库存等）与流量指标（销售额等）混查且未按日分组。让用户二选一——按日期维度分组查看，或把两类指标拆成两次查询；不得自行放行。
+- 字段称呼被映射（`model_view.field_alias_mappings_zh` 非空，如「订单量」对应「销量」）**不是待确认项**：直接按数据集口径执行，只需在结论里说明该对应关系。
 
 ## 查询前确认
 

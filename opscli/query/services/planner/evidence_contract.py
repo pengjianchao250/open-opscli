@@ -265,6 +265,29 @@ def _dataset_name(source: dict) -> str:
     return "、".join(names)
 
 
+def attach_chart_evidence(result: dict) -> dict:
+    """给图表执行结果（`opscli query chart --run` / MCP `query_chart`）就地附加证据合同。
+
+    图表路径没有规划合同，证据合同是结论的唯一约束；第二轮验收实测图表结果此前只能靠
+    随包脚本补跑，且脚本还是旧实现。证据只取 `merged` 段（合并后的行与 meta）：
+    `queries[i]` 下的查询结构/可筛选字段是元数据噪声，按对象列表分组还会把整段
+    当成一"行"挤掉真正的结果行。构建失败不阻断图表结果，只记录 evidence_contract_error。
+    """
+    if not isinstance(result, dict):
+        return result
+    merged = result.get("merged")
+    source = (
+        {"chart_uuid": result.get("chart_uuid"), "merged": merged}
+        if isinstance(merged, dict)
+        else {key: value for key, value in result.items() if key != "evidence_contract"}
+    )
+    try:
+        result["evidence_contract"] = build_evidence_contract(source)
+    except Exception as error:  # noqa: BLE001 —— 证据合同失败不阻断图表结果
+        result["evidence_contract_error"] = str(error)[:120]
+    return result
+
+
 def build_evidence_contract(
     source: dict,
     max_evidence: int = MAX_EVIDENCE,

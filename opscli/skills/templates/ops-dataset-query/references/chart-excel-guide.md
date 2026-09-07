@@ -19,6 +19,17 @@ opscli query chart-doc --uuid <chart_uuid> --output <文件.md>    # 生成图�
 
 **MCP 模式**：`query_chart(chart_uuid=..., run=True|False, dry_run=False)`（需要认证）。
 
+| 参数 | 说明 |
+| --- | --- |
+| `--uuid <chart_uuid>` | 图表唯一标识，必填 |
+| `--run` | 获取并执行图表的全部子查询；不传则只返回查询结构 |
+| `--dry-run` | 只生成 SQL 不执行：返回体里没有结果行，也**不会**附带证据合同 |
+| `--result-file <文件.json>` | 把完整结果写入指定 JSON 文件，stdout 只保留预览行；**仅与 `--run` 同用生效**，优先级高于 `--save-result` |
+| `--save-result` | 把完整结果写入默认临时路径，stdout 只保留预览行；**仅与 `--run` 同用生效** |
+| `--pretty` | 格式化输出 JSON |
+
+结果行数较大时必须传 `--result-file` 或 `--save-result`，否则全量行会原样进入返回体、撑爆上下文；落盘后返回体给出 `result_file` 路径，并说明 stdout 里的 `preview_rows` 只是前若干行预览。
+
 返回中 `datasets` 是公共字段语义层（含 `fields`、`filterable_fields`），`queries` 是执行层；优先消费服务端字段语义，不重复做本地推断。多 query 各自独立执行，单条失败不阻断其余，合并行带 `_query_index` 标识来源。
 
 ## 多 query 小计/总计规则（强制）
@@ -53,12 +64,12 @@ MCP 模式用 `python3 scripts/excel_export_mcp.py --input ... --output ...`。
 
 格式要求：表头蓝底白字加粗并冻结首行；数值列千分位、百分比列百分比格式；小计行灰底加粗、总计行深蓝底白字加粗；负毛利红字；列宽按内容自适应（最大约 50 字符）；小计/总计数据直接来自 `queries[1+].result.data`。
 
-## 证据合同（图表裸结果）
+## 证据合同（已内嵌，无需补跑）
 
-图表入口拿到的是裸结果，不经 `opscli query flow` 内嵌证据合同；结果分析前在 Skill 目录运行一次（每轮最多一次）：
+`opscli query chart --uuid <chart_uuid> --run` 与 MCP `query_chart(run=True)` 的返回 `data` 里**已经自带** `evidence_contract`：它只由 `merged` 段生成（`queries[i]` 下的查询结构与可筛选字段是元数据噪声，混进去会挤掉真正的结果行），构建失败时改为 `evidence_contract_error`。直接按其 `required_evidence` / `required_disclosures_zh` / `forbidden_inferences_zh` 组织结论，**不需要**再补跑任何证据脚本。`--dry-run` 没有结果行，因此不附证据合同。
+
+随包的 `scripts/evidence_contract.py` 已改为内核薄壳（只调用内核实现，不再自带第二份算法），仅用于对**已落盘的结果文件**做手工复算，例如复核 `--result-file` 的产物；它需要用装有 opscli 的 Python 运行：
 
 ```bash
 python3 scripts/evidence_contract.py --input <结果json>   # 也可从 stdin 读取
 ```
-
-输出 `required_evidence` / `required_disclosures_zh` / `forbidden_inferences_zh`，按 SKILL.md「结果分析」使用。
