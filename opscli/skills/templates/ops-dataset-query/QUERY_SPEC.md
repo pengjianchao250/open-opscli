@@ -107,7 +107,7 @@ auth_me()                 # 可选：核验究竟以谁的账号取数，返回 
 | 工具 | 作用 |
 |------|------|
 | `query_plan` | 只规划不执行，输出规划合同（`query_plan_model_contract_v2`） |
-| `query_flow` | 一体化：规划 + `status=planned` 的数据集查询时按 `query_template` 执行一次并回传结果 |
+| `query_flow` | 一体化：只规划一次；`status=planned` 时单币种执行一次，多币种按 `query_templates` 逐项执行并回传结果 |
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
@@ -129,8 +129,8 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 ### 4.2 返回合同与处置
 
 `query_flow` 返回 = 规划合同 + `result`（planned 时）+
-`result_disclosures`（返回行数、总数、截断与自动补齐状态）+
-`execution_notes`（按需）。按 `status` 分流：
+`result_disclosures`（返回行数、总数、截断、自动补齐、原始 `limit`、币种披露、排序兜底披露等，见 4.3）+
+`evidence_contract`（构建失败时为 `evidence_contract_error`，与合同其余字段同级）。按 `status` 分流：
 
 | status | 含义 | 处置 |
 |--------|------|------|
@@ -157,28 +157,30 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 
 - `row_count_returned`：最终实际返回行数；
 - `total_count`：服务端报告总数；
-- `truncated`：两者不等时为 `true`；
+- `truncated`：返回行数小于总数时为 `true`；
 - `auto_complete_applied`：本次是否执行过默认页补查。
-- 币种：本次实际生效币种取自返回的 `meta.currency`（ISO 4217）；有值必须在结论首句、结果表头写明，为 `null` 时只能声明"未声明"，禁止推断；与请求 `globalCurrency` 不一致时以返回为准并披露差异（详见第十五章「范围与口径」）。
 
 只有 `truncated=false` 才可把结果称为全量。总数超过 5000、显式分页或自动补查失败时，
 应通过正式分页能力继续取全；在拿到全量前必须声明“当前为前 N 行”，不得生成宣称全量的
 Excel。
 
-`execution_notes` 是按需披露的已知延后项，仅在本次真正用到相关能力时出现：
+`result_disclosures` 还按场景包含以下键（均已内核化，不再是延后能力）：
 
-- 传了 `order_by` → 提示服务端 orderBy 缺陷的本地兜底/加量重查暂未内核化（orderBy 本身已正常下发）
-- 无相关参数时**不会出现该键**，不要把它的缺失当成异常
+- `currency` / `currency_disclosure_zh`：本次实际生效币种，取自 `meta.currency`；有值必须在结论首句、结果表头写明，为 `null` 时只能声明"未声明"，禁止推断；与请求 `globalCurrency` 不一致时以此为准并披露差异（详见第十五章币种口径）。
+- `order_fallback` / `order_disclosure_zh`：仅当传了 `order_by` 且检测到服务端排序未生效（已知缺陷）时出现 `order_fallback`，说明本次已本地重排、或按服务端总行数加量重查后本地排序取前 N，结论中必须披露该兜底行为；排序已正常生效时只会出现确认性的 `order_disclosure_zh`，不会出现 `order_fallback`。
+- `large_result_warning_zh`：`query_flow`（MCP 工具）不支持落盘，行数超过 20 行时会出现该键，提示全量行已原样进入返回体；结果集较大时应改传更小的 `limit`，或按维度/时间拆分为多次查询，不要把大结果当成异常忽略。
+
+`evidence_contract`（构建失败时为 `evidence_contract_error`）随 `query_flow` 返回体一并给出，优先使用其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论，不必再按第十五章手工拼装。
 
 ### 4.4 元数据未就绪（blocked）
 
-`recovery_state=refresh_in_progress` 表示元数据刷新已在后台进行：**等待约 25 秒后，用完全相同的参数原样重新调用同一工具**即可。
+`status=blocked, next_action=refresh_authorized_metadata` 表示当前账号元数据未就绪：内核已同步刷新一次用户级元数据缓存仍不就绪，合同 `recovery_state` 为 `refresh_failed`，`recovery_command` 为 CLI 形态的 `opscli skills upgrade ops-dataset-query`。
 
-- 合同里的 `recovery_command` 是 CLI 形态（`sleep 25 && opscli query plan "..."`）——MCP-only 场景**不要试图执行该命令**，取其语义（等待后重跑）即可。
-- 禁止自行执行任何升级动作，禁止因等待改走旁路探查。
-- 连续 3 次仍未就绪才提交一次反馈并停止，不反复重试。
+- MCP-only 场景**不要试图执行该命令**：等待约 1 分钟后用完全相同的参数原样重调一次同一工具（重调会再触发一次同步刷新）。
+- 合同未给出 `recovery_command` 时禁止自行发起任何升级动作，禁止因等待改走旁路探查。
+- 重调后仍 `blocked` 即向用户如实说明元数据异常并停止，同时提交一次反馈，不反复重试。
 
-`recovery_state=refresh_failed` 时向用户如实说明元数据异常并停止，同时提交一次反馈。
+`next_action=report_component_enum_defect` 表示组件枚举调用失败（网络抖动或组件元数据异常）：原样重调一次，仍失败提交一次反馈并停止，不得放大为全范围查询。
 
 ### 4.5 时间口径以规划结果为准
 
@@ -574,8 +576,8 @@ query_build_and_run(
 | 401 Unauthorized | Token 过期 | `auth_token_refresh()` 刷新 |
 | 407 | 显式凭证发往了非签发环境 | 按认证失败处理，核对后端环境 |
 | 404（chart） | `chart_uuid` 不存在或无权限 | 确认 UUID 与访问权限 |
-| `status=blocked` + `refresh_in_progress` | 元数据后台刷新中 | 等约 25 秒原样重调，最多 3 次 |
-| `data_state` 非 `ready` | 元数据未就绪 | 同上；仍失败则说明元数据异常并停止 |
+| `status=blocked` + `refresh_failed` | 内核同步刷新元数据后仍未就绪 | 等约 1 分钟原样重调一次；仍失败则说明元数据异常并停止（见 4.4） |
+| `status=blocked` + `report_component_enum_defect` | 组件枚举调用失败（网络抖动/组件元数据异常） | 原样重调一次；仍失败提交反馈并停止，不得放大范围 |
 
 ---
 
@@ -618,7 +620,7 @@ MCP-only 场景没有本地 shell，按以下内联证据合同组织结论，**
 - 披露本次生效的服务端默认条件（`default_filters_zh`）。
 - 原币金额按币种分开汇总；不同原币不得混加，也不得与 CNY 列混加。
 - **本次生效币种取自返回的 `meta.currency`**（ISO 4217，如 `"currency": "CNY"` 即人民币计价）：有值时必须在本节和涉及金额的结论中写明；缺失或为 `null` 时只能声明"返回未声明币种"，不得推断具体货币；与请求 `globalCurrency` 不一致时以 `meta.currency` 为准并披露差异。**禁止参考外部汇率**做换算或跨币种比较。
-- **多币种必须多次查询**："分别使用人民币和加拿大元""CNY/CAD 双币种""同时用加拿大元对比显示"均为 CNY 与 CAD 两次独立查询，每次除 `globalCurrency` 外查询范围完全一致。禁止使用 Bank of Canada Valet `FXCNYCAD` 或任何外部/本地汇率生成另一币种；仅在两次结果取全、返回币种匹配、共同维度键和非金额指标一致后按共同维度关联。
+- **多币种必须多次查询**：“分别使用人民币和加拿大元”“CNY/CAD 双币种”“同时用加拿大元对比显示”均为 CNY 与 CAD 两次独立 `query_simple`，每次除 `globalCurrency` 外查询范围完全一致。禁止使用 Bank of Canada Valet `FXCNYCAD` 或任何外部/本地汇率生成另一币种；仅在两次结果取全、返回币种匹配、共同维度键和非金额指标一致后按共同维度关联。
 
 **主要结论**
 

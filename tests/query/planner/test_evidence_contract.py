@@ -1,9 +1,9 @@
 """规划器内核 evidence_contract：证据与披露规划器纯函数迁入验证。
 
-断言样例的期望值直接从 skill 版
-`opscli/skills/templates/ops-dataset-query/scripts/evidence_contract.py`
-现行为跑出的真值取值（迁移任务 K3 的行为等价铁律：只搬家，不改算法），
-锁定内核 `build_evidence_contract` 与源实现逐字节一致。
+历史说明：本文件的期望值在迁移任务 K3 落地时，取自当时 Skill 版
+`scripts/evidence_contract.py` 对同一输入的真实运行结果（行为等价铁律：
+只搬家，不改算法）。Skill 本地规划器移除后该来源已不存在，这些期望值即
+内核 `build_evidence_contract` 的行为基线，断言本身不变。
 """
 
 import json
@@ -16,7 +16,8 @@ from opscli.query.services.planner import evidence_contract
 def test_build_evidence_contract_combined_signals_matches_skill_truth():
     """缺失值 + 零行 + 新鲜度部分 + 币种未声明 + 待负责人确认：五类信号同时命中。
 
-    期望值取自 skill 版对同一输入的真实运行结果（见任务报告 Step 1 移植清单）。
+    期望值为迁移当时从 Skill 版实测取得的历史基线（见任务报告 Step 1 移植清单），
+    现作为内核实现的行为基线继续守护。
     """
     source = {
         "row_count": 0,
@@ -78,10 +79,20 @@ def test_dataset_name_zh_falls_back_to_dataset_prefixed_fields_when_not_passed()
 
 
 def test_latest_available_period_disclosure_without_forbidden_inference():
-    """freshness_status 以 monthly_data_available_through_ 开头只触发披露，不触发禁止推断。"""
+    """freshness_status 以 monthly_data_available_through_ 开头只触发披露，不触发禁止推断。
+
+    币种断言修正说明：币种未声明的判定由「只认 currency_metadata_status」改为
+    「整个返回体找不到任何非空 currency」（真实取数返回没有 currency_metadata_status 键，
+    旧口径在真实形状下永不触发）。本用例的 source 不含 currency，按新语义必然追加
+    currency_not_declared，故期望值补上该码；本用例真正守护的
+    latest_available_period 与禁止推断部分不变。
+    """
     source = {"freshness_status": "monthly_data_available_through_2026-07"}
     result = evidence_contract.build_evidence_contract(source)
-    assert result["required_disclosure_codes"] == ["latest_available_period"]
+    assert result["required_disclosure_codes"] == [
+        "latest_available_period",
+        "currency_not_declared",
+    ]
     # 因果推断禁令始终存在，latest_available_period 本身不追加其他禁止项
     assert result["forbidden_inference_codes"] == ["causal_reason_without_evidence"]
     assert result["freshness_status"] == "monthly_data_available_through_2026-07"

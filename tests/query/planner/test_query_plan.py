@@ -318,6 +318,12 @@ def test_every_clarification_code_has_dedicated_message():
         "recommended_fields_confirmation",
         "default_dataset_confirmation",
         "time_comparison_unsupported",
+        # 2026-09-07 验收缺陷修复新增的合同层澄清码
+        "metric_not_in_dataset",
+        "unsupported_currency",
+        "component_filter_value_unmatched",
+        "component_filter_unauthorized",
+        "component_filter_field_ambiguous",
     }
     produced = _planner_missing_information_codes() | contract_level
     missing = sorted(produced - set(query_plan.CLARIFICATION_MESSAGES))
