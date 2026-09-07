@@ -202,7 +202,7 @@ except SystemNotFoundError:
 | baiyi | `BaiyiProductInfoManager`（包根可导） | ops | 百衣商品信息 |
 | amazon | `AmazonManager`、`AmazonOpsClient`（包根可导） | ops | Amazon 页面抓取与提交 |
 | amazon_rufus | `RufusManager`（`opscli.amazon_rufus.services.manager`） | ops | Rufus 问答/Listing 诊断 |
-| app | `AppHubClient`、`PublishManager`（`opscli.app.transport.client` / `opscli.app.services.publish`） | session | 站点开发/发布；运行时另有 `OpsClient`（走 `x-ops-token`，勿混用） |
+| app | `AppManager`（包根可导）、`AppHubClient`（`opscli.app.transport.client`） | session | 应用创建、Git 初始化与源码推送；运行时另有 `OpsClient`（走 `x-ops-token`，勿混用） |
 
 ### 6.2 平台自有凭证的模块（不走 AuthClient）
 

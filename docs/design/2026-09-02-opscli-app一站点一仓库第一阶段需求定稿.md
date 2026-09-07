@@ -1,6 +1,6 @@
 # opscli app 一站点一仓库第一阶段需求定稿
 
-> **历史方案，已被取代**：2026-09-05 起以 `docs/design/2026-09-05-opscli-app四命令职责重构需求定稿.md` 为准。init 不再拉模板，push 不再自动发布。
+> **历史方案，已被取代**：2026-09-05 起以 `docs/design/2026-09-05-opscli-app三命令源码交付职责定稿.md` 为准。init 不再拉模板，push 只推送源码且不再自动发布。
 
 > 日期：2026-09-02  
 > 环境配置修订：2026-09-03  
@@ -84,9 +84,9 @@ opscli app push [PATH] --message MESSAGE
 - AppHub 使用统一 base URL 配置，业务代码不得拼接版本路径。
 - AppHub 地址纳入 `opscli/auth/config.py` 的 `[systems].apphub_url` 统一环境配置；
 - AppHub 环境变量统一且仅使用 `OPSCLI_APPHUB_URL`；
-- 预发布 AppHub 当前配置为 `apphub_url=http://10.1.13.143:8080`；
-- 生产 AppHub 正式域名尚未确定，当前暂定同样使用
-  `apphub_url=http://10.1.13.143:8080`，正式域名确定后只替换生产环境配置；
+- 预发布 AppHub 当前配置为 `apphub_url=https://apphub.qa.aukeyit.com`；
+- 生产 AppHub 正式域名，
+  `apphub_url=https://apphub.api.xenkee.com`，正式域名确定后只替换生产环境配置；
 - `apphub_url` 配置值不包含 `/api/apphub/v1`；
 - `opscli app` 不根据 OPS 域名猜测 AppHub 地址，预发布和生产部署应成组配置
   `ops_url/ops_system_url/apphub_url/app_template_repo/app_template_branch/polaris_system_url`；

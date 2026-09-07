@@ -2,12 +2,14 @@ import json
 
 import pytest
 
-from opscli.query.exceptions import DatasetNotFoundError, InvalidPayloadError
+from opscli.query.exceptions import DatasetNotFoundError, InvalidPayloadError, RemoteBusinessError
 from opscli.query.manager import QueryManager
 from opscli.skills.models import SkillRecord
 
 
-def _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload):
+def _setup_metadata_local_fallback(
+    manager, tmp_path, monkeypatch, payload, remote_error: Exception | None = None
+):
     """辅助函数：设置本地 metadata 并让远端调用失败回退到本地。"""
     skill_root = tmp_path / ".claude" / "skills" / "ops-dataset-query"
     data_dir = skill_root / "data"
@@ -22,8 +24,9 @@ def _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload):
     )
     monkeypatch.setattr(manager.detector, "discover", lambda **kwargs: [record])
     # 模拟远端不可用，回退到本地
+    error = remote_error if remote_error is not None else RuntimeError("remote down")
     monkeypatch.setattr(manager.client, "fetch_query_metadata",
-                        lambda **kw: (_ for _ in ()).throw(RuntimeError("remote down")))
+                        lambda **kw: (_ for _ in ()).throw(error))
 
 
 def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
@@ -44,13 +47,57 @@ def test_metadata_reads_from_installed_dataset_fields(tmp_path, monkeypatch):
     assert result.source == "local"
 
 
-def test_metadata_raises_when_dataset_missing(tmp_path, monkeypatch):
+def test_metadata_raises_when_remote_confirms_dataset_missing(monkeypatch):
+    """远端成功响应但确实无目标数据集时仍返回 DATASET_NOT_FOUND。"""
     manager = QueryManager()
-    payload = {"datasets": [], "fields": []}
-    _setup_metadata_local_fallback(manager, tmp_path, monkeypatch, payload)
+    monkeypatch.setattr(
+        manager.client,
+        "fetch_query_metadata",
+        lambda **kwargs: {"datasets": [], "fields": []},
+    )
 
     with pytest.raises(DatasetNotFoundError):
         manager.metadata(dataset_alias="missing_ds")
+
+
+def test_metadata_preserves_remote_error_when_local_cache_misses(tmp_path, monkeypatch):
+    """远端失败且本地未命中时不得用 DATASET_NOT_FOUND 覆盖远端鉴权错误。"""
+    manager = QueryManager()
+    remote_error = RemoteBusinessError(407, "令牌无效")
+    _setup_metadata_local_fallback(
+        manager,
+        tmp_path,
+        monkeypatch,
+        {"datasets": [], "fields": []},
+        remote_error,
+    )
+
+    with pytest.raises(RemoteBusinessError) as exc_info:
+        manager.metadata(dataset_alias="ds_sales")
+
+    assert exc_info.value is remote_error
+
+
+def test_metadata_preserves_remote_error_when_local_cache_cannot_load(monkeypatch):
+    """本地缓存本身不可读取时，最终异常仍应是远端根因。"""
+    manager = QueryManager()
+    remote_error = RemoteBusinessError(407, "令牌无效")
+    monkeypatch.setattr(
+        manager.client,
+        "fetch_query_metadata",
+        lambda **kwargs: (_ for _ in ()).throw(remote_error),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_load_query_metadata",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("local cache unavailable")),
+    )
+
+    with pytest.raises(RemoteBusinessError) as exc_info:
+        manager.metadata(dataset_alias="ds_sales")
+
+    assert exc_info.value is remote_error
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
 
 
 def test_metadata_no_args_returns_all_datasets(tmp_path, monkeypatch):

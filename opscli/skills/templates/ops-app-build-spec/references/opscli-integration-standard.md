@@ -29,7 +29,7 @@
 3. 结果按 `sha256(session_id)` 作键做 60 秒内存缓存，缓存值不含 session 或 JWT 原文。
 4. 返回 `CurrentUser(email, session_id, jwt)`，供业务层构造 Manager。
 
-同域部署（前端位于 `/ops-app/{appId}/{appName}/`）时浏览器会自动携带 cookie；跨域调用方必须显式传 `X-Session-Id`。`auth_enabled` 开关只允许在 `app_env=local` 时关闭，关闭时返回固定的本地开发用户。内部接口用 `verify_internal` 依赖比对 `X-Internal-Key`，必须 `secrets.compare_digest`。
+通过 AppHub 同域网关访问时浏览器会自动携带 cookie；跨域调用方必须显式传 `X-Session-Id`。`auth_enabled` 开关只允许在 `app_env=local` 时关闭，关闭时返回固定的本地开发用户。内部接口用 `verify_internal` 依赖比对 `X-Internal-Key`，必须 `secrets.compare_digest`。
 
 ## 异常映射
 

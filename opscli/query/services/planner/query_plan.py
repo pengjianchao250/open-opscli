@@ -2311,6 +2311,32 @@ def _auto_enum_platform_values(enum_fn, component_table_id: object) -> list[str]
     return _deduplicate(str(value).strip() for value in values or [] if str(value).strip())
 
 
+def _auth_error_type_names() -> frozenset[str]:
+    """返回「认证/登录态」类异常的类名集合（惰性导入，避免规划器强依赖 auth 子模块）。
+
+    从类对象取 __name__ 而不是写死字符串：auth 模块将来重命名异常类时这里自动跟随，
+    不会悄悄退化成"永远判不出认证错误"。
+    """
+    from opscli.auth.exceptions import NotAuthenticatedError, TokenFetchError
+
+    return frozenset({TokenFetchError.__name__, NotAuthenticatedError.__name__})
+
+
+def _is_auth_enum_error(error_summary: str) -> bool:
+    """判断枚举失败摘要是否属于「登录态失效」，而非组件元数据配置异常。
+
+    摘要形如 "TokenFetchError: 获取 ops JWT 失败: 401"，由
+    _auto_enum_component_values 用 `f"{type(exc).__name__}: {exc}"` 就地生成，
+    因此冒号前一定是异常类名——这里解析的是本文件自己产出的格式，不是外部文本。
+
+    为什么必须区分：认证类失败重新登录即可恢复，而 enum_failed 分支原本一律
+    按「元数据配置异常 / 重试无效 / 请提交反馈」归因，把一个用户自己能解决的问题
+    误导成平台缺陷。生产实测 2026-08-04 起 59 个会话 / 17 个用户被这条文案误导。
+    """
+    head = str(error_summary or "").split(":", 1)[0].strip()
+    return head in _auth_error_type_names()
+
+
 def _auto_enum_component_values(
     enum_fn,
     component_table_id: object,
@@ -2756,6 +2782,40 @@ def _dataset_has_field(
     )
 
 
+def _has_text_level_detector(spec: dict) -> bool:
+    """该字段能否**只看原文**就判断用户有没有提到它。
+
+    只有配了自定义 `extract` 的字段才具备这个能力（当前仅部门：`_extract_requested_department_value`
+    能从「查九部销售额」里抠出「九部」，不依赖授权枚举值）。其余 reverse_lookup 字段
+    靠标签形态 + 枚举反查识别裸值——枚举一挂就无从判断原文里的「傲彼瑞」是不是渠道，
+    此时**必须**保持 fail-closed 阻断，否则「查傲彼瑞的销售额」会被静默放行成查全部渠道。
+    """
+    return spec.get("extract") is not None
+
+
+def _disclose_component_unavailable(
+    contract: dict, label_zh: str, error_summary: str
+) -> None:
+    """登记「某组件枚举不可用、本次未使用该筛选」的必披露事项。
+
+    为什么是披露而不是静默跳过：跳过等于把查询范围放宽到该字段全集，
+    虽然原文没提到它、放宽符合用户意图，但用户有权知道这一轮没有该维度的筛选保障。
+    披露过的放宽不是静默错数——本文件反复强调的危险是"悄悄"，不是"放宽"。
+    """
+    answer_contract = contract.get("answer_contract")
+    if not isinstance(answer_contract, dict):
+        return
+    disclosures = answer_contract.setdefault("required_disclosures_zh", [])
+    if not isinstance(disclosures, list):
+        return
+    message = (
+        f"{label_zh}筛选组件本次不可用（{error_summary}），原文未识别到{label_zh}值，"
+        f"因此本次查询未施加{label_zh}筛选。"
+    )
+    if message not in disclosures:
+        disclosures.append(message)
+
+
 def _block_component_filter(
     contract: dict, execution: dict, *, status: str, state: str, next_action: str, message_zh: str
 ) -> dict:
@@ -2937,7 +2997,31 @@ def _resolve_enum_component_filter(
         return contract
     if not values:
         shown = f"“{requested}”" if requested else ""
+        if enum_errors and not requested and _has_text_level_detector(spec):
+            # 该字段有文本级检测器、且原文里根本没检测到它的值 ⇒ 与本次查询无关，
+            # 不该因为它自己的枚举故障连累整条查询。实测形态：部门组件元数据异常时，
+            # 连「查昨天总销售额」这种压根不涉及部门的请求也被一起 blocked
+            # （dept_name 是 _ENUM_COMPONENT_SPECS 首项，且首个失败即 break）。
+            # 仅限有文本级检测器的字段——没有的字段无从判断原文是否提到，必须继续阻断。
+            _disclose_component_unavailable(contract, label_zh, enum_errors[0])
+            return contract
         if enum_errors:
+            if _is_auth_enum_error(enum_errors[0]):
+                # 登录态失效（换 JWT 被后端拒），不是数据集/字段权限问题，更不是组件
+                # 元数据配置异常——重新登录即可恢复。归因写错的代价是实打实的：
+                # 生产上这类 401 被当成平台缺陷，用户只能提反馈干等。
+                return _block_component_filter(
+                    contract,
+                    execution,
+                    status="blocked",
+                    state="auth_required",
+                    next_action="reauthenticate",
+                    message_zh=(
+                        f"{label_zh}{shown}的授权枚举因登录态失效未能完成（{enum_errors[0]}）；"
+                        "这不是数据集或数据权限问题，重新登录后重试即可恢复。"
+                        "已阻止扩大为全范围查询。"
+                    ),
+                )
             # 枚举调用自身报错（实测形态：组件表元数据未暴露该字段，后端报「字段不存在」）。
             # 属配置类故障，重试多少次都不会成功，必须如实告知并透出原始错误。
             return _block_component_filter(
