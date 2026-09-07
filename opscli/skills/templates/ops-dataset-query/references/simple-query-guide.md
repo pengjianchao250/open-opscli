@@ -95,7 +95,7 @@ description: 简化查询接口指南 — 7 个纯业务概念完成数据查询
 
 - **作用**：按指定币种换算展示金额类指标。取值**仅支持** `USD / GBP / CAD / EUR / JPY / CNY`（大写 ISO 4217）。
 - **它不是字段**：`globalCurrency` 是查询请求上的换算参数，既不是维度、也不是筛选字段或指标。数据集元数据里没有 `currency` 字段属正常，**不要去字段清单里找币种字段**，更不得因"没有币种维度"判定该数据集不支持按币种查询。（少数数据集如广告费数据集确实注册了 `currency` 维度字段，那是"按原始币种分组"的业务维度，与本参数的换算能力是两回事。）
-- **来源**：由 Agent 从用户请求文本识别币种意图（如"用美元显示""按 USD 口径""分别使用加拿大元和人民币""同时用加拿大元对比显示"），按当前模式显式传参：MCP `query_simple(..., global_currency="<代码>")`（`query_build` / `query_build_and_run` 同名参数），CLI `--global-currency <代码>`，Skill 脚本 `scripts/query.py simple ... --global-currency <代码>`，手写 payload 走 `query_run` 时写在 payload 顶层 `globalCurrency`。只在识别到明确币种意图时传入；**未识别到时不传**，由后端回退当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
+- **来源**：由 Agent 从用户请求文本识别币种意图（如"用美元显示""按 USD 口径""分别使用加拿大元和人民币""同时用加拿大元对比显示"），按当前模式显式传参：CLI `--global-currency <代码>`，MCP `query_simple(..., global_currency="<代码>")`（`query_build` / `query_build_and_run` 同名参数），手写 payload 走 `query_run` 时写在 payload 顶层 `globalCurrency`。只在识别到明确币种意图时传入；**未识别到时不传**，由后端回退当前用户在 `dm_user_settings` 的默认币种配置，用户也未配置则不做换算。
 - **多币种 = 多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"都必须执行 CNY 与 CAD **两次**服务端查询，每次只传一个 `globalCurrency`，其余表、字段、时间、筛选、排序和行数完全一致。最后一种表达即使省略"人民币"，也表示保留人民币主口径并增加 CAD 对照。
 - **非白名单币种**（如 HKD/AUD）不要传，后端会拒绝，请勿伪造。
 - **禁止用字段名替代币种参数**：不得用"选 `_cny` 字段"或"选原币字段"来代替 `globalCurrency`；数据集同时存在原币与 CNY 字段时，字段口径歧义按 `references/rules.md` 第四章澄清，币种换算仍由服务端按 `globalCurrency` 完成。
@@ -363,7 +363,8 @@ query_simple(
 )
 ```
 
-> **币种（MCP）**：`query_simple` / `query_build` / `query_build_and_run` 均支持 `global_currency` 参数（白名单同上）。用户明确要求币种口径时直接传；币种是请求参数，**不要往 `dimensions` / `filters` 里塞币种字段**，元数据没有 `currency` 字段也不影响按币种取数。
+> **币种（MCP）**：`query_simple` / `query_build` / `query_build_and_run` 均支持 `global_currency` 参数（白名单同上）。用户明确要求币种口径时直接传，如
+> `query_simple(table_id=1, metrics=[...], filters=[...], global_currency="USD")`；币种是请求参数，**不要往 `dimensions` / `filters` 里塞币种字段**，元数据没有 `currency` 字段也不影响按币种取数。
 > 多币种逐币种各调用一次，除 `global_currency` 外参数完全一致，并以每次返回的 `meta.currency` 为准声明币种。禁止查一次后用外部汇率换算。
 >
 > ```python

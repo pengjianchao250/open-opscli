@@ -255,7 +255,7 @@ description: 查询意图澄清通用规则 — 在构造查询参数前，按�
 2. 若同时匹配到 `xxx` 和 `xxx_cny` 两个版本 → 存在币种歧义
 
 **处理策略**：
-- 币种换算由服务端完成：用户请求含明确币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时显式传币种参数——MCP `query_simple(..., global_currency="<代码>")`（`query_build` / `query_build_and_run` 同名），CLI `opscli query simple --global-currency <代码>`；**未指定币种时不传该参数**，由后端回退用户默认币种配置，禁止本地默认改选 `_cny` 字段来"代替"币种参数
+- 币种换算由服务端完成：用户请求含明确币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时显式传币种参数——CLI `opscli query simple --global-currency <代码>`，MCP `query_simple(..., global_currency="<代码>")`（`query_build` / `query_build_and_run` 同名）；**未指定币种时不传该参数**，由后端回退用户默认币种配置，禁止本地默认改选 `_cny` 字段来"代替"币种参数
 - 多币种（"分别用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比"）= 逐币种各执行一次相同范围的查询，禁止查一次后用外部汇率或本地计算换算
 - 回复中的币种以返回的 `meta.currency` 为准声明（如 `CNY` 即"以下金额均为人民币计价"）；为 `null` 只能写"本次返回未声明币种"，不得推断；与请求币种不一致时以返回为准并披露
 - 原币字段与 `_cny` 字段并存且用户要求"原币/站点币种"或精准对账口径时，仍属字段口径歧义，用 `AskUserQuestion` 澄清选哪一组字段；跨币种金额不得相加
