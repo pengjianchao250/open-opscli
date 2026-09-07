@@ -327,7 +327,7 @@ metrics    = [{"field": "price", "aggregation": "SUM", "alias": "f_price"},
 
 币种不是维度、不是筛选字段、不是指标，而是查询请求上的一个换算参数：
 
-- **传法**：MCP `query_simple(..., global_currency="USD")`（`query_build` / `query_build_and_run` 同名参数；手写 payload 走 `query_run` 时写在 payload 顶层 `globalCurrency`）；CLI `--global-currency USD`；Skill 脚本 `python scripts/query.py simple ... --global-currency USD`。
+- **传法**：MCP `query_simple(..., global_currency="USD")`（`query_build` / `query_build_and_run` 同名参数；手写 payload 走 `query_run` 时写在 payload 顶层 `globalCurrency`）；CLI `--global-currency USD`。
 - **元数据里没有 `currency` 字段是正常的**：不要在字段清单里找币种字段，不得把币种塞进 `dimensions` / `filters`，也不得因"该数据集没有币种维度"判定不支持按币种查询、或改选 `_cny`/原币字段代替。
 - **多币种 = 多次取数**：如"分别用美元和欧元"就是两次查询，除 `global_currency` 外表、字段、时间、筛选、排序、行数完全一致；禁止查一次后用任何外部汇率或本地计算折算另一币种。
 - **结论以返回的 `meta.currency` 为准**（详见第十五章）。
