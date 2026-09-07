@@ -198,6 +198,7 @@ class AppManager:
             root,
             repo_url=binding.repo_url,
             username=username,
+            token_hint=_optional_text(git_config.get("token_hint")),
         ):
             return binding, {"credential_refreshed": False, "credential_rotated": False}
 

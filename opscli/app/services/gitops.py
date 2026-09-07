@@ -38,7 +38,14 @@ class GitRunner:
         input_text: str | None = None,
     ) -> GitCommandResult:
         env = os.environ.copy()
-        env.update({"LC_ALL": "C", "LANG": "C", "GIT_TERMINAL_PROMPT": "0"})
+        env.update(
+            {
+                "LC_ALL": "C",
+                "LANG": "C",
+                "GIT_TERMINAL_PROMPT": "0",
+                "GCM_INTERACTIVE": "Never",
+            }
+        )
         try:
             completed = subprocess.run(
                 ["git", *args],

@@ -12,6 +12,23 @@ from opscli.app.domain.exceptions import AppGitError
 from opscli.app.services.gitops import GitCommandResult, GitService, _parse_git_version
 
 
+def test_git_runner_disables_windows_credential_manager_prompt(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, str] = {}
+
+    def fake_run(*args, **kwargs):
+        captured.update(kwargs["env"])
+        return subprocess.CompletedProcess(args[0], 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    from opscli.app.services.gitops import GitRunner
+
+    GitRunner().run(tmp_path, ["credential", "fill"], check=False)
+
+    assert captured["GIT_TERMINAL_PROMPT"] == "0"
+    assert captured["GCM_INTERACTIVE"] == "Never"
+
+
 class FakeRunner:
     def __init__(self, responses: dict[tuple[str, ...], GitCommandResult] | None = None) -> None:
         self.responses = responses or {}
