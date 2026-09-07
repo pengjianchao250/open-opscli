@@ -1,0 +1,145 @@
+"""固定槽位覆盖判定的回归测试。
+
+线上事故形态：用户说「搜索词的点击份额」返回零候选，而「搜索词和关键词的点击份额」
+返回 3 个正确数据集——用户描述越具体候选越少。根因是固定槽位要求
+数据集支持的取值与请求完全相等，覆盖更多粒度的数据集反而被拒。
+
+历史说明：本文件原先同时对拍 Skill 版与内核版 agent_query_planner；
+Skill 本地规划器移除后只保留内核半边。
+"""
+
+from __future__ import annotations
+
+from opscli.query.services.planner import agent_query_planner as aqp
+
+RULES = {
+    "slots": {
+        "grain": {
+            "keyword": {"terms": ["关键词"], "description_patterns": ["关键词"]},
+            "search_term": {"terms": ["搜索词"], "description_patterns": ["搜索词"]},
+        },
+        # ad_type 的取值在真实规则里没有中文词条（terms 只有 sp / sponsored products），
+        # 标签必须退回枚举名并大写，这里照抄真实形态以覆盖该分支
+        "ad_type": {
+            "sp": {"terms": ["sp", "sponsored products"], "description_patterns": ["SP"]},
+            "sd": {"terms": ["sd", "sponsored display"], "description_patterns": ["SD"]},
+        },
+    }
+}
+
+
+def _profile(supported: set, mode: str) -> dict:
+    return {"slots": {"grain": supported}, "slot_modes": {"grain": mode}}
+
+
+def _ad_type_profile(supported: set, mode: str) -> dict:
+    return {"slots": {"ad_type": supported}, "slot_modes": {"ad_type": mode}}
+
+
+def test_dataset_covering_more_grains_is_accepted():
+    """数据集支持 keyword+search_term，用户只要 search_term——应通过。
+
+    这是零候选的直接成因：覆盖面更广的数据集本该可用，却因「不完全相等」被拒。
+    """
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    assert aqp._slot_is_covered(profile, "grain", {"search_term"}, RULES) is True
+
+
+def test_dataset_missing_requested_grain_is_rejected():
+    """数据集不支持用户要求的粒度时仍须拒绝——放开的是「多」，不是「少」。"""
+    profile = _profile({"keyword"}, "fixed")
+    assert aqp._slot_is_covered(profile, "grain", {"search_term"}, RULES) is False
+
+
+def test_unsupported_slot_mode_still_rejected():
+    """槽位标记为 unsupported 时不因放开而通过。"""
+    profile = _profile({"search_term"}, "unsupported")
+    assert aqp._slot_is_covered(profile, "grain", {"search_term"}, RULES) is False
+
+
+def test_extra_slot_terms_reports_uncovered_surplus():
+    """多出的粒度必须能被取出，且只带中文标签供合同强制披露。
+
+    披露句是面向用户的中文，槽位名（grain）与取值（keyword）都是内部标识，
+    不能出现在里面——曾实测输出「所选数据集的ad_type粒度…额外覆盖：sb、sd」。
+    """
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    extra = aqp._extra_slot_terms(profile, {"grain": {"search_term"}}, RULES)
+    assert extra == {
+        "grain": {
+            "slot_label_zh": "统计粒度",
+            "requested_zh": ["搜索词"],
+            "surplus_zh": ["关键词"],
+        }
+    }
+
+
+def test_extra_slot_terms_labels_ad_type_without_chinese_terms():
+    """ad_type 取值在规则里没有中文词条，标签退回大写枚举名而不是原样小写。"""
+    profile = _ad_type_profile({"sp", "sd"}, "fixed")
+    extra = aqp._extra_slot_terms(profile, {"ad_type": {"sp"}}, RULES)
+    assert extra == {
+        "ad_type": {
+            "slot_label_zh": "广告类型",
+            "requested_zh": ["SP"],
+            "surplus_zh": ["SD"],
+        }
+    }
+
+
+def test_extra_slot_terms_skips_filterable_slot():
+    """可筛选槽位不产出 surplus——这是下游披露文案分语义的前提不变量。
+
+    query_plan._slot_surplus_disclosure_zh 对 platform / ad_type 断言
+    「筛不掉、结果是合计」，成立的唯一依据就是这里只收 fixed。
+    """
+    profile = _ad_type_profile({"sp", "sd"}, "filterable")
+    assert aqp._extra_slot_terms(profile, {"ad_type": {"sp"}}, RULES) == {}
+
+
+def test_extra_slot_terms_empty_when_exact_match():
+    """粒度正好相等时没有可披露内容，不应产生空噪声。"""
+    profile = _profile({"search_term"}, "fixed")
+    assert aqp._extra_slot_terms(profile, {"grain": {"search_term"}}, RULES) == {}
+
+
+def test_slot_labels_cover_every_allowed_slot():
+    """槽位中文标签必须覆盖封闭槽位全集，漏一个就会往中文句子里漏英文标识。"""
+    assert set(aqp.schema.SLOT_LABELS_ZH) == set(aqp.schema.ALLOWED_SLOTS)
+
+
+def test_attach_slot_coverage_fills_every_candidate():
+    """显式命中路径的候选必须被补上覆盖信息，否则强制披露整条链路会静默消失。"""
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    profile["card"] = {"dataset_alias": "ds_kw_st"}
+    candidates = [{"dataset_alias": "ds_kw_st"}, {"dataset_alias": "ds_unknown"}]
+
+    aqp._attach_slot_coverage(
+        candidates, [profile], [{"grain": {"search_term"}}], RULES
+    )
+
+    assert candidates[0]["grain_coverage"]["grain"]["surplus_zh"] == ["关键词"]
+    # 画像里找不到的候选保持原样，不臆造覆盖信息
+    assert "grain_coverage" not in candidates[1]
+
+
+def test_attach_slot_coverage_keeps_the_more_disclosing_reading():
+    """多份槽位读法逐槽位取「披露更多的一方」，不能被披露更少的读法盖掉。
+
+    真实元数据实测：'亚马逊搜索词绩效 近7天搜索词的点击份额' 遮蔽身份文本后
+    槽位为空（第二个「搜索词」也被当字段标签抹掉）→ 无请求可比 → 披露消失。
+    未遮蔽的读法能看出用户要 search_term 级，必须让它胜出。
+    """
+    profile = _profile({"keyword", "search_term"}, "fixed")
+    profile["card"] = {"dataset_alias": "ds_kw_st"}
+    masked_reading: dict = {}  # 遮蔽后什么都没剩下
+    raw_reading = {"grain": {"search_term"}}
+
+    # 读法顺序不能影响结果：披露更多的一方总该胜出
+    for readings in ([masked_reading, raw_reading], [raw_reading, masked_reading]):
+        candidates = [{"dataset_alias": "ds_kw_st"}]
+        aqp._attach_slot_coverage(candidates, [profile], readings, RULES)
+        coverage = candidates[0]["grain_coverage"]["grain"]
+        assert coverage["surplus_zh"] == ["关键词"]
+        # 句子内部自洽：requested 与 surplus 同取自被选中的那份读法
+        assert coverage["requested_zh"] == ["搜索词"]

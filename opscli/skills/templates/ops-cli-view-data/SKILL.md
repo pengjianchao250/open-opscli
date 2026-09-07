@@ -70,7 +70,7 @@ python scripts/export_view_data.py \
 ## 依赖关系
 
 - 必须已安装 `ops-dataset-query`
-- 远端查询动作由 `ops-dataset-query/scripts/query.py` 转发到正式 `opscli query` 入口
+- 远端查询动作直接走正式 `opscli query` 入口（`opscli query chart` / `opscli query simple`），不再经 Skill 脚本转发
 - Excel 导出由 `ops-dataset-query/scripts/excel_export.py` 完成
 
 ---

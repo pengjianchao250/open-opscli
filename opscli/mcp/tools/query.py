@@ -96,7 +96,7 @@ async def query_spec_must_read() -> dict:
     - 未传 limit 时沿用后端默认 20 行，把截断结果当成全量
 
     规范内容包括：
-    - 14 条核心铁律（鉴权、规划器优先、元数据唯一来源、字段标识、公式字段、对比周期、
+    - 15 条核心铁律（鉴权、规划器优先、元数据唯一来源、字段标识、公式字段、对比周期、
       快照指标、默认筛选、权限枚举、歧义澄清、输出与证据、反馈边界等）
     - 两条取数路线：query_plan / query_flow 规划器路线，query_metadata + query_simple 手工路线
     - 各查询工具的参数规范与调用示例（普通聚合 / 环比对比 / MOY 趋势 / 公式字段）
@@ -847,9 +847,10 @@ async def query_flow(
     【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
 
     【非 planned 时的处置】status=clarify_required 按 model_view.clarification_messages_zh 提问，
-    确认后把明确口径写回 request 原文重新调用；status=blocked 且 recovery_state=refresh_in_progress
-    时等待约 25 秒后用相同参数原样重调（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
-    不要执行该命令，也不要自行升级），连续 3 次仍未就绪才提交反馈并停止。
+    确认后把明确口径写回 request 原文重新调用；status=blocked 且 recovery_state=refresh_failed
+    表示内核同步刷新元数据后仍未就绪（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
+    不要执行该命令）：等待约 1 分钟后用相同参数原样重调一次，仍未就绪才提交反馈并停止；
+    next_action=report_component_enum_defect 表示组件枚举调用失败，原样重调一次，仍失败提交反馈并停止。
 
     【结果被截断时】先看 result_disclosures：truncated=false 才可按全量陈述；
     truncated=true 表示总数超过自动补齐上限或服务端仍未返回完整结果，此时显式传更大

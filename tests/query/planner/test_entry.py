@@ -352,8 +352,9 @@ def test_run_flow_large_result_without_result_dir_warns(monkeypatch):
 
     out = entry.run_flow("查询", user_email="u@x.com", query_manager=_QM())
     assert out["result_disclosures"]["large_result_warning_zh"] == (
-        "本次返回 21 行且未传 --result-dir，全量行已进入返回体；"
-        "行数较大时建议携带 --result-dir 落盘并只读预览。"
+        "本次返回 21 行且未落盘，全量行已进入返回体；"
+        "行数较大时 CLI 建议携带 --result-dir 落盘并只读预览，"
+        "MCP query_flow 不支持落盘，改传更小的 limit 或按维度/时间拆分查询。"
     )
 
 
@@ -442,8 +443,9 @@ def test_run_flow_auto_completes_server_default_page(monkeypatch):
         # 145 行 > 预览阈值 20 行且未传 result_dir：必须出现可感知警告，
         # 否则忘传 --result-dir 时大结果会静默塞进返回体（K5 修复轮）
         "large_result_warning_zh": (
-            "本次返回 145 行且未传 --result-dir，全量行已进入返回体；"
-            "行数较大时建议携带 --result-dir 落盘并只读预览。"
+            "本次返回 145 行且未落盘，全量行已进入返回体；"
+            "行数较大时 CLI 建议携带 --result-dir 落盘并只读预览，"
+            "MCP query_flow 不支持落盘，改传更小的 limit 或按维度/时间拆分查询。"
         ),
     }
 

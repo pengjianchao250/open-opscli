@@ -6,15 +6,11 @@ description: >
   加载本 Skill 后必须先读取本目录 SKILL.md 并遵循其流程：CLI 取数默认且优先的入口是
   一体化流程 opscli query flow "<用户请求>"（内部只规划一次；单币种执行一次，
   多币种按币种分别调用取数服务；
-  规划器按 30 秒命令窗口设计，返回 refresh_in_progress 时按其 recovery_command
-  等待重跑即可，禁止自行升级）；opscli 命令无法启动（command not found、未安装、
-  不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道
-  python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口
-  success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身
-  报错」处置；两条执行通道都无法启动才转规划器降级路径（规划器澄清/阻断、命令报错
-  重跑仍失败、命令窗口连续超时同样转 SKILL.md 的降级路径）；
+  规划器按 30 秒命令窗口设计，返回 blocked 且带 recovery_command 时按其处置后重跑
+  即可，合同未给出 recovery_command 时不得自行升级）；只有规划器客观不可用（澄清/阻断、命令报错重跑仍失败、
+  命令窗口连续超时、opscli 命令无法启动）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.3.25
+version: 1.4.0
 ---
 
 # ops-dataset-query
@@ -26,7 +22,7 @@ version: 1.3.25
 用于查数据、取数、报表、趋势、对比、聚合或导出。一次请求固定一种模式：
 
 - **CLI-only**：本地 shell 和 `opscli` 可用；优先运行下方规划器（规划器客观不可用时按「规划器不可用时的降级路径」处置），构造正式命令时再按需读取 `references/cli.md`。
-- **MCP-only**：仅有 Connector/MCP；使用当前已认证账号的 `query_metadata`，按需读取 `references/mcp.md`。
+- **MCP-only**：仅有 Connector/MCP；优先调用内核规划器工具 `query_flow`（需传输层已验证账号），不可用时按 `references/mcp.md` 用当前已认证账号的 `query_metadata` + `query_simple` 手工路线。
 
 用户明确指定模式时遵从指定；不要在同一请求中混用或自动切换模式。
 
@@ -36,7 +32,7 @@ version: 1.3.25
 
 ### CLI-only：一次规划并执行
 
-读完本文件后直接运行一体化入口；除合同明确要求澄清、恢复或图表 UUID 分流外，不再单独调用 `opscli query plan`、`opscli query run`，也不单独调用 Skill 自带的 `query_plan.py` 或 `run_query.py`。**规划器路径下**不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；流程已完成版本、选表、字段、公式、时间口径、权限合同、完整性绑定和正式查询。（这些本地探索限制只在规划器可用时生效，降级态的放宽见文末降级章节。）
+读完本文件后直接运行一体化入口；除合同明确要求澄清、恢复或图表 UUID 分流外，不再单独调用 `opscli query plan`、`opscli query run`。**规划器路径下**不要预读 `data/VERSION.json`，不要列目录，不要检查脚本源码，不要扫描 `data/`、`scripts/` 或 `references/`；流程已完成版本、选表、字段、公式、时间口径、权限合同、完整性绑定和正式查询。（这些本地探索限制只在规划器可用时生效，降级态的放宽见文末降级章节。）
 
 ```bash
 opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
@@ -44,28 +40,21 @@ opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 
 `--result-dir` 必须显式传入：内核入口只有传了该参数才会把全量结果落盘并把返回体中的结果收窄为预览行，不传则不做截断，大结果集会原样进入返回体、撑爆上下文。万一漏传且行数超过 20 行，`result_disclosures` 会出现 `large_result_warning_zh` 兜底提示，看到该键必须原样重跑并补上 `--result-dir`，不能忽略。
 
-**备选执行通道（保留一个版本周期后另行下线）**：opscli 命令无法启动（command not found、未安装、不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道 python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口 success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身报错」处置；两条执行通道都无法启动才转规划器降级路径。具体执行如下，改用 Skill 自带脚本执行同一次规划与查询：
-
-```bash
-python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
-```
-
-两条通道语义等价（已通过金样对照验证），但返回结构不同，读取时按各自结构取值：内核入口把结果放在 `result`、披露放在 `result_disclosures`、证据放在 `evidence_contract`/`evidence_contract_error`（与合同其余字段同级）；脚本入口顶层直接是 `status`/`disclosures`/`preview_rows`/`evidence_contract`。
-
 **正常路径工具调用预算**：数据集、字段、筛选和时间均可确定时，Agent 从加载本 Skill 到拿到查询结果最多 3 次工具调用，且正式入口只调用一次 `opscli query flow`；多币种时由该入口在内部按币种分别调用取数服务，不额外消耗 Agent 工具调用。包含一次澄清、一次恢复或图表结果证据补全的非正常路径最多 7 次。规划器路径下禁止为了“确认环境/字段/语法”调用 `opscli query catalog`、`opscli query metadata`、`--help`、`rg`、`ls`、`find` 或读取脚本源码；禁止重复加载同一 Skill；禁止生成临时 Python 查询脚本；禁止手工修改 plan、复制 `query_template` 后另拼 payload，或在一体化入口成功后再次查询相同范围。
 
-**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部已按此窗口设计——任意单次调用确定性返回：数据就绪时（常态）1~3 秒；需要刷新元数据时前台最多等 8 秒，未完成则**转后台续跑**并返回 `status=blocked, recovery_state=refresh_in_progress`，此时**直接执行其 `recovery_command`**；连续 3 次仍未就绪即转「规划器不可用时的降级路径」，降级也走不通才提交反馈并停止。禁止自行执行任何升级动作、禁止在规划器仍可用时因等待改走旁路探查。若命令仍偶发窗口超时：原样重跑一次即可（流程幂等）；同一请求累计 3 次窗口超时按客观失败转降级。
+**命令窗口与等待（30 秒窗口设计）**：平台单条命令的有效等待上限约 30 秒（自行设置更大超时无效）。规划器内部按此窗口设计——数据就绪时（常态）1~3 秒返回；元数据未就绪时内核会**同步刷新一次**用户级元数据缓存（无前台/后台分段），仍不就绪即返回 `status=blocked, recovery_state=refresh_failed` 并附 `recovery_command`（即 `opscli skills upgrade ops-dataset-query`），此时**执行该命令后原样重跑**；重跑仍 `blocked` 即转「规划器不可用时的降级路径」，降级也走不通才提交反馈并停止。合同未给出 `recovery_command` 时禁止自行发起任何升级动作，也禁止在规划器仍可用时因等待改走旁路探查。若命令偶发窗口超时：原样重跑一次即可（流程幂等）；同一请求累计 3 次窗口超时按客观失败转降级。
 
 用户请求含引号等特殊字符时改用 `--query-file <文件>`。用户明确指定字段时追加重复的 `--field "$FIELD"`。一体化入口返回查询结果时直接分析；返回规划合同时只处理默认 `model_view`、`answer_contract` 和 `execution_ref`，不得读取内部合同补充回答：
 
-1. `data_state` 不是 `ready`：规划器已内置一次自动升级兜底；若仍返回 `status=blocked`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
-2. `status=clarify_required`：按 `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置。
+1. `data_state` 不是 `ready`（规划合同里只有 `ready` / `missing` / `not_required` 三种取值）：规划器已内置一次同步刷新兜底；若仍返回 `status=blocked, recovery_state=refresh_failed`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
+2. `status=clarify_required`：按 `clarification_reason_codes` + `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议，`metric_not_in_dataset` 时指出当前数据集没有点名指标）、`component_candidates_zh`（筛选组件当前账号可见取值，`component_filter_*` 类澄清时下发）、`unsupported_currencies`（白名单外币种，`unsupported_currency` 时下发）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置；`next_action=report_component_enum_defect` 表示组件枚举调用失败（网络/代理抖动或组件元数据异常）——原样重跑一次，仍失败按 `references/feedback-guide.md` 提交一次反馈并停止，不得放大为全范围查询。
    - 未明确指定数据集时，规划器优先检查当前账号已授权的“即时综合数据集”。如果已明确的业务和查询字段全部覆盖，`default_dataset_recommendation_zh.auto_selected=true`，直接按该数据集继续，不调用提问工具；如果请求没有命中任何具体查询字段、仍无法确定要查什么，则 `confirmation_required=true`，才询问是否采用推荐数据集及推荐字段。用户拒绝时让用户从 `dataset_candidates_zh` 选择其他数据集，不得循环推荐。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
-4. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
-5. `platform_semantic_members` 表示请求语义：用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成时，直接执行规划结果内嵌的 `execution_ref.platform_enum_command`，再把返回值作为重复的 `--authorized-platform-value` 传回规划器、取得终版规划结果。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
-6. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。`dimensions`/`metrics` 中 `selection_source=recommended` 的字段是系统推荐（用户未点名），确认前规划器不会下发 `query_template`。`status=planned` 时一体化入口直接执行完整性摘要绑定的原始模板；Agent 不得提取、编辑或重新拼装该模板。
-7. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。必须读取 `references/chart-excel-guide.md`，直接执行该命令；不得再用普通数据集选表或 `run_query.py` 改写。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
+4. **趋势/按日/每天类表述**（「按日趋势」「每天的」「趋势」等）规划器会自动把数据集主日期字段加为分组维度，并在 `answer_contract.required_disclosures_zh` 说明「按日期序列表述」；结论必须按日期序列讲，不得只报合计。原文含「不按日拆分」等否定语境时不加。
+5. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
+6. `platform_semantic_members` 表示请求语义：用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。`platform_filter_state=requires_permission_enum` 时规划器默认已自动枚举并回灌（规划结果带 `platform_enum_source=auto_enum_service` 即已收敛）；仅当自动枚举未完成（实时枚举与本地枚举缓存都不可用）时规划器不会下发模板：先恢复登录态或等待组件服务可用后原样重跑，不得手工执行 `execution_ref.platform_enum_command` 后自行拼装平台值。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
+7. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。需确认的合同里 `dimensions`/`metrics` 条目带 `selection_source=recommended`（系统推荐、用户未点名；`planned` 合同不带该键），确认前规划器不会下发 `query_template`。`status=planned` 时一体化入口直接执行完整性摘要绑定的原始模板；Agent 不得提取、编辑或重新拼装该模板。
+8. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。必须读取 `references/chart-excel-guide.md`，直接执行该命令；不得再用普通数据集选表或手工改写。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
 
 `query_component` 只用于权限枚举，不是业务结果数据集。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
 
@@ -92,7 +81,7 @@ python3 scripts/query_flow.py "$USER_REQUEST" --result-dir "$RESULT_DIR"
    只下推到单价表，除非用户也明确要求其他表同样过滤。各筛选字段和值仍须通过该表
    元数据与当前账号组件枚举验证。
 4. 每个子查询都必须取到全量后才能关联或生成 Excel。检查 CLI 与 MCP 共用的
-   `result_disclosures`（备选执行通道为 `disclosures`）中 `row_count_returned`、
+   `result_disclosures` 中 `row_count_returned`、
    `total_count` 与 `truncated`；
    只有 `truncated=false` 才可进入计算。自动补齐仍被 5000 行硬上限截断或补齐失败时，
    继续按正式分页能力取全；无法取全则停止交付，不得拿默认 20 行或局部样本生成“全量”报表。
@@ -111,7 +100,7 @@ Excel 的格式、明细、口径页与校验按 `references/chart-excel-guide.m
 
 ## 构造与执行
 
-1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog` 或 `local_fallback.py` 候选目录，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序语义显式例外**：规划器对 TopN/排序语义的 NL 解析**不可依赖**（部分表述能解析、部分不能——如"按ACOS降序排列，只要前5行"能解析出 `orderBy`/`limit`，但并非所有表述都能唯一确定排序字段/行数，未解析时 `orderBy`/`limit` 会是 `null`），本条"不再参与拼参"针对的是 `query_template` 内部字段（`dimensions`/`metrics`/`filters`/时间范围等），**不包含** `opscli query flow` 命令行自身的执行参数——Agent 识别到用户请求含 TopN/排序/限定行数意图时，必须显式在命令上追加 `--limit <N>` 和/或 `--order-by <结果字段>[:asc|desc]`（参数形态与示例见 `references/cli.md`），这不属于拼参违规；显式参数会覆盖模板同名值。未识别到该类明确意图时不得凭空追加这两个参数。
+1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog`、`opscli query intent` 候选或 `opscli query metadata --dataset` 返回的字段清单，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序语义显式例外**：规划器对 TopN/排序语义的 NL 解析**不可依赖**（部分表述能解析、部分不能——如"按ACOS降序排列，只要前5行"能解析出 `orderBy`/`limit`，但并非所有表述都能唯一确定排序字段/行数，未解析时 `orderBy`/`limit` 会是 `null`），本条"不再参与拼参"针对的是 `query_template` 内部字段（`dimensions`/`metrics`/`filters`/时间范围等），**不包含** `opscli query flow` 命令行自身的执行参数——Agent 识别到用户请求含 TopN/排序/限定行数意图时，必须显式在命令上追加 `--limit <N>` 和/或 `--order-by <结果字段>[:asc|desc]`（参数形态与示例见 `references/cli.md`），这不属于拼参违规；显式参数会覆盖模板同名值。未识别到该类明确意图时不得凭空追加这两个参数。
 2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门名称额外允许阿拉伯数字与中文数字等价；唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
@@ -123,29 +112,29 @@ opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 
    - 默认条件（filter_configs）：规划结果存在 `default_filters` 时，流程自动传给执行器；最终回答必须披露 `default_filters_zh`。默认条件由服务端权威应用，用户为同字段提供条件时覆盖默认值，客户端不重复注入。
 
-   `opscli query plan`/`opscli query run`（以及 Skill 自带的 `query_plan.py`/`run_query.py`）都不是 Agent 的规划器正常路径（仅用于维护者复现审计，以及备选/降级态的执行通道）。一体化入口内部会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码时原样重跑一次，仍失败即转「规划器不可用时的降级路径」；备选通道 `query_flow.py` 报 `precheck_failed`/`status=flow_error`/退出码 2 时同样原样重跑一次再判定。`result_disclosures.order_fallback`（备选通道为 `disclosures.order_fallback`）存在时必须披露本地兜底。MCP-only 用正式 `query_simple`。
-6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后补一次 `evidence_contract.py`。
-7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（`result_disclosures`，备选通道为 `disclosures`，已给出），不把局部结果说成全量。
-8. **预览只是抽样，行数口径以 `result_disclosures`（备选通道为 `disclosures`）为准**：传了 `--result-dir` 后返回体中的结果只保留前若干行预览，完整结果写在 `result_disclosures.full_result_file`。判断口径按下面三个字段，**不要**用预览行数下结论：
+   `opscli query plan`/`opscli query run` 都不是 Agent 的规划器正常路径（`opscli query plan` 仅用于维护者复现审计与降级态查看规划合同）。一体化入口内部会校验规划摘要、状态、tableId、授权字段、模板及时间范围。正式查询偶尔较慢（排序兜底还可能放大窗口重查一次），命令窗口超时不是失败：**原样重跑一次**即可。主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码时原样重跑一次，仍失败即转「规划器不可用时的降级路径」。`result_disclosures.order_fallback` 存在时必须披露本地兜底。多币种（`multi_currency=true`）时顶层没有 `result`/`result_disclosures`/`evidence_contract`，各币种结果连同各自的 `result_disclosures` 与 `evidence_contract` 在 `currency_results[i].result` 内，对比规则在 `comparison_contract.rules_zh`。MCP-only 优先 `query_flow`，其次正式 `query_simple`。
+6. `query_mode=chart_uuid` 时原样执行 `execution_ref.query_command`。`chart_action=run` 必须遍历所有 `queries`，保留服务端小计/总计并按 `_query_index` 区分来源；大结果按 `references/chart-excel-guide.md` 使用 `--save-result` 或 `--result-file` 落盘，随后按 `references/chart-excel-guide.md`「证据合同」一节补一次证据合同。
+7. 保留用户要求的明细和全量范围。限制展示时声明排序、截断数量和总行数（`result_disclosures` 已给出），不把局部结果说成全量。
+8. **预览只是抽样，行数口径以 `result_disclosures` 为准**：传了 `--result-dir` 后返回体中的结果只保留前若干行预览，完整结果写在 `result_disclosures.full_result_file`（未传 `--result-dir` 时不存在该键）。判断口径按下面三个字段，**不要**用预览行数下结论：
    - `row_count_returned` = 本次实际拿到的行数，`total_count` = 服务端报的总行数；结论里的"共 N 条"必须用 `row_count_returned`，并在两者不等时说明。
    - `truncated=true` 表示拿到的是**部分结果**，必须如实声明，禁止说成全量。
-   - `auto_complete_applied` 表示是否发生过服务端默认分页补齐：`true`=服务端未按 limit 返回全量、已自动重查补齐；补齐后仍 `truncated=true`（如超 5000 行硬上限）时结论必须声明这是部分结果。备选通道额外提供嵌套的 `server_paging`/`server_paging_disclosure_zh`，语义等价。
+   - `auto_complete_applied` 表示是否发生过服务端默认分页补齐：`true`=服务端未按 limit 返回全量、已自动重查补齐；补齐后仍 `truncated=true`（如超 5000 行硬上限）时结论必须声明这是部分结果。
 
    需要逐行数据时直接读 `full_result_file`（该文件含补齐后的 `rows_after_auto_complete`）；`full_result_file` 为 null 时看 `full_result_file_error`。**禁止**为了凑齐剩余行而改写请求重查、分批排除已见值、或绕过执行器手拼 payload 直连 `opscli query simple`——那样既浪费调用预算，又丢掉执行器的授权字段校验。
 
 ## 结果分析
 
-CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`opscli query flow` 的输出已内嵌 `evidence_contract`（构建失败时改为 `evidence_contract_error`，与合同其余字段同级；备选通道 `run_query.py` 同样内嵌），直接使用；仅在旁路直连（MCP 或图表入口）拿到裸结果时，才用 `python3 scripts/evidence_contract.py --input result.json`（或 stdin）补一次，每轮最多运行一次。只用其 `required_evidence`、`required_disclosures_zh` 和 `forbidden_inferences_zh` 组织结论：
+CLI-only 常规结果分析不要读取 `references/result-analysis.md`：`opscli query flow` 的输出已内嵌 `evidence_contract`（构建失败时改为 `evidence_contract_error`，与合同其余字段同级），直接使用；仅在图表入口拿到裸结果时，才按 `references/chart-excel-guide.md`「证据合同」一节补一次证据合同（每轮最多一次）；`clarify_required`/`blocked` 合同不含这两个键。只用其 `required_evidence`、`required_disclosures_zh` 和 `forbidden_inferences_zh` 组织结论：
 
-- 先说明数据集中文名、时间、维度、指标、筛选、币种、聚合、排序和行数；每个数值结论附字段名、结果列或回放证据。字段称呼使用元数据 `verbose_name` 原文，不意译。
+- 先说明数据集中文名、时间、维度、指标、筛选、币种、聚合、排序和行数；每个数值结论附字段名、结果列或回放证据。字段称呼使用元数据中文名原文（规划合同中为 `label_zh`，即元数据 `verbose_name`），不意译。
 - 遵守 `numeric_evidence_policy_zh`，结论或证据中的关键数值保持返回精度，不自行四舍五入。
 - 0 行只能说明没有返回记录，不能判断业务为 0；全零不等于无数据；空值不等于 0。
 - 周期比较只使用已返回的本期、`last_*`、`diff_*`、`pct_*` 列，缺列时说明无法比较。不同原币不得混加，也不得与 CNY 列混加。
 - **币种是服务端换算参数，不是维度、筛选字段或指标**：它写在请求上（payload 顶层 `globalCurrency`；MCP `query_simple(..., global_currency="USD")`，`query_build` / `query_build_and_run` 同名参数；CLI `--global-currency USD`），由服务端换算金额指标。数据集元数据里**没有** `currency` 字段是正常现象——不要在字段清单里找币种字段，不要把币种写进 `dimensions` / `filters`，更不得因"该数据集没有币种维度"就判定不支持按币种查询或放弃取数；也不得用"选 `_cny`/原币字段"代替币种参数。
-- 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入完整性绑定模板。单币种写入 `query_template`；明确要求多个币种时生成 `query_templates`，一体化入口必须逐币种调用取数服务。未识别到币种意图时不注入，由后端回退用户默认配置。
+- 全局币种换算：用户请求含币种意图（"用美元/按 USD/加元口径"等，仅支持 USD/GBP/CAD/EUR/JPY/CNY）时，规划器自动把 `globalCurrency` 写入完整性绑定模板。单币种写入 `query_template`；明确要求多个币种时生成 `query_templates`，一体化入口必须逐币种调用取数服务。未识别到币种意图时不注入，由后端回退用户默认配置。白名单外币种（如港币 HKD）规划器返回 `clarify_required`（`unsupported_currency`，`model_view.unsupported_currencies` 列出识别到的代码）：告知用户仅支持 USD/GBP/CAD/EUR/JPY/CNY 并让其改选或确认按默认币种查询，确认后把口径写回原文重跑，不得直接执行后把结果当作该币种。
 - **多币种查询是多次取数，不是汇率换算**："分别使用人民币和加拿大元"、"CNY/CAD 双币种"、"同时用加拿大元对比显示"均要求人民币（CNY）和加拿大元（CAD）各执行一次相同范围的服务端查询。MCP-only 也必须为每个币种分别调用 `query_simple` 并传对应 `global_currency`。禁止只查一个币种后引用 Bank of Canada Valet `FXCNYCAD`、任何公开/内部汇率、模型记忆或本地计算生成另一个币种结果。
 - 多币种结果只能按各次查询共同返回且值一致的维度键关联。生成对比表或 HTML 前，先核对维度键集合与非金额指标；任一查询被截断、返回币种与请求不符、维度键不一致或非金额指标不一致时，停止金额对比并披露差异，不得用汇率换算补齐。
-- **返回币种以 `result_disclosures.currency`（备选通道为 `disclosures.currency`）为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 `result_disclosures.currency` 与 `result_disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
+- **返回币种以 `result_disclosures.currency` 为准**：服务端在返回的 `meta.currency` 声明本次实际生效的币种代码（ISO 4217，如 `CNY`/`USD`），执行器已把它提取到 `result_disclosures.currency` 与 `result_disclosures.currency_disclosure_zh`——**直接用这两个字段，不需要为了拿币种去读 `full_result_file`**。
   - 有值：结论首句、结果表表头和 Excel 口径页必须显式写明币种，例如 `currency=CNY` 即声明"本次金额均为人民币（CNY）计价"，不得只写"金额/销售额"了事。
   - 为 `null`：只能说明"本次返回未声明币种"，禁止据字段名、数据集习惯或历史会话推断具体货币（与 `evidence_contract` 的 `currency_not_declared` 披露一致）。
   - 与请求的 `globalCurrency` 不一致时**以 `result_disclosures.currency` 为准**，并把差异如实披露。
@@ -165,19 +154,18 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 
 ## 规划器不可用时的降级路径
 
-规划器是**优先路径而非唯一路径**：命中下表任一**客观失败**条件才进入降级，其余情况一律走一体化入口。降级态同样**不要自行编造数据集或字段**。合同里的 `model_view.fallback_level`、`model_view.no_guess_policy_zh` 与 `execution_ref.fallback_catalog` 会指明当前处在哪一层。
+规划器是**优先路径而非唯一路径**：命中下表任一**客观失败**条件才进入降级，其余情况一律走一体化入口。降级态同样**不要自行编造数据集或字段**。合同里的 `model_view.fallback_level`（只有 `L1_contract_catalog` / `L3_metadata_refresh` 两个取值，L2a/L2b/L4 由 Agent 按下表自行判定）、`model_view.no_guess_policy_zh` 与 `execution_ref.fallback_catalog` 指明当前起点。
 
-「命令不可用」必须区分两种性质不同的失败，处置路径不同：opscli 命令无法启动（command not found、未安装、不在 PATH、依赖导入失败等命令级环境异常）时先转备选执行通道 python3 scripts/query_flow.py；命令能启动但返回业务错误（如一体化入口 success=false/status=flow_error 等）不切换通道，按降级触发表「一体化入口自身报错」处置；两条执行通道都无法启动才转规划器降级路径，即计入下表「两条执行通道均无法启动」行。
+「命令不可用」必须区分两种性质不同的失败：`opscli` 命令无法启动（command not found、未安装、不在 PATH、依赖导入失败等命令级环境异常）计入下表「opscli 命令无法启动」行；命令能启动但返回业务错误（`success=false` 或非零退出码）按「一体化入口自身报错」处置。
 
 ### 降级触发条件（满足其一即可降级）
 
 | 触发条件 | 判断依据 |
 | --- | --- |
 | 规划器要求澄清或阻断 | 返回 `status=clarify_required` / `blocked`：先按合同澄清或执行 `recovery_command`，仍无法进入 `planned` 才降级 |
-| 一体化入口自身报错 | 主线 `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码，原样重跑一次仍报同一错误；备选通道 `query_flow.py` 报错口径为 `status=flow_error` 或退出码 2 |
-| 规划器不可重试地异常退出 | 备选通道 `query_plan.py` exit 2 且错误 JSON `retryable=false`、`next_action_zh` 无可执行动作；主线 `opscli query plan` 无独立 `retryable` 标记，按上一行「一体化入口自身报错」同一判据处置 |
+| 一体化入口自身报错 | `opscli query flow` 返回 `success=false`（`error.code`/`error.message`）或非零退出码，原样重跑一次仍报同一错误（网络/代理类错误如 `ProxyError`、超时可再多重跑一次；未登录/令牌无效等登录类错误按「纠错与反馈」的未登录边界处置，不计入） |
 | 命令窗口连续超时 | 同一请求原样重跑后仍在 30 秒窗口内无返回，累计 3 次 |
-| 两条执行通道均无法启动 | 主线 `opscli` 命令缺失、无法执行或依赖导入失败，**且**备选通道无 `python3`、Skill 脚本缺失或依赖导入失败——两条通道都无法启动才降级；仅主线无法启动时先转备选通道 `python3 scripts/query_flow.py`，不直接降级 |
+| opscli 命令无法启动 | `opscli` 命令缺失、无法执行或依赖导入失败（命令级环境异常）。此时降级层级中依赖 `opscli` 的 L1~L3 同样不可用，直接进入 L4：停止取数并向用户说明 opscli 安装/PATH 异常 |
 
 **不构成降级理由**：0 行结果、用户取消、预期内的未登录（按「纠错与反馈」处置）、主观觉得规划器不合适、想省一次工具调用。降级路径的最终回答必须说明本次取数走的是降级路径以及原因。
 
@@ -187,30 +175,19 @@ MCP-only（无本地 shell）、复杂审计或用户明确要求完整披露证
 | --- | --- | --- |
 | L1 | `execution_ref.fallback_catalog` 有 dimensions/metrics | 只用该目录里的 `table_id`、`dataset_alias`、`field_name` 构造查询；澄清点按 `clarification_messages_zh` 向用户提问 |
 | L2a | 目录为空或选表失败 | 跑 `opscli query intent -q "<用户原文>"`（远端实时意图目录，不依赖本地快照）；`matched=true` 按 `selected` 构造查询并在执行时带 `--intent-code <intent_code> --selection-source intent_route --match-record-id <match_record_id>`；`ask_user_question_required=true` 用 `AskUserQuestion` 让用户在 candidates 里选 |
-| L2b | `query intent` 不可用、报错或 `fallback_required=true` | 跑 `python3 scripts/local_fallback.py "<用户原文>"` 拿本地候选，按其 `next_action_zh` 处置 |
-| L3 | `data_state` 为 `placeholder`/`empty`，或目录不存在 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
+| L2b | `query intent` 不可用、报错或 `fallback_required=true` | 跑 `opscli query metadata --pretty`（远端优先，失败自动回退本地缓存）取当前账号数据集卡片（中文名称在卡片的 `description`/`remarks` 字段，`dataset_name` 是英文技术名不用于选表），只按中文名称/说明选表；候选不唯一时用 `AskUserQuestion` 让用户选，不得默认取第一个 |
+| L3 | `data_state=missing`（元数据未就绪），或 `execution_ref.fallback_catalog` 为空 | 执行返回的 `recovery_command` 刷新元数据后重跑；**此前不得构造任何查询** |
 | L4 | 上述都失败 | 停止取数，如实告知用户，按 `references/feedback-guide.md` 提交一次反馈 |
 
-降级态下前述「禁止本地探索」的限制放宽为：**允许**读 `data/*.csv`、`data/dataset_catalog.json` 与运行 `scripts/local_fallback.py`；仍然**禁止** `rg`/`ls`/`find`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
-
-`local_fallback.py` 常用形态：
-
-```bash
-python3 scripts/local_fallback.py "<用户原文>"                                  # 出候选
-python3 scripts/local_fallback.py "<用户原文>" --field 渠道 --field ASIN         # 带点名字段
-python3 scripts/local_fallback.py "<用户原文>" --dataset <alias> --emit-plan /tmp/fb-plan.json
-```
+降级态下前述「禁止本地探索」的限制放宽为：**允许**调用 `opscli query intent`、`opscli query catalog`、`opscli query metadata`（含 `--dataset <alias>` 取字段清单）；仍然**禁止** `rg`/`ls`/`find`、读 `data/`、读脚本源码、生成临时查询脚本。降级路径额外预算 3 次工具调用。
 
 拿到候选后：
 
-1. `status=clarify_required` → 用 `AskUserQuestion` 让用户在候选里选，**不要默认取第一个**
-2. `status=ready` → 两条执行通道并列可选，按环境选一条：
-   - 带 `--emit-plan` 产出 plan，再走 `python3 scripts/run_query.py --plan-file <plan> --json '<payload>'`：保留执行器字段校验闸，payload 里出现目录之外的字段会被直接拒绝；
-   - 直连 `opscli query simple`：不经执行器校验，适用于 `run_query.py` 也跑不起来的环境。此时字段仍只能取自候选目录，且必须在回答中说明本次查询未经执行器字段校验
-3. 候选里的 `hard_constraints` / `avoid_when` 必须遵守（如库存快照字段只能用于明细表），`clarify_when` 命中时先问用户
-4. 候选里的 `uncertified_hints_zh` 是**未经人工审核的业务约束提示**（意图目录的业务约束尚未经人工复核，一律落在这个键里而不是 `hard_constraints`）。处置方式与 `hard_constraints` 不同：**必须先向用户复述该条提示并确认，再决定是否套用**，不得当作已确认口径静默应用，也不得因为它不是 `hard_constraints` 就忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
-5. `filter_components` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
-6. `query intent` 候选里的 `intent_constraints.hard_constraints` / `avoid_when` / `clarify_when` 处置口径与 `local_fallback` 的 `uncertified_hints_zh` 相同：先向用户复述确认再套用
+1. 候选不唯一（`ask_user_question_required=true`，或多张数据集卡片都合理）→ 用 `AskUserQuestion` 让用户选，**不要默认取第一个**
+2. 选定数据集后跑 `opscli query metadata --dataset <alias> --pretty` 取字段清单，只用其中逐字存在的 `field_name` 构造 `opscli query simple --table-id <table_id> --payload payload.json --run` 参数（形态见 `references/simple-query-guide.md`）；报「字段不存在」时回到该清单重新核对，禁止换名盲试
+3. 降级路径没有内核的完整性校验、排序生效校验和自动分页补齐：必须在回答中说明本次取数走的是降级路径及原因，TopN 结论不得基于未经校验的排序，`limit` 要显式传足并按返回的 `meta.rowCount`/`meta.totalCount` 披露截断
+4. `query intent` 候选里的 `intent_constraints.hard_constraints` / `avoid_when` / `clarify_when` 是**未经人工审核的业务约束提示**：必须先向用户复述该条提示并确认，再决定是否套用，不得当作已确认口径静默应用，也不得忽略——被降级的往往正是防错数的护栏（如「总库存、海外仓库存属于库存快照字段，只能用于明细表或无聚合过滤条件」「必须选择报告周期」）
+5. `select_columns` 中字段的筛选值，必须先查 `component_dataset_alias` 组件表枚举当前账号授权原值，完整等值命中后才写入 `filters`；枚举不到就停止，**不得放大为全范围查询**
 
 ## 按需参考
 

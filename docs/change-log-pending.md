@@ -9378,3 +9378,109 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除新增脚本及对应输出目录，并移除本条变更记录。
 
 ---
+## 2026-09-07 tests - 测试与回归脚本对齐"规划器内核唯一"现状
+
+**变更原因**：ops-dataset-query Skill 的本地规划器脚本（query_plan.py / agent_query_planner.py / dataset_guidance.py / time_scope.py / typed_schema_linking.py / scoped_dataset_reader.py / enum_cache.py / run_query.py / query_flow.py / local_fallback.py 等）及其 data 静态资源已被移除，规划器改为只使用内核 `opscli/query/services/planner/`。tests/skills 下 20 余个测试文件与 3 个回归脚本仍 import 这些已删除模块，`tests/skills/conftest.py` 的 autouse fixture 也在 import `enum_cache`，导致整个 tests/skills 目录全部 ERROR、`tests/query/planner/test_flow_parity.py` 收集失败。
+
+**改动点**：
+- `tests/skills/conftest.py`：删除模板 scripts 目录的 sys.path 注入与 `_isolate_skill_enum_cache` autouse fixture，改为空配置 + 历史说明（枚举缓存隔离改由内核用例的 `base_dir=tmp_path` 完成）。
+- 双主线对拍类（只保留内核半边，迁移到 `tests/query/planner/`，文件名不变）：`test_component_filter_resolution.py`（部门一节因与 `test_query_plan.py` 重复而删除）、`test_enum_cache.py`（删除 Skill 侧 subprocess 枚举降级用例）、`test_order_and_limit.py`（删除 Skill 合同层两条，evidence_contract 两条改内核导入）、`test_unauthorized_filter_injection.py`、`test_slot_coverage.py`、`test_time_scope_unbounded.py`（端到端两条数据源改 `MetadataAdapter`）。
+- 仅测 Skill 规划器/指导模块类：`test_cross_field_value_ambiguity.py`、`test_date_literal_not_component_value.py`、`test_multi_value_component_filter.py`、`test_labeled_value_enumeration.py`、`test_negated_field_labels.py`、`test_value_fragment_slots.py` 改内核导入后迁入 `tests/query/planner/`（意图规则改 `_load_rules_resource()`）；`test_dataset_guidance_default_filters.py` 与 `test_scoped_reader_duplicate_fields.py` 的内核可复现用例并入 `tests/query/planner/test_guidance.py`；`test_scoped_reader_filter_config.py` 的 `parse_filter_config` 用例并入 `tests/query/planner/test_metadata_adapter.py`；`test_dataset_guidance_dup_selfheal.py` 因与 `test_guidance.py` 完全重复而删除；`test_dataset_query_planner.py`（2323 行）只保留内核仍实现且未被覆盖的 13 条（图表 UUID 路由、组件筛选匹配策略、默认条件投影、授权字段作用域、显式字段去重、两条粒度披露边界、币种识别），其余 run_query/CLI main()/data_dir 回退/自动升级/与内核用例重复的部分删除。
+- Skill 专属机制（内核无对应物）删除：`test_local_fallback.py`、`test_run_query_server_paging.py`、`test_run_query_currency.py`、`test_run_query_default_filters.py`、`test_run_query_intent_attribution.py`、`test_routing_eval.py`、`test_bom_tolerant_reads.py`、`test_dataset_query_flow.py`（import 已删除的 query_flow）及 `tests/skills/data/` 全目录。
+- `tests/query/planner/`：删除 `test_flow_parity.py` 与 `golden/`；`test_pure_units.py` 删除依赖模板 data 目录的静态资源对拍用例；`test_evidence_contract.py` 只把"从 skill 版取真值"的措辞改为历史说明，断言不变。
+- `scripts/regression/`：删除 `planner_parity.py`；`planner_enum_snapshot.py` 与 `planner_collision_scan.py` 改用内核模块（枚举经 `entry._make_callbacks` 注入的 enum_fn，意图规则经 `importlib.resources` 读内核 resources），CSV 仍从已安装 Skill 数据目录读取，docstring 同步更新。
+
+**验证结果**：
+- `.venv/bin/python -m pytest tests/query/planner -q -p no:cacheprovider` → `364 passed`。
+- `.venv/bin/python -m pytest tests/skills tests/query tests/mcp -q -p no:cacheprovider --ignore=tests/skills/test_packaging.py --ignore=tests/mcp/test_shopify_tools.py` → `21 failed, 1240 passed`，21 条全部为与本次无关的预存失败（tests/query 4 条 respx URL 不匹配、tests/mcp 4 条工具注册契约、tests/skills 13 条模板内容/环境断言）。
+- `.venv/bin/python -m py_compile` 两个回归脚本通过；`planner_collision_scan.py` 用离线假快照实跑通过（exit 0，判据全部命中内核实现）；`planner_enum_snapshot.py --help` 与内核符号签名核对通过。
+
+**影响范围**：只影响测试与回归脚本，不改任何生产代码。tests/skills 由"全目录 ERROR"恢复为可运行；规划器行为覆盖集中到 `tests/query/planner/`（用例数从 153 条增至 364 条，全部通过）。
+
+**回滚方式**：`git checkout -- tests/ scripts/regression/`（本次改动均为工作区未提交变更）。
+
+## 2026-09-07 ops-dataset-query Skill - 规划器彻底切换为内核版，删除 Skill 本地规划器与旧版辅助脚本（v1.4.0）
+
+**变更原因**：`opscli/query/services/planner/` 已完整实现内核版规划器（CLI `opscli query plan/flow`、MCP `query_plan/query_flow`），而 release 分支上的 Skill 模板是「内核版 SKILL.md（v1.3.25）+ 旧版 references + 缺依赖的 4 个本地规划器脚本」的混合体：`scripts/query_plan.py` 依赖的 `core/enum_cache/plan_integrity/scoped_dataset_reader/time_scope/typed_schema_linking` 均不存在，`tests/skills/conftest.py` 又 import 已删的 `enum_cache`，导致 Skill 本地规划器不可运行、tests/skills 全目录不可用。按用户要求把 Skill 完全切换为只使用内核规划器，并清理无用脚本与文档。
+
+**改动点**：
+- 模板基线：以 `e777194f^`（v1.3.25 完整内核版树）恢复 QUERY_SPEC.md、references/{cli,mcp,result-analysis,chart-excel-guide,rules,ask-user-question-guide,feedback-guide,simple-query-guide}.md、data/README-字段使用.md、scripts/{core,chart_data_loader,evidence_contract}.py。
+- 删除 Skill 本地规划器及其配套：scripts/{query_plan,agent_query_planner,dataset_guidance,field_semantics}.py；删除旧版辅助脚本 scripts/{query,route_intent,search,updater,updater_mcp}.py；删除仅供旧脚本消费的数据 data/{dataset_profiles,dataset_relationships,field_semantic_index,intent_taxonomy,routing_eval_cases}.yml、data/query_plan.schema.json；删除旧版 references/cli-simple-guide.md。保留图表映射/异常检测/Excel 导出脚本与 evidence_contract.py（消费端能力，非规划器）。
+- SKILL.md：删除「备选执行通道 python3 scripts/query_flow.py」整段与所有 `query_plan.py`/`run_query.py`/`local_fallback.py` 引用；降级路径 L2b 改为 `opscli query metadata` 数据集卡片选表，降级态放宽项改为只允许 `opscli query intent/catalog/metadata`；触发表删除「备选通道 exit 2」行，新增「opscli 命令无法启动 → 直接 L4」；平台枚举未完成的处置改为"恢复登录态/等待组件服务后原样重跑"（内核 CLI 无 `--authorized-platform-value`）；MCP-only 改为优先 `query_flow`；版本 1.3.25 → 1.4.0。
+- references/cli.md：手动构造路线改为 `opscli query plan` → `opscli query simple`，删除 `--output-mode internal`、`run_query.py` 绑定执行、exit 2 错误 JSON 等旧执行器描述；L2b 指向 `opscli query metadata`。
+- references/simple-query-guide.md：币种来源/执行改为内核规划器与 `opscli query flow`；orderBy 形态改为 `{"field","desc":bool}`（与内核模板、`--order-by`、MCP `query_flow` 一致，待 D 审计实证）；排序生效校验与默认条件披露改为内核执行器口径。
+- references/mcp.md：新增「规划器入口（优先）」一节（`query_flow`/`query_plan`，需传输层已验证账号）；结果分析优先用内嵌 `evidence_contract`。
+- references/rules.md、ask-user-question-guide.md、QUERY_SPEC.md：回补 release 分支 9 月 4 日的币种规范（币种是换算参数不是字段；铁律 15；`global_currency` 参数行与专节；歧义表与自检清单）。
+- scripts/core.py：删除仅服务已删执行器的孤儿函数 `force_utf8_stdio`、`read_text_auto`。
+- 其他文档：`docs/guide/认证模块使用指南.md` 旧 `dataset-fields` 脚本章节改为内核命令；`opscli/skills/templates/ops-cli-view-data/SKILL.md` 去掉对 `ops-dataset-query/scripts/query.py` 的依赖描述；`docs/analysis/规划器内核化对拍报告.md`、`docs/analysis/ops-dataset-query双主线功能迁移审计与币种修复报告.md` 顶部加退役说明。
+- 新增 `tests/skills/test_dataset_query_template.py`：模板不变量守卫（frontmatter 与 VERSION.json 版本一致且 data_state=placeholder、scripts/ 只含消费端脚本白名单、全部文档无旧脚本/旧数据/旧参数引用、主线为内核 `opscli query flow`）。
+- 安装：`opscli skills install ops-dataset-query --force --runtime all`（在 $HOME 下执行以探测全局运行时目录）→ 中央目录 `~/.opscli/skills/ops-dataset-query` 已更新，真实元数据 6 个文件按占位符保护逻辑保留，各运行时目录为指向中央目录的软链。
+
+**验证结果**：见本条目下方「测试与验收」条目（tests 清理由子代理执行）；真实取数：`opscli query plan "查询各平台销售额 近7天"` → planned（即时综合数据集/平台/销售额/2026-09-01~09-07）；`opscli query flow ... --result-dir` → planned，2 行，currency=CNY，full_result_file 落盘，evidence_contract 内嵌。多维度验收由 4 个子代理并行执行（基础/时间、筛选/枚举/TopN/币种、图表/降级/MCP/脚本、文档一致性审计）。
+
+**影响范围**：ops-dataset-query Skill 不再有任何本地规划/执行脚本，取数只能经 `opscli query flow/plan`（CLI）或 `query_flow/query_plan`（MCP）；依赖 `scripts/query.py`/`search.py`/`route_intent.py` 的外部用法失效；chart/Excel 脚本不受影响。内核代码（opscli/query、opscli/mcp）未改动。
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query docs opscli/skills/templates/ops-cli-view-data && git clean -fd opscli/skills/templates/ops-dataset-query`，然后重新执行 `opscli skills install ops-dataset-query --force --runtime all` 恢复旧安装。
+---
+
+## 2026-09-07 ops-dataset-query / 规划器内核 - 多代理验收发现的文档矛盾与内核缺陷修复
+
+**变更原因**：4 个验收子代理（基础/时间、筛选/枚举/币种、图表/降级/MCP/脚本、文档一致性审计）对 v1.4.0 做真实取数验收，发现：① Skill 文档描述了内核不存在的 `refresh_in_progress`「前台等 8 秒/后台续跑」机制，且「禁止自行升级」与「执行 recovery_command（即 skills upgrade）」自相矛盾；② 内核 `run_plan` 在权限枚举命中本地缓存降级后向 `model_view` 追加披露，但未重挂 `plan_integrity` 摘要，导致多币种 `run_flow` 报「多币种规划完整性校验失败」（代理抖动触发缓存降级后必现）；③ 内核 `platform_enum_return_hint_zh` 指向不存在的 CLI 参数 `--authorized-platform-value`；④ `large_result_warning_zh` 文案在 MCP 路径下指导使用 CLI 专有参数；⑤ 文档若干合同键/取值与内核不符（`data_state` 取值、`fallback_level` 取值、`selection_source` 出现条件、`verbose_name` vs `label_zh`、多币种顶层结构、`report_component_enum_defect` 未文档化、白名单外币种被静默忽略、chart-excel-guide 仍称普通查询走 simple、缺 `preferences`/`chart-doc` 说明）。
+
+**改动点**：
+- `opscli/query/services/planner/entry.py`：`run_plan` 追加缓存降级披露后，若合同已挂 `plan_integrity` 则重挂摘要；`large_result_warning_zh` 文案改为同时给出 CLI（`--result-dir`）与 MCP（缩小 limit/拆分）处置。
+- `opscli/query/services/planner/query_plan.py`：`platform_enum_return_hint_zh` 改为「内核自动枚举回灌，不能手工回传平台值；待枚举时恢复环境后原样重跑」。
+- `opscli/mcp/tools/query.py`：`query_flow` docstring 的 blocked 处置改为 `refresh_failed`/`report_component_enum_defect` 语义；`query_spec_must_read` docstring 铁律条数 14→15。
+- `tests/query/planner/test_enum_cache.py`：`test_run_plan_attaches_stale_cache_disclosure` 改为 planned 合同并断言 `plan_integrity.verify` 通过（先红后绿）；`tests/query/planner/test_entry.py` 两处告警文案断言同步。
+- Skill 模板文档：SKILL.md（frontmatter、命令窗口段、处置 1/2/6、结果分析字段称呼、证据合同引用改指向 chart-excel-guide、白名单外币种处置、触发表网络类错误重跑、L3 判据、fallback_level 取值、L2b 中文名字段、多币种顶层结构、full_result_file 出现条件）、references/cli.md（手动构造段刷新语义、结果与失败、blocked 取值补 `report_component_enum_defect`、返回体多币种/澄清态说明、新增 4.1 `opscli query preferences`、L2a 归属）、references/chart-excel-guide.md（普通查询走 flow、补 `chart-doc`、新增「证据合同（图表裸结果）」节）、QUERY_SPEC.md（4.4 重写为 `refresh_failed` 语义、4.3 truncated 措辞、错误速查表两行）、references/rules.md（`label_zh` 注记）。
+
+**验证结果**：`pytest tests/query/planner tests/query/test_planner_cli.py tests/mcp/test_query_planner_tools.py tests/skills/test_dataset_query_template.py` 全部通过；模板残留扫描（refresh_in_progress/前台最多等/后台续跑/sleep 25/已删脚本名）0 命中；`opscli skills install ops-dataset-query --force --runtime all` 重装后模板与中央目录除 data/ 外逐字一致；真实取数复验见本条目下方汇总。
+
+**影响范围**：规划器合同文案与 MCP docstring 变化（无字段增删）；多币种流程在枚举缓存降级场景下由"必失败"变为可执行；Skill 文档与内核行为对齐。验收发现但未在本次修复的内核/后端问题（已在会话汇总中列出）：快照指标未被后端标记为 `snapshot_metric=1` 导致跨日 SUM、「按日趋势/每天」未解析出日期维度、服务端缓存重放时 `meta.currency` 丢失、「亚马逊SC 近7天销售额」误选流量转化率表且 metrics 为空仍 planned、「加拿大元」被当作国家筛选、组件筛选澄清不下发候选值、白名单外币种静默忽略、`query chart --run` 对不存在 UUID 返回空成功、`evidence_contract.required_evidence` 对真实返回恒为空。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/entry.py opscli/query/services/planner/query_plan.py opscli/mcp/tools/query.py tests/query/planner/test_enum_cache.py tests/query/planner/test_entry.py opscli/skills/templates/ops-dataset-query`，再重新执行 `opscli skills install ops-dataset-query --force --runtime all`。
+---
+
+## 2026-09-07 规划器内核 evidence_contract - 适配真实查询返回形状（行证据/error 空值/驼峰行数/币种）
+
+**变更原因**：`build_evidence_contract` 由 `entry._execute_planned_contract` 用 `QueryManager.run_query_template()` 的真实返回体调用，真实形状是 `{"success", "data": [行...], "meta": {"rowCount","totalCount","currency",...}, "error": null}`，而实现是从 Skill 版原样迁入的、只认造出来的形状，导致验收实测四类恒定缺陷：① `required_evidence` 恒为 `[]`（`_is_required_evidence` 只认 PRIORITY_MARKERS 或 `[-1]` 后缀，结果行路径 `data[0].price` 不命中，证据合同对真实取数完全失效）；② `missing_paths` 恒为 `["error"]`（`error: null` 表示"没有错误"却被当成缺失证据，进而恒定误加"空值不等于零"披露与"请求周期为零"禁止项）；③ 零行判定读 `row_count`/`total_count` 下划线路径，真实 meta 是驼峰 `rowCount`/`totalCount`，判定失效；④ 币种未声明只认 `currency_metadata_status`（真实返回没有该键），`meta.currency` 缺失时不披露、有值时也不作为口径证据。
+
+**改动点**（保持函数签名与输出结构不变，仍是 `evidence_contract_v1`）：
+- `opscli/query/services/planner/evidence_contract.py`
+  - 新增 `_row_prefix`/`_split_result_rows`：把对象列表元素（`data[i].*`、`rows[i].*`、`data.rows[i].*`、`data.result.data[i].*` 等）识别为结果行证据，按行序 + 行内列序分组；取路径中第一个 `[数字]` 下标为行边界，行内再嵌列表仍归属最外层那一行。
+  - 新增 `_collect_evidence`：按 `max_evidence`（默认 24）预算组装，口径为"逐行完整、行数截断"——预算放不下一整行就停在该行之前，保证被引用的行都完整；首行列数即超预算时至少保留该行前 N 列以免行证据整体为空（此时 `evidence_rows_covered=0` 如实标记）。截断时追加 `evidence_truncated`/`evidence_rows_covered`/`evidence_rows_total` 三个新键（未截断不追加，不污染既有输出结构）。
+  - 新增 `_is_missing_evidence`：`missing_paths` 排除末段为 `error`/`errors` 且取值为空的路径，其它空值仍算缺失。
+  - 新增 `_count_value` + PRIORITY_MARKERS 增补 `rowcount`/`totalcount`：末段去下划线转小写后比较，`rowCount`/`totalCount` 与 `row_count`/`total_count` 在零行判定与核心证据筛选上一视同仁。
+  - 新增 `_currency_evidence`：整个返回体找不到任何末段为 `currency` 的非空字符串时追加 `currency_not_declared` 披露（与旧的 `currency_metadata_status` 判定取或）；有值时把该路径置顶纳入 `required_evidence`，不占 `max_evidence` 预算（币种是解释所有数值的口径前提），并按 path 去重避免与行证据重复。
+  - `MAX_OUTPUT_BYTES` 超限处置由"直接抛 `RuntimeError`"改为"逐次把行证据行数减半重组，减到 1 行（或本来无行证据）仍超限才抛错"，错误信息 `evidence_contract_output_too_large` 不变。
+  - 模块 docstring 去掉已失效的"与源实现逐行一致、未做算法改动"表述，改为列出上述四类真实形状修正。
+- `tests/query/planner/test_evidence_contract_real_shape.py`（新增 25 条）：用真实返回形状钉死四类缺陷 + 行证据截断口径 + 输出体积兜底。
+- `tests/query/planner/test_evidence_contract.py`：`test_latest_available_period_disclosure_without_forbidden_inference` 的 `required_disclosure_codes` 期望值补 `currency_not_declared`，并在 docstring 里写明修正原因（币种判定口径变化所致，非本用例守护的 `latest_available_period` 语义变化）；其余断言全部保持不变。
+
+**验证结果**：
+- 先红后绿：新测试文件初次运行 `21 failed, 4 passed`，实现后全绿。
+- `.venv/bin/python -m pytest tests/query/planner -q -p no:cacheprovider --ignore=tests/query/planner/test_acceptance_defects.py` → `389 passed`（改动前基线 364 passed，新增 25 条）。`test_acceptance_defects.py` 为并行会话正在 TDD 的未跟踪文件，不引用 evidence_contract，其失败与本次无关。
+- `.venv/bin/python -m pytest tests/query tests/mcp -q -p no:cacheprovider --ignore=tests/query/planner/test_acceptance_defects.py --ignore=tests/mcp/test_shopify_tools.py` → `5 failed, 1018 passed`，5 条均为已记录的预存失败（tests/query 4 条 respx URL 不匹配、tests/mcp 1 条工具注册契约），与 evidence_contract 无关。
+- 真实形状实跑：两行返回产出 7 条 required_evidence（`meta.currency` 置顶 + `meta.rowCount`/`meta.totalCount` + 4 条行证据），`missing_paths == []`，披露列表为空（修复前为 0 条证据 + `["error"]` 缺失 + 误报"空值不等于零"）。
+
+**影响范围**：只影响 `evidence_contract` 输出内容（字段无删除，新增 3 个仅截断时出现的键）。下游 `entry._execute_planned_contract` 内嵌的 `evidence_contract` 从"对真实取数恒为空证据 + 恒定误披露"变为可用；`tests/query/planner/test_entry.py` 与 `test_order_and_limit.py` 中依赖该函数的用例断言均未受影响。旁路直连（MCP/图表裸结果）场景下，不含 currency 的返回体现在会多一条 `currency_not_declared` 披露——这是修复后的正确语义。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/evidence_contract.py tests/query/planner/test_evidence_contract.py docs/change-log-pending.md && rm -f tests/query/planner/test_evidence_contract_real_shape.py`
+---
+
+## 2026-09-07 query planner - 修复验收暴露的五类规划缺陷（选表指标偏好 / 空指标门禁 / 币种词消费 / 趋势加日期维度 / 组件澄清候选）
+
+**变更原因**：多代理真实验收发现：①「亚马逊SC 近7天销售额」被平台槽位+说明文本推成「亚马逊SC设备流量转化率」表，该表没有「销售额」，规划器 metrics 为空仍 planned 并返回人名列表；②「分别用人民币和加拿大元」的「加拿大」被国家组件反查当成筛选值注入，范围静默收窄 86%；③「按日趋势 / 每天的 / 趋势」解析不出日期维度，返回单行合计；④白名单外币种（港币）被静默忽略；⑤组件筛选澄清不带原因码也不下发候选值，Agent 只能让用户猜。均已用缓存的真实 QA 元数据离线复现（scratchpad/repro_planner.py）。
+
+**改动点**：
+- `opscli/query/services/planner/agent_query_planner.py`：`_semantic_rank` 首键增加「点名指标覆盖」惩罚（`_covers_requested_metrics`，`_score_profile`/两处调用透传 `metric_terms`）；`plan_query` 阶段 3 末尾新增 `prefer_default`——首选候选拿不出点名指标的精确中文证据、默认即时综合数据集拿得出时，由默认数据集承接（`_with_default_dataset_recommendation` 新增 `override_existing`）。
+- `opscli/query/services/planner/query_plan.py`：新增 `_currency_keyword_spans` / `_UNSUPPORTED_CURRENCY_PATTERNS` / `_detect_unsupported_currencies` / `_currency_literals_consumed`，`_resolve_component_filters` 把币种关键词并入 consumed；`_block_component_filter` 新增 `reason_code` / `candidates` / `label_zh`，三处澄清分别写入 `component_filter_unauthorized` / `component_filter_value_unmatched` / `component_filter_field_ambiguous` 与 `model_view.component_candidates_zh`（上限 `MAX_COMPONENT_CANDIDATES=30`）；投影层新增 `_daily_grain_requested` / `_is_time_grain_dimension` / `_requested_metric_terms` / `_drop_dimensions_swallowed_by_metric_terms`，在 `execution_path_ready` 之后依次做「趋势/按日补主日期维度（含 required_disclosures_zh 披露）」「点名指标为空转 `metric_not_in_dataset` 澄清并回填 unknown_fields → field_suggestions_zh」「白名单外币种转 `unsupported_currency` 澄清并回显 `model_view.unsupported_currencies`」；`CLARIFICATION_MESSAGES` 补 5 条文案。
+- 测试：新增 `tests/query/planner/test_acceptance_defects.py`（9 条，先红后绿）；`test_query_plan.py` 守卫用例的合同层澄清码集合补 5 个。
+- Skill 文档：SKILL.md（处置 2 补 `component_candidates_zh` / `unsupported_currencies`、新增趋势/按日条款、白名单外币种改为澄清语义）、references/cli.md（§2 补三类组件澄清码与候选键）、references/ask-user-question-guide.md（筛选枚举改为使用 `component_candidates_zh`）；已重新 `opscli skills install ops-dataset-query --force --runtime all`。
+
+**验证结果**：`pytest tests/query/planner` 413 passed（含新增 9 条与证据合同 25 条）；`tests/query tests/mcp/test_query_planner_tools.py tests/mcp/test_query_tools.py` 仅剩 4 条预存 respx 失败；真实元数据离线复现 7 条请求全部符合预期；QA 实跑：多币种两模板均无国家筛选且各返回 1 行、「按日趋势」返回 30 行日期序列、「九部」澄清带部门候选、「港币」澄清带 HKD；「亚马逊SC」现被 `block_platform_scope_not_authorized` 阻断属环境变化（当前账号平台枚举此刻只有 Temu，裸「亚马逊」同样阻断），阻断口径正确。
+
+**影响范围**：规划合同新增键 `component_candidates_zh` / `unsupported_currencies` 与 5 个澄清码（只增不删）；点名指标缺失的请求由 planned 变为澄清；趋势/按日请求多一个日期维度；含币种词的请求不再误注入国家筛选。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/agent_query_planner.py opscli/query/services/planner/query_plan.py tests/query/planner/test_query_plan.py opscli/skills/templates/ops-dataset-query && rm tests/query/planner/test_acceptance_defects.py`，再重新安装 Skill。
+---
