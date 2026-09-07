@@ -187,6 +187,28 @@ class FakeService:
             ][:limit],
         }
 
+    async def feature_usage_today(self, *, limit: int):
+        """返回今日 MCP 功能调用 HTTP 契约夹具。"""
+        return {
+            "day": "20260805",
+            "timezone": "Asia/Shanghai",
+            "source": {"ready": True, "error": None},
+            "usage": [
+                {
+                    "identity": "a***@example.com",
+                    "service": "external_pnd",
+                    "service_label": "鹰眼",
+                    "operation": "ext_pnd_execute_readonly_sql",
+                    "runtime_role": "executor",
+                    "calls": 5,
+                    "avg_duration_ms": 120,
+                    "max_duration_ms": 240,
+                    "last_called_at": "2026-08-05T04:20:00+00:00",
+                    "authorization": "must-not-leak",
+                }
+            ][:limit],
+        }
+
 
 def _client(*, ready: bool = True) -> TestClient:
     """创建不启动后台轮询的隔离 ASGI 客户端。"""
@@ -579,12 +601,14 @@ def test_list_apis_enforce_bounded_allowlist_filters() -> None:
 
 
 def test_accounts_and_today_usage_endpoints_are_bounded_and_redacted() -> None:
-    """账号与今日用量端点应保持有界，并剔除纵深防御敏感字段。"""
+    """账号、额度与功能调用端点应保持有界，并剔除敏感字段。"""
     with _client() as client:
         accounts = client.get("/api/v1/accounts?limit=1")
         usage = client.get("/api/v1/usage/today?limit=1")
+        feature_usage = client.get("/api/v1/usage/tools/today?limit=1")
         bad_limit = client.get("/api/v1/accounts?limit=501")
         unknown = client.get("/api/v1/usage/today?service=seller_sprite")
+        feature_unknown = client.get("/api/v1/usage/tools/today?role=executor")
 
     assert accounts.status_code == 200
     assert accounts.json()["accounts"][0]["identity"] == "abcdef123456"
@@ -592,9 +616,13 @@ def test_accounts_and_today_usage_endpoints_are_bounded_and_redacted() -> None:
     assert usage.status_code == 200
     assert usage.json()["usage"][0]["total"] == 9
     assert "api_key" not in usage.text
+    assert feature_usage.status_code == 200
+    assert feature_usage.json()["usage"][0]["service_label"] == "鹰眼"
+    assert "authorization" not in feature_usage.text
     assert bad_limit.status_code == 400
     assert bad_limit.json()["error"]["code"] == "invalid_query"
     assert unknown.status_code == 400
+    assert feature_unknown.status_code == 400
 
 
 def test_dashboard_exposes_accounts_tab_and_usage_scope_disclaimer() -> None:
@@ -606,6 +634,9 @@ def test_dashboard_exposes_accounts_tab_and_usage_scope_disclaimer() -> None:
     assert 'id="panel-accounts"' in html
     assert "/api/v1/accounts" in html
     assert "/api/v1/usage/today" in html
+    assert "/api/v1/usage/tools/today" in html
+    assert "今日 MCP 功能调用" in html
+    assert "执行与代理转发分行" in html
     assert "配额拒绝" in html
     assert "认证拒绝" in html
     assert "无限额用户" in html

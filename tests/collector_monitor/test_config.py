@@ -14,6 +14,7 @@ from opscli.collector_monitor.config import (
     validate_settings,
 )
 from opscli.collector_monitor.server import build_service
+from opscli.shared.collection_storage.config import MySqlSettings
 
 
 def test_load_settings_uses_safe_defaults(tmp_path: Path) -> None:
@@ -42,6 +43,7 @@ def test_load_settings_uses_safe_defaults(tmp_path: Path) -> None:
         scenario_test_enabled=False,
         account_binding_db_path=tmp_path / "seller_sprite" / "account_bindings.sqlite3",
         quota_db_path=tmp_path / "mcp_quota" / "quota.sqlite3",
+        telemetry_mysql=MySqlSettings(),
     )
 
 
@@ -107,6 +109,24 @@ def test_build_service_wires_read_only_account_sources(tmp_path: Path) -> None:
     assert service.account_repository.queue_db_path == settings.queue_db_path
     assert service.account_repository.binding_db_path == settings.account_binding_db_path
     assert service.account_repository.quota_db_path == settings.quota_db_path
+    assert service.account_repository.telemetry_mysql == settings.telemetry_mysql
+
+
+def test_load_settings_reuses_collection_mysql_for_feature_usage(tmp_path: Path) -> None:
+    """功能调用区应复用统一采集 MySQL，而不是新增一套连接配置。"""
+    settings = load_settings(
+        environ={
+            "OPSCLI_COLLECTION_MYSQL_HOST": "mysql.internal",
+            "OPSCLI_COLLECTION_MYSQL_DATABASE": "polaris_ops_mcp",
+            "OPSCLI_COLLECTION_MYSQL_USER": "monitor_reader",
+            "OPSCLI_COLLECTION_MYSQL_PASSWORD": "secret",
+        },
+        config_dir=tmp_path,
+    )
+
+    assert settings.telemetry_mysql is not None
+    assert settings.telemetry_mysql.configured is True
+    assert settings.telemetry_mysql.user == "monitor_reader"
 
 
 def test_load_settings_auto_uses_bundled_webhook_file(tmp_path: Path) -> None:

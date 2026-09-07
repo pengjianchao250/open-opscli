@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-07 Collector Monitor - 增加 MCP 功能调用记录区
+
+**变更原因**：现有账号页只读取本地额度表，鹰眼等跳过本地 quota 或经中央代理执行的 MCP Tool 无法展示调用次数。
+**改动点**：Collector Monitor 增加统一遥测 MySQL 的只读功能调用汇总，按北京时间当日、用户、服务、Tool 和运行角色分组；`external_pnd` 显示为“鹰眼”，执行与代理转发分行以避免重复计数，并保持邮箱掩码和有界查询。
+**验证结果**：Collector Monitor、PND 代理、统一埋点及 MySQL writer 相关测试共 166 项通过；compileall 与 git diff --check 通过；桌面端和 390px 窄屏页面已用 Playwright 截图核对，无页面级横向溢出，功能调用表可独立横向滚动；当前环境未配置统一遥测 MySQL，实库页面验证为安全降级态。Ruff 在当前环境不可用（program not found）。
+**影响范围**：Collector Monitor 账号页只读统计与统一采集 MySQL 连接；不改变 MCP Tool 执行、额度结算或遥测写入口径。
+**回滚方式**：回退 Collector Monitor 功能调用仓储、API、UI、配置接线、测试及本条记录。
+
+---
+
 ## 2026-09-07 JavaScript SDK - 支持共享实例统一配置 API 地址
 
 **变更原因**：站点完成开发后，本地调试若需要额外创建并替换 `localClient`，会把地址判断扩散到业务模块；API 地址选择应集中在应用入口，业务代码始终使用同一个共享实例。
