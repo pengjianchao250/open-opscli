@@ -132,6 +132,8 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 `result_disclosures`（返回行数、总数、截断、自动补齐、原始 `limit`、币种披露、排序兜底披露等，见 4.3）+
 `evidence_contract`（构建失败时为 `evidence_contract_error`，与合同其余字段同级）。按 `status` 分流：
 
+**多币种返回是另一种形状**：用户明确要求多个币种时，返回体顶层为 `multi_currency: true` + `requested_global_currencies`（请求的币种代码数组）+ `currency_results[]` + `comparison_contract`，**没有**顶层 `result` / `result_disclosures` / `evidence_contract`。每个 `currency_results[i]` 含 `requested_currency`、`returned_currency`、`currency_matches_request` 和 `result`；其中 `result` 是一份**完整的单币种子合同**——它自己的 `result_disclosures` 与 `evidence_contract` 和 `result` 同级，因此**行数据在 `currency_results[i].result.result.data`**（比单币种多一层嵌套，不要少读一层）。`comparison_contract` 给出 `service_queries_complete`、`currency_validation_passed`、`comparison_ready`、`alignment_validation_required` 与 `rules_zh`：必须先按 `rules_zh` 校验各币种实际返回币种、共同维度键与非金额指标一致，才能做金额对比，禁止用汇率补齐。
+
 | status | 含义 | 处置 |
 |--------|------|------|
 | `planned` | 规划完成，`query_flow` 已执行并回传 `result` | 直接分析结果，按 `answer_contract` 组织结论 |
@@ -142,13 +144,20 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
 
 - `model_view`：只含用户可见中文结论。常见键：
   - `dataset_name_zh`、`dimensions`、`metrics`
-  - `time_scope_zh` / `time_resolution_zh` —— **本次日期窗口的唯一来源**
-  - `dataset_candidates_zh`（候选数据集卡片）、`field_suggestions_zh`（近似字段建议）、`pending_confirmations_zh`（待确认项）
+  - `time_scope_zh` / `time_resolution_zh` —— **本次日期窗口的唯一来源**；快照口径被收敛时以「快照口径：最新完整快照日 …」开头（见 4.8）
+  - `clarification_reason_codes`（澄清原因码数组）与 `clarification_messages_zh`（对应中文文案）：**先读 `clarification_reason_codes` 判断澄清类型，再看 `clarification_messages_zh` 取话术**，不要只凭文案反推类型
+  - `dataset_candidates_zh`（候选数据集卡片）、`pending_confirmations_zh`（待确认项）
+  - `field_suggestions_zh`（近似字段建议，形态 `[{requested, candidates_zh[]}]`）与 `unknown_requested_fields`（用户点名却不在当前数据集的字段）：`metric_not_in_dataset` / `dimension_not_in_dataset` 时下发
+  - `field_alias_mappings_zh`（形态 `[{requested, field_zh, field_name}]`）：用户用稳定别名点名（订单量/单量 → 销量，销售金额 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实取数据集口径字段时下发；结论须以 `field_zh` 命名并说明该对应关系
+  - `component_candidates_zh`（组件当前账号可见取值，形态 `[{field_zh, values_zh[], total}]`）：只在 `component_filter_value_unmatched` / `component_filter_unauthorized` 时下发；`component_filter_field_ambiguous` **不下发**该键，候选字段名写在 `clarification_messages_zh` 文案内
+  - `unsupported_currencies`（识别到的白名单外币种代码）：`unsupported_currency` 时下发
   - `default_dataset_recommendation_zh`：`auto_selected=true` 时直接继续，不再提问；`confirmation_required=true` 时才询问是否采用推荐数据集
-  - `platform_semantic_members` / `platform_effective_members` / `platform_scope_disclosures_zh`
+  - `platform_semantic_members`（**一律是展示名**：亚马逊SC / 亚马逊VC / TikTok / Walmart / Wayfair / Temu / Shopify / SHEIN / 山姆，不是内部键；内部枚举名在 `execution_ref.platform_semantic_keys`）/ `platform_effective_members` / `platform_scope_disclosures_zh` / `platform_filter_state`
   - `default_filters_zh`（服务端默认条件，必须披露）、`component_filter_disclosures_zh`
+  - `fallback_level`（降级起点，只有 `L1_contract_catalog` / `L3_metadata_refresh` 两个取值）、`no_guess_policy_zh`（降级态禁止猜字段的口径原文）、`recovery_state`（如 `refresh_failed`）与 `recovery_command` / `recovery_hint_zh`
+- **澄清码清单**（`clarification_reason_codes` 的全部取值）：`dataset_constraints`、`query`、`business_scope`、`dataset_selection`、`business_dataset`、`dataset_not_available_in_current_scope`、`incompatible_scope`、`dataset_identity`、`platform_scope`、`ad_type`、`grain`、`field_identity`、`time_scope_confirmation`、`recommended_fields_confirmation`、`default_dataset_confirmation`、`time_comparison_unsupported`、`metric_not_in_dataset`、`dimension_not_in_dataset`、`unsupported_currency`、`component_filter_value_unmatched`、`component_filter_unauthorized`、`component_filter_field_ambiguous`、`snapshot_metric_window_conflict`。
 - `answer_contract`：最终回答必须覆盖 `required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。`technical_identifiers_user_visible=false` 时不得向用户展示 alias、table_id 等技术标识。
-- `execution_ref`：仅供构造使用，**禁止**作为业务判断理由或展示给用户。`selection_source=recommended` 的字段是系统推荐（用户未点名），未经说明不得直接采用。
+- `execution_ref`：仅供构造使用，**禁止**作为业务判断理由或展示给用户。`selection_source=recommended` 的字段是系统推荐（用户未点名），未经说明不得直接采用。常见键还有 `query_template`（`status=planned` 时的完整性绑定模板）、`time_scope`、`snapshot_policy`（快照窗口收敛口径，见 4.8）、`resolved_platform_values` / `platform_semantic_keys`、`filter_components` / `filter_value_match_policy`、`default_filters`、`fallback_catalog`。
 
 ### 4.3 结果被截断时
 
@@ -167,7 +176,8 @@ Excel。
 `result_disclosures` 还按场景包含以下键（均已内核化，不再是延后能力）：
 
 - `currency` / `currency_disclosure_zh`：本次实际生效币种，取自 `meta.currency`；有值必须在结论首句、结果表头写明，为 `null` 时只能声明"未声明"，禁止推断；与请求 `globalCurrency` 不一致时以此为准并披露差异（详见第十五章币种口径）。
-- `order_fallback` / `order_disclosure_zh`：仅当传了 `order_by` 且检测到服务端排序未生效（已知缺陷）时出现 `order_fallback`，说明本次已本地重排、或按服务端总行数加量重查后本地排序取前 N，结论中必须披露该兜底行为；排序已正常生效时只会出现确认性的 `order_disclosure_zh`，不会出现 `order_fallback`。
+- `order_fallback` / `order_disclosure_zh`：**只要模板最终带了 `orderBy` 就会有 `order_disclosure_zh`**——不限于调用方显式传 `order_by`，规划器 NL 解析出的排序、以及趋势/按日的默认日期升序都算。排序正常生效时它是中文确认句、字段用中文标签而非技术名（如「排序已生效：按「销售额」降序」），可直接转述；检测到服务端排序未生效（已知缺陷）时额外出现 `order_fallback`，说明本次已本地重排、或按服务端总行数加量重查后本地排序取前 N，结论中必须披露该兜底行为。
+- `freshness_disclosure_zh`：查询窗口包含今天（窗口末日不早于今天），且本次返回未声明数据新鲜度（`evidence_contract.freshness_status` 为空——后端目前一律为空）时出现。**它就是新鲜度的可执行判据**：出现即表示今日/末日数值偏低不得当作业务事实，结论必须说明该日数据可能尚未刷新完成；该键不出现时才可正常解读末日数值。
 - `large_result_warning_zh`：`query_flow`（MCP 工具）不支持落盘，行数超过 20 行时会出现该键，提示全量行已原样进入返回体；结果集较大时应改传更小的 `limit`，或按维度/时间拆分为多次查询，不要把大结果当成异常忽略。
 
 `evidence_contract`（构建失败时为 `evidence_contract_error`）随 `query_flow` 返回体一并给出，优先使用其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论，不必再按第十五章手工拼装。
@@ -203,6 +213,36 @@ Excel。
    `order_qty>0` 的服务端筛选。
 6. 全量关联后才计算金额和库龄分段合计；缺失未税单价不得填 0，连接键、快照日、
    九个 181 天以上分段及缺失情况必须写入 Excel 口径说明。
+
+### 4.7 趋势/按日、TopN 与排序口径
+
+**趋势/按日自动加日期维度**：原文出现「按日趋势」「每天的」「逐日」「趋势」「走势」等表述时，规划器会自动把数据集主日期字段加为分组维度（**日粒度**），并在 `answer_contract.required_disclosures_zh` 追加「已按趋势/按日诉求加入日期维度（日粒度）：结论须按日期序列表述，不得只报合计」。结论必须按日期序列讲，不得只报合计。原文含「不按日拆分」等否定语境时不加该维度。
+
+**默认按日期升序**：模板含时间粒度维度（日期/月份等）且用户未点名排序时，规划器自动写入 `orderBy: [{"field": "<日期字段>", "desc": false}]`。执行器若发现服务端未按此排序会本地重排，并在 `result_disclosures.order_fallback` / `order_disclosure_zh` 披露。调用方不需要、也不应为趋势结果自行重排。
+
+**TopN/排序的 NL 解析**：规划器解析「前3」「前十」「top5」（**不带「名/行/条」等行数单位**的写法也算；唯一例外是数字后紧跟时间单位的时间表述，如「前7天」「前3个月」，那是时间范围不是行数）、「按X降序/升序」「只要前5行」等意图，解析成功即写入模板的 `orderBy` / `limit`（`orderBy` 形态 `[{"field": "<结果字段>", "desc": true}]`，`desc` 为布尔）。排序字段优先级：用户显式点名的字段 > 本次唯一指标（Top N 的常识语义）。
+
+- **已解析**：直接用模板结果，不要再传 `order_by` / `limit` 覆盖。
+- **未解析**（多指标且未点名排序字段等）：`orderBy` / `limit` 为 `null`，规划器改在 `answer_contract.required_disclosures_zh` 强制披露「本次查询未应用排序与行数限制，返回的是完整结果集且按服务端自然序排列，不得当作 Top N 汇报」——必须如实转述该披露。调用方确有该意图时可显式传 `query_flow(order_by=[...], limit=N)`（CLI 对应 `--order-by` / `--limit`），显式值会覆盖模板同名值。
+
+### 4.8 快照指标窗口口径
+
+指标带 `is_snapshot=true`（元数据 `snapshot_metric=1`，如总库存、平台库存）且本次**未按时间粒度维度分组**时，多日窗口会自动收敛为**最新完整快照日**（今天之前的最后一天）：
+
+```json
+"execution_ref": {
+  "snapshot_policy": {
+    "policy": "latest_complete_snapshot_day",
+    "snapshot_day": "2026-09-06",
+    "requested_window": {"start": "2026-08-31", "end": "2026-09-07"},
+    "metrics": ["<快照指标 field_name>"]
+  }
+}
+```
+
+- `model_view.time_scope_zh` 以「快照口径：最新完整快照日 …」开头；`answer_contract.required_disclosures_zh` 含「快照指标已按最新完整快照日 X 取值…未跨日累加」。结论必须说明这是该快照日的库存切面，不得表述为整个请求窗口的累计或平均。
+- **不收敛的两种情形**：按日期维度分组（每天/趋势）时保留完整窗口，按日展示快照序列不求和；环比/同比时主周期与对比周期各取该周期末日的快照，保证两期口径一致。
+- **快照与流量指标混查**：未按日分组时返回 `status=clarify_required` + 澄清码 `snapshot_metric_window_conflict`，提示按日期维度分组查看或把两类指标拆成两次查询，不得自行放行。
 
 ---
 
@@ -521,6 +561,7 @@ query_simple(
 - **默认不加时间聚合**，直接取最新快照日的值；禁止跨日/跨期累加。
 - 用户明确要求历史趋势时（"近 30 天可售库存变化""库龄分布"）例外，按日展示快照序列，仍不求和。
 - 用户未指定库存类型且存在多个变体字段时，列出候选让用户选择。
+- 走路线 A（`query_plan` / `query_flow`）时这层收敛已由规划器完成，口径与澄清码见 **4.8 快照指标窗口口径**；路线 B（`query_simple` 手工构造）没有这层收敛，必须自己把窗口限定到单个快照日。
 
 ---
 
@@ -534,6 +575,8 @@ query_chart(chart_uuid="4NQ5f66sU9", run=True)  # 执行所有子查询并合并
 ```
 
 `run=True` 返回 `{chart_uuid, queries: [{index, table_id, payload, result, error}], merged: {rows, meta: {rowCount, queryCount, successCount}}}`。多个 query 各自独立执行，单个失败不中断其他；用 `_query_index` 区分行来源，保留服务端小计/总计。
+
+`run=True`（且非 `dry_run`）的返回还**自带 `evidence_contract`**：它只由 `merged` 段生成（`queries[i]` 下的查询结构与可筛选字段是元数据噪声，混进去会挤掉真正的结果行），构建失败时为 `evidence_contract_error`。直接按其 `required_evidence` / `required_disclosures_zh` / `forbidden_inferences_zh` 组织结论，不需要另行拼装第十五章的证据合同。
 
 `query_chart_doc(chart_uuid=..., output_path=...)` 生成该图表的 API 调用 Markdown 文档（查询结构、字段映射、过滤规则与样例）。
 
@@ -641,7 +684,9 @@ MCP-only 场景没有本地 shell，按以下内联证据合同组织结论，**
 **限制**
 
 - 披露权限范围、样本、公式口径、数据新鲜度与快照时间；缺失时不得声称结果代表实时数据。
-- 任何截断必须说明排序字段、截断数量和总行数，不得把 Top N 当成全量。
+- **数据新鲜度按 `result_disclosures.freshness_disclosure_zh` 是否出现判定**：出现即表示查询窗口包含今天（窗口末日不早于今天）且返回未声明新鲜度，今日/末日数值偏低不得当作业务事实，必须说明该日数据可能尚未刷新完成；该键不出现时才可正常解读末日数值。
+- 快照指标被收敛到单个快照日时（`execution_ref.snapshot_policy` 存在），必须说明这是该快照日的切面而非窗口累计。
+- 任何截断必须说明排序字段、截断数量和总行数，不得把 Top N 当成全量。排序口径直接转述 `result_disclosures.order_disclosure_zh`，出现 `order_fallback` 时一并披露本地重排/加量重查兜底。
 
 ---
 

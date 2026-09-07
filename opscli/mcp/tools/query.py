@@ -700,8 +700,12 @@ async def query_chart(
     manager = _query_manager(jwt=jw, session_id=sid)
     try:
         if run or dry_run:
-            # 执行所有子查询并返回完整结果
+            # 执行所有子查询并返回完整结果（非 dry_run 时自带证据合同，与 CLI 同口径）
             result = manager.run_chart_queries(chart_uuid=chart_uuid, dry_run=dry_run)
+            if not dry_run:
+                from opscli.query.services.planner.evidence_contract import attach_chart_evidence
+
+                attach_chart_evidence(result)
             return _ok(result)
         else:
             # 仅获取图表查询结构，不执行

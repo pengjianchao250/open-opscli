@@ -324,6 +324,8 @@ def test_every_clarification_code_has_dedicated_message():
         "component_filter_value_unmatched",
         "component_filter_unauthorized",
         "component_filter_field_ambiguous",
+        "snapshot_metric_window_conflict",
+        "dimension_not_in_dataset",
     }
     produced = _planner_missing_information_codes() | contract_level
     missing = sorted(produced - set(query_plan.CLARIFICATION_MESSAGES))

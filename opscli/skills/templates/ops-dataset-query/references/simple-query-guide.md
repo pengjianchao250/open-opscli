@@ -105,7 +105,7 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
   和 MCP `query_flow(order_by=...)` 一致）；`{"field","direction":"DESC"}` 形态会被后端忽略并恒按升序返回，禁止使用。
 - 日期过滤的实测形态是同字段两行：`{"field":"<日期字段>","operator":">=","value":"YYYY-MM-DD"}`
   与 `<=` 一行；等值筛选用 `operator: "="`。
-- 带 `orderBy` 的查询优先经 `opscli query flow --order-by <字段>[:asc|desc]`（MCP `query_flow(order_by=...)`）执行：内核执行器会校验返回行是否按声明字段单调，
+- 主线 `opscli query flow` 的排序由规划器按原文解析写入模板（TopN、「按X降序」、含时间粒度维度时默认按日期升序），通常不必手动追加 `--order-by`；需要显式指定时用 `opscli query flow --order-by <字段>[:asc|desc]`（MCP `query_flow(order_by=...)`）。内核执行器会校验返回行是否按声明字段单调，
   服务端排序未生效时自动本地重排（有 limit 时按总行数加量重查再取前 N），并在 `result_disclosures.order_fallback` 中要求披露兜底行为。
   手工 `opscli query simple` 路线没有这层校验：必须自行核对返回是否按声明字段单调，不单调时本地重排并披露；TopN 结论不得基于未经生效校验的排序输出。
 
@@ -138,6 +138,8 @@ MCP Tool 使用 snake_case，JSON payload 使用 camelCase，CLI 选项使用 ke
 ## 快照指标
 
 指标标记为快照类（guidance 中 `is_snapshot=true`，如库存量）时，默认只取最新快照日的值，禁止跨日/跨期累加聚合；需要趋势时按日期维度展示快照序列，不求和。
+
+主线 `opscli query flow` / MCP `query_flow` 已由内核落实这一口径：全部为快照指标且未按时间粒度分组的多日窗口，会被收敛为最新完整快照日（`execution_ref.snapshot_policy`，并强制披露）；快照指标与流量指标混查且未按日分组时转 `snapshot_metric_window_conflict` 澄清。手工 `opscli query simple` 路线没有这层收敛，必须自行把日期过滤写成单个快照日（同字段 `>=`/`<=` 取同一天），否则服务端会按 SUM 跨日累加。
 
 ## 筛选与组件
 
