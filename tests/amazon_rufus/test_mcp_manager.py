@@ -432,8 +432,10 @@ def test_mcp_manager_factory_uses_current_request_credential_dir(monkeypatch, tm
             captured["transport_auth_client"] = auth_client
 
     class DummyFileUploadClient:
-        def __init__(self, auth_client=None):
+        def __init__(self, auth_client=None, jwt=None, session_id=None):
             captured["upload_auth_client"] = auth_client
+            captured["upload_jwt"] = jwt
+            captured["upload_session_id"] = session_id
 
     class DummyReportPublisher:
         def __init__(self, file_upload_client=None):
@@ -454,15 +456,53 @@ def test_mcp_manager_factory_uses_current_request_credential_dir(monkeypatch, tm
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RufusManager", DummyRufusManager)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RemoteConsentStore", DummyConsentStore)
 
-    manager = RufusMcpManager.for_current_request(credential_dir=tmp_path)
+    manager = RufusMcpManager.for_current_request(credential_dir=tmp_path, jwt="request-jwt", session_id="request-session")
 
     assert isinstance(manager.rufus_manager, DummyRufusManager)
     assert captured["base_dir"] == tmp_path
+    assert captured["upload_jwt"] == "request-jwt"
+    assert captured["upload_session_id"] == "request-session"
     assert captured["transport_auth_client"] is captured["upload_auth_client"]
     assert isinstance(captured["transport_client"], DummyTransport)
     assert isinstance(captured["file_upload_client"], DummyFileUploadClient)
     assert isinstance(manager.report_publisher, DummyReportPublisher)
     assert captured["consent_base_dir"] == tmp_path / "amazon-rufus"
+
+
+@pytest.mark.parametrize("session_id,jwt", [("user-session", "user-jwt"), ("user-session", None), (None, "user-jwt"), (None, None)])
+def test_factory_upload_request_uses_provided_credentials(monkeypatch, tmp_path, session_id, jwt):
+    """验证上传 HTTP 请求实际带当前请求的凭证，缺失时保留 API Key 分支。"""
+    import httpx
+    from opscli.mcp.context import mcp_request_ctx
+
+    class DummyAuth:
+        def __init__(self, base_dir=None):
+            assert base_dir == tmp_path
+
+        def get_token_by_session(self, sid, alias):
+            assert (sid, alias) == ("user-session", "ops")
+            return "refreshed-jwt"
+
+        def build_request_auth(self, alias):
+            raise AssertionError("禁止读取其他本地用户凭证")
+
+    def post(url, **kwargs):
+        assert kwargs["headers"]["X-MCP-API-Key"] == "request-key"
+        expected_jwt = jwt or ("refreshed-jwt" if session_id else None)
+        assert kwargs["headers"].get("Authorization") == (f"Bearer {expected_jwt}" if expected_jwt else None)
+        assert kwargs["cookies"] == ({"polarisUserToken": session_id} if session_id else {})
+        return httpx.Response(200, json={"data": {"url": "https://files.example/report.md"}})
+
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AuthClient", DummyAuth)
+    monkeypatch.setattr("opscli.shared.file_uploads.httpx.post", post)
+    monkeypatch.chdir(tmp_path)
+    token = mcp_request_ctx.set({"api_key": "request-key"})
+    try:
+        manager = RufusMcpManager.for_current_request(credential_dir=tmp_path, jwt=jwt, session_id=session_id)
+        report = manager.report_publisher.publish({"asin": "B0TEST1234", "answers": []})
+        assert report.url == "https://files.example/report.md"
+    finally:
+        mcp_request_ctx.reset(token)
 
 
 def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
@@ -477,8 +517,10 @@ def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
             captured["transport_auth_client"] = auth_client
 
     class DummyFileUploadClient:
-        def __init__(self, auth_client=None):
+        def __init__(self, auth_client=None, jwt=None, session_id=None):
             captured["upload_auth_client"] = auth_client
+            captured["upload_jwt"] = jwt
+            captured["upload_session_id"] = session_id
 
     class DummyReportPublisher:
         def __init__(self, file_upload_client=None):
@@ -503,6 +545,8 @@ def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
 
     assert isinstance(manager.rufus_manager, DummyRufusManager)
     assert captured["base_dir"] == "default"
+    assert captured["upload_jwt"] is None
+    assert captured["upload_session_id"] is None
     assert captured["transport_auth_client"] is captured["upload_auth_client"]
     assert isinstance(captured["file_upload_client"], DummyFileUploadClient)
     assert isinstance(manager.report_publisher, DummyReportPublisher)

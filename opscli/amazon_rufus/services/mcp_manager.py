@@ -54,12 +54,18 @@ class RufusMcpManager:
         self.report_publisher = report_publisher or AnswerReportPublisher()
 
     @classmethod
-    def for_current_request(cls, credential_dir: Path | None = None) -> "RufusMcpManager":
+    def for_current_request(
+        cls,
+        credential_dir: Path | None = None,
+        *,
+        jwt: str | None = None,
+        session_id: str | None = None,
+    ) -> "RufusMcpManager":
         """按当前 MCP 请求隔离目录创建 Rufus MCP manager。"""
         auth_client = AuthClient(base_dir=credential_dir) if credential_dir else AuthClient()
         transport = RufusTransportClient(auth_client=auth_client)
         report_publisher = AnswerReportPublisher(
-            file_upload_client=FileUploadClient(auth_client=auth_client),
+            file_upload_client=FileUploadClient(auth_client=auth_client, jwt=jwt, session_id=session_id),
         )
         consent_store = (
             RemoteConsentStore(base_dir=credential_dir / "amazon-rufus")
