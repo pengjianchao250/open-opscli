@@ -1,5 +1,7 @@
 # ops-dataset-query 双主线功能迁移审计与币种修复报告
 
+> **2026-09-07 退役说明**：本报告所述「双主线」已终结——Skill 版规划器/执行器脚本已全部删除，Skill 只使用内核规划器（`opscli query plan/flow`、MCP `query_plan/query_flow`）；文中对 Skill 版脚本的描述仅作历史记录。
+
 > 审计日期：2026-08-20
 > 审计对象：Skill 版 `ops-dataset-query/scripts` 与内核版
 > `opscli.query.services.planner`、CLI/MCP `query flow` 入口

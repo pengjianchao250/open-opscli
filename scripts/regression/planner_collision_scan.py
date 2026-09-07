@@ -23,6 +23,11 @@
   E  字段标签含否定词
   F  授权值主段重名（设计内，走澄清）
 
+规划器内核化后，判据全部取自内核 `opscli.query.services.planner`（不再 import
+已删除的 Skill 脚本），意图规则改从内核静态资源
+`opscli/query/services/planner/resources/intent_rules.json` 读取；
+字段标签 CSV 仍从已安装的 Skill 数据目录读取。
+
 用法：
     python3 scripts/regression/planner_enum_snapshot.py enums.json
     python3 scripts/regression/planner_collision_scan.py enums.json
@@ -37,7 +42,7 @@ import csv
 import json
 import pathlib
 import re
-import sys
+from importlib.resources import files
 
 DEFAULT_SKILL_DIR = pathlib.Path.home() / ".opscli/skills/ops-dataset-query"
 
@@ -60,14 +65,20 @@ def main() -> int:
     args = parser.parse_args()
 
     skill_dir = pathlib.Path(args.skill_dir).expanduser()
-    sys.path.insert(0, str(skill_dir / "scripts"))
-    import query_plan as qp  # noqa: PLC0415
-    import time_scope as ts  # noqa: PLC0415
-    import typed_schema_linking as schema  # noqa: PLC0415
+    from opscli.query.services.planner import query_plan as qp  # noqa: PLC0415
+    from opscli.query.services.planner import time_scope as ts  # noqa: PLC0415
+    from opscli.query.services.planner import (  # noqa: PLC0415
+        typed_schema_linking as schema,
+    )
 
     data_dir = skill_dir / "data"
     enums = json.loads(pathlib.Path(args.snapshot).read_text(encoding="utf-8"))
-    rules = json.loads((data_dir / "intent_rules.json").read_text(encoding="utf-8"))
+    # 意图规则随内核包分发，不再依赖 Skill 数据目录
+    rules = json.loads(
+        (
+            files("opscli.query.services.planner.resources") / "intent_rules.json"
+        ).read_text(encoding="utf-8")
+    )
 
     spec_order = [item["field_name"] for item in qp._ENUM_COMPONENT_SPECS]
     specs = {item["field_name"]: item for item in qp._ENUM_COMPONENT_SPECS}

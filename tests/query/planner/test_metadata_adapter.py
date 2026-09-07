@@ -5,7 +5,14 @@ filter_configs、fields 扁平列表）映射为与旧 scoped_dataset_reader.loa
 行字典，供下游选表/字段指导逻辑近乎逐字移植消费。
 """
 
-from opscli.query.services.planner.metadata_adapter import MetadataAdapter
+import json
+
+import pytest
+
+from opscli.query.services.planner.metadata_adapter import (
+    MetadataAdapter,
+    parse_filter_config,
+)
 
 
 def _payload():
@@ -104,3 +111,50 @@ def test_duplicate_field_rows_merged():
     a = MetadataAdapter(p)
     amt = [r for r in a.fields_rows() if r["field_name"] == "amount"]
     assert len(amt) == 1  # 合并为一行（合并策略对齐 _merge_duplicate_field_rows）
+
+
+# ── 字段级默认条件解析（自 tests/skills/test_scoped_reader_filter_config.py 移植）──
+#
+# parse_filter_config 逐字对齐旧 scoped_dataset_reader.parse_filter_config：
+# 空值返回 None、enabled=False 视同未配置、非法 JSON 硬失败（不得静默吞掉）。
+
+_ENABLED_FILTER_CONFIG = json.dumps(
+    {
+        "type": "required",
+        "enabled": True,
+        "operator": "equals",
+        "filter_type": "enum",
+        "enum_value": ["QUARTER"],
+        "value": None,
+        "filter_agg": "none",
+    },
+    ensure_ascii=False,
+)
+
+
+def test_parse_filter_config_enabled():
+    """启用行解析为压缩后的 dict，保留 type 与枚举取值。"""
+    result = parse_filter_config(_ENABLED_FILTER_CONFIG)
+    assert result["type"] == "required"
+    assert result["enum_value"] == ["QUARTER"]
+
+
+def test_parse_filter_config_empty_and_disabled():
+    """空值与 enabled=False 一律视同未配置，返回 None。"""
+    assert parse_filter_config("") is None
+    assert parse_filter_config(json.dumps({"enabled": False, "operator": "equals"})) is None
+
+
+def test_parse_filter_config_invalid_json_raises():
+    """非法 JSON 必须硬失败，避免默认条件被静默丢弃后无人察觉。"""
+    with pytest.raises(ValueError, match="invalid_filter_config"):
+        parse_filter_config("{not json")
+
+
+def test_fields_rows_attach_filter_config():
+    """字段行携带 filter_config 时解析为 dict，未携带时为 None。"""
+    payload = _payload()
+    payload["fields"][0]["filter_config"] = _ENABLED_FILTER_CONFIG
+    rows = {row["field_name"]: row for row in MetadataAdapter(payload).fields_rows()}
+    assert rows["amount"]["filter_config"]["type"] == "required"
+    assert rows["sku"]["filter_config"] is None

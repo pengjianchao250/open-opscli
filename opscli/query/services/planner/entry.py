@@ -353,6 +353,12 @@ def run_plan(
                 f"部分权限枚举值来自约 {max(stale_hits):.1f} 小时前本地缓存"
                 "（实时枚举失败后的降级兜底），非实时数据。"
             )
+            # 追加披露改写了合同内容：规划器已挂完整性摘要时必须重挂，否则 run_flow 的
+            # 多币种完整性校验会把这份合同判为"被篡改"而拒绝执行
+            # （实测：代理抖动触发枚举缓存降级后，多币种请求必报"完整性校验失败"）
+            execution_ref = contract.get("execution_ref")
+            if isinstance(execution_ref, dict) and execution_ref.get("plan_integrity"):
+                plan_integrity.attach(contract)
     return contract
 
 
@@ -644,8 +650,9 @@ def _execute_planned_contract(
         # SKILL.md/cli.md 只能在文档层面要求"必须传 --result-dir"，无法从代码层面
         # 兜底，遂在此补一条运行时警告）。
         result_disclosures["large_result_warning_zh"] = (
-            f"本次返回 {len(rows)} 行且未传 --result-dir，全量行已进入返回体；"
-            "行数较大时建议携带 --result-dir 落盘并只读预览。"
+            f"本次返回 {len(rows)} 行且未落盘，全量行已进入返回体；"
+            "行数较大时 CLI 建议携带 --result-dir 落盘并只读预览，"
+            "MCP query_flow 不支持落盘，改传更小的 limit 或按维度/时间拆分查询。"
         )
     out = {
         **contract,

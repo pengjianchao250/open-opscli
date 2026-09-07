@@ -7,6 +7,10 @@
 组件表取自 dataset_select_columns.csv 全量——规划合同里的 filter_components
 是按查询相关性排序后截断的，不能用于扫描。
 
+规划器内核化后，枚举走内核注入式回调 `entry._make_callbacks` 产出的 enum_fn
+（与 `opscli query plan/flow` 生产路径同一条），不再 import 已删除的 Skill 脚本；
+数据集/组件列 CSV 仍从已安装的 Skill 数据目录读取。
+
 用法：
     python3 scripts/regression/planner_enum_snapshot.py [输出路径] [--skill-dir DIR]
 
@@ -41,14 +45,20 @@ def main() -> int:
     args = parser.parse_args()
 
     skill_dir = pathlib.Path(args.skill_dir).expanduser()
-    scripts_dir = skill_dir / "scripts"
     data_dir = skill_dir / "data"
-    if not (scripts_dir / "query_plan.py").is_file():
-        print(f"未找到已安装的 Skill 脚本: {scripts_dir}", file=sys.stderr)
+    if not (data_dir / "datasets.csv").is_file():
+        print(f"未找到已安装的 Skill 数据目录: {data_dir}", file=sys.stderr)
         return 2
 
-    sys.path.insert(0, str(scripts_dir))
-    import query_plan as qp  # noqa: PLC0415
+    # 内核规划器：枚举回调与 opscli query plan/flow 走同一条生产路径
+    from opscli.query.commands.cli import _current_email  # noqa: PLC0415
+    from opscli.query.manager import QueryManager  # noqa: PLC0415
+    from opscli.query.services.planner import entry  # noqa: PLC0415
+    from opscli.query.services.planner import query_plan as qp  # noqa: PLC0415
+
+    _refresh_fn, enum_fn, _stale = entry._make_callbacks(
+        QueryManager(), _current_email(), None
+    )
 
     # alias → table_id
     alias_to_table = {}
@@ -78,7 +88,7 @@ def main() -> int:
             print(f"  {field:<18} 无组件")
             continue
         errors: list = []
-        values = qp._auto_enum_component_values(table_id, field, errors=errors)
+        values = qp._auto_enum_component_values(enum_fn, table_id, field, errors)
         result[field] = {
             "label_zh": spec.get("label_zh"),
             "table_id": table_id,
