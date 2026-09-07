@@ -20,7 +20,7 @@ export default defineConfig({
     viewport: { width: 1440, height: 900 },
   },
   webServer: {
-    command: "python -m http.server 4174 --directory .",
+    command: "npm run dev",
     url: "http://127.0.0.1:4174/",
     reuseExistingServer: true,
     timeout: 15_000,

@@ -1,10 +1,11 @@
-import { buildRequestHeaders } from "./request-contract.js";
+import { configureOpsMcpApi, opsMcpApi } from "@aukeys/ops-mcp-api-sdk";
 import { formatMatrixValue, matrixCsv, resultSheets, visibleMatrixRows } from "./result-utils.js";
 import { buildScenarioParams, periodOptionsForScenario, scenarioDefaults, scenarioPeriod, SCENARIO_GROUPS, SCENARIOS, SITE_OPTIONS } from "./scenarios.js";
 
 const JOB_STORAGE_KEY = "seller-sprite-lens-jobs";
 const PREFERENCE_STORAGE_KEY = "seller-sprite-lens-preferences";
 const JOB_LIMIT = 30;
+const SELLER_SPRITE_API_PATH = "/api/v1/seller-sprite";
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -19,11 +20,11 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function defaultApiBase(locationValue = globalThis.location) {
-  const protocol = locationValue?.protocol === "https:" ? "https:" : "http:";
-  const hostname = locationValue?.hostname || "127.0.0.1";
-  const host = hostname.includes(":") && !hostname.startsWith("[") ? `[${hostname}]` : hostname;
-  return `${protocol}//${host}:8765/api/v1/seller-sprite`;
+function normalizeApiBaseUrl(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\/api\/v1\/seller-sprite\/?$/, "")
+    .replace(/\/$/, "");
 }
 
 function createJobId(scenario, cryptoValue = globalThis.crypto) {
@@ -119,9 +120,10 @@ class SellerSpriteLens extends HTMLElement {
     super();
     const preferences = loadJson(PREFERENCE_STORAGE_KEY, {});
     const scenario = SCENARIOS[preferences.scenario] ? preferences.scenario : "keyword-reverse";
+    const apiBaseUrl = normalizeApiBaseUrl(preferences.apiBaseUrl ?? preferences.apiBase);
+    configureOpsMcpApi({ apiBaseUrl: apiBaseUrl || undefined });
     this.state = {
-      apiBase: preferences.apiBase || defaultApiBase(),
-      apiKey: "",
+      apiBaseUrl,
       theme: ["dark", "business"].includes(preferences.theme) ? "business" : "corporate",
       scenario,
       site: preferences.site || "US",
@@ -162,7 +164,7 @@ class SellerSpriteLens extends HTMLElement {
 
   savePreferences() {
     localStorage.setItem(PREFERENCE_STORAGE_KEY, JSON.stringify({
-      apiBase: this.state.apiBase,
+      apiBaseUrl: this.state.apiBaseUrl,
       theme: this.state.theme,
       scenario: this.state.scenario,
       site: this.state.site,
@@ -171,9 +173,9 @@ class SellerSpriteLens extends HTMLElement {
   }
 
   async request(path, options = {}) {
-    const response = await fetch(`${this.state.apiBase}${path}`, {
+    const response = await opsMcpApi.request(`${SELLER_SPRITE_API_PATH}${path}`, {
       ...options,
-      headers: { ...buildRequestHeaders(this.state.apiKey), ...(options.headers || {}) },
+      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     });
     const text = await response.text();
     let payload;
@@ -210,10 +212,13 @@ class SellerSpriteLens extends HTMLElement {
       return;
     }
     this.state[field] = target.type === "checkbox" ? target.checked : target.value;
-    if (["apiBase", "site", "period"].includes(field)) this.savePreferences();
+    if (field === "apiBaseUrl") {
+      configureOpsMcpApi({ apiBaseUrl: this.state.apiBaseUrl.trim() || undefined });
+    }
+    if (["apiBaseUrl", "site", "period"].includes(field)) this.savePreferences();
     if (field === "filter") {
       this.state.page = 1;
-      this.render();
+      queueMicrotask(() => this.render());
     }
   }
 
@@ -479,7 +484,7 @@ class SellerSpriteLens extends HTMLElement {
   }
 
   renderConnection() {
-    return `<details class="connection bg-base-100"><summary>连接设置</summary><div class="connection-grid"><label class="form-field"><span>API Key</span><input class="input input-bordered input-sm w-full" type="password" data-field="apiKey" value="${escapeHtml(this.state.apiKey)}" autocomplete="off" placeholder="支持纯 Key 或 Bearer Key"></label><label class="form-field"><span>API 地址</span><input class="input input-bordered input-sm w-full" data-field="apiBase" value="${escapeHtml(this.state.apiBase)}" aria-label="API 地址"></label><button type="button" class="secondary-button btn btn-outline btn-sm" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button></div><p>API Key 只保存在当前页面内存，不写入浏览器存储。</p></details>`;
+    return `<details class="connection bg-base-100"><summary>连接设置</summary><div class="connection-grid"><label class="form-field"><span>MCP API 地址（可选）</span><input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用 OPS 配置返回地址"></label><button type="button" class="secondary-button btn btn-outline btn-sm" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button></div><p>连接时读取当前浏览器的 OPS 登录态，MCP API Key 仅保存在页面内存。</p></details>`;
   }
 
   renderRequestPanel() {

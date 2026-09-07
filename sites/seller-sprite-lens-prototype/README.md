@@ -13,12 +13,18 @@
 ## 运行
 
 ```powershell
-python -m http.server 4174 --directory sites/seller-sprite-lens-prototype
+npm install
+npm run dev
 ```
 
-打开 `http://127.0.0.1:4174/`。默认 API 地址为 `http://127.0.0.1:8765/api/v1/seller-sprite`。
+打开 `http://127.0.0.1:4174/`。开发服务器会将同源的 `/api/v1/mcp-api-keys/config` 代理到 `https://ops.api.xenkee.com`；可通过环境变量 `OPS_WEB_ORIGIN` 覆盖该地址。
 
-API Key 只保存在当前页面内存。查询参数、任务编号和任务状态保存在 `localStorage`，便于刷新页面后继续查询后台任务。
+在浏览器开发者工具中为 `http://127.0.0.1:4174` 设置 OPS 登录态：
+
+- `localStorage.OPERATION_TOKEN`：OPS Token，可带或不带 `Bearer` 前缀。
+- Cookie `polarisUserToken`：当前 OPS Session；如登录态包含 `opscliDeviceCode`，一并设置。
+
+页面通过 `@aukeys/ops-mcp-api-sdk` 换取并在内存中缓存 MCP API Key，业务请求自动注入 Bearer Header。查询参数、任务编号和任务状态仍保存在 `localStorage`，MCP API Key 不会写入浏览器存储。
 
 ## 测试
 
@@ -27,4 +33,4 @@ npm install
 npm test
 ```
 
-单元测试覆盖请求鉴权、场景参数转换、JSON v2 工作表、筛选排序和 CSV。Playwright 覆盖任务提交、异步续查、连接额度、任务恢复、API Key 不落盘、DaisyUI 组件合同、主题切换和桌面/移动侧边栏。
+单元测试覆盖场景参数转换、JSON v2 工作表、筛选排序和 CSV。Playwright 覆盖 OPS 登录态换取、MCP API Key 自动注入、任务提交、异步续查、连接额度、任务恢复、Key 不落盘、DaisyUI 组件合同、主题切换和桌面/移动侧边栏。

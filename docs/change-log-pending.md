@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-07 SellerSprite Lens - 接入 OPS MCP API JavaScript SDK
+
+**变更原因**：SellerSprite Lens 原型仍要求手动填写 MCP API Key，无法验证站点通过 OPS 浏览器登录态自动换取并注入业务请求的正式接入流程。
+**改动点**：站点通过本地包依赖接入 `@aukeys/ops-mcp-api-sdk`，移除手填 API Key，统一由共享客户端读取 `localStorage.OPERATION_TOKEN` 和同源 Cookie、换取内存凭证并调用 SellerSprite REST API；本地开发切换为 Vite，并增加 OPS 配置接口代理及可选 MCP API 地址覆盖。
+**验证结果**：`npm run build` 通过，SDK 已打入 Vite 生产产物；11 项 Node 单元测试和 8 项 Playwright 浏览器测试全部通过，覆盖 OPS Token 与同源 Cookie 换取、MCP API Key 自动注入及 Key 不落盘；`git diff --check` 通过。
+**影响范围**：`sites/seller-sprite-lens-prototype` 的本地开发、浏览器鉴权和 SellerSprite REST 请求链路。
+**回滚方式**：回退 SellerSprite Lens 的 SDK 依赖、Vite 配置、请求客户端、浏览器测试和本条记录。
+
+---
+
 ## 2026-09-07 Collector Monitor - 增加 MCP 功能调用记录区
 
 **变更原因**：现有账号页只读取本地额度表，鹰眼等跳过本地 quota 或经中央代理执行的 MCP Tool 无法展示调用次数。
@@ -16,7 +26,7 @@
 **改动点**：`@aukeys/ops-mcp-api-sdk` 新增 `configureOpsMcpApi()`，将 `opsMcpApi` 改为引用稳定的共享代理；应用入口可统一设置 `apiBaseUrl`，重复配置只替换内部客户端并清理旧内存凭证，业务模块无需更换实例。地址规则简化为“不传则使用配置接口返回地址，传入则覆盖”，不再暴露作用重复的 environment/target 枚举；包版本提升至 `0.2.0`，更新类型声明和使用文档。
 **验证结果**：`npm test` 通过 16 个 Node 单元测试，覆盖共享实例引用稳定、统一覆盖 API 地址及原有凭证换取和安全行为；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认 `0.2.0` 发布包仍只包含 README、package.json、JavaScript 入口和类型声明。
 **影响范围**：JavaScript SDK 初始化接口和文档；原有 `opsMcpApi` 和 `createOpsMcpApiClient()` 调用保持兼容。
-**回滚方式**：回退 `packages/ops-mcp-api-sdk` 本次接口、测试和文档修改，并删除本条记录。
+**回滚方式**：回退 `sites/ops-mcp-api-sdk` 本次接口、测试和文档修改，并删除本条记录。
 ---
 
 ## 2026-09-03 MCP采集 - 增加手动预取计划任务
@@ -9084,7 +9094,7 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **改动点**：新增 `@aukeys/ops-mcp-api-sdk` 独立 ESM 包，默认从 `localStorage.OPERATION_TOKEN` 读取 OPS Token，并携带同源 Cookie 请求 `/api/v1/mcp-api-keys/config`；API Key 仅保存在实例内存中，业务请求自动注入 Bearer Header。客户端支持 API 基址覆盖、并发 single-flight、`invalid_api_key` 后一次刷新重试、来源白名单、超时、自定义 Token Provider 与 fetch，并兼容当前 MCP URL 和后续结构化 `data.api` 配置。
 **验证结果**：`npm test` 通过 15 个 Node 单元测试，覆盖自动注入、single-flight、失效刷新、API 地址覆盖、结构化配置回退、同源限制和内存凭证失效；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认发布包仅包含 README、package.json、JavaScript 入口和类型声明。
 **影响范围**：新增 JavaScript SDK 包，不修改现有 Python CLI、MCP 服务或站点原型行为。
-**回滚方式**：删除 `packages/ops-mcp-api-sdk` 及本条记录。
+**回滚方式**：删除 `sites/ops-mcp-api-sdk` 及本条记录。
 ---
 ## 2026-09-04 SellerSprite Lens - 新增卖家精灵 JSON 场景站点
 
