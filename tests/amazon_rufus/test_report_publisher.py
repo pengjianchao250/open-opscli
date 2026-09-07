@@ -1,3 +1,4 @@
+import codecs
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime as RealDatetime
@@ -10,6 +11,28 @@ from opscli.amazon_rufus.services import answer_report_writer as writer_module
 from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher, PublishedAnswerReport
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.shared.file_uploads import FileUploadResult
+
+
+def test_default_publisher_uploads_utf8_bom_report(monkeypatch, tmp_path):
+    """默认发布的中文报告携带 BOM，正文内容保持不变。"""
+    monkeypatch.chdir(tmp_path)
+    data = {
+        "asin": "B0TEST1234",
+        "country": "US",
+        "questions": ["这个商品适合送礼吗？"],
+        "answers": [{"text": "适合送礼", "isSuccess": True}],
+    }
+    plain_path = AnswerReportWriter().write(data, output_dir=tmp_path / "plain")
+
+    class CheckingFileUploadClient:
+        def upload(self, path, **kwargs):
+            assert path.read_bytes() == codecs.BOM_UTF8 + plain_path.read_bytes()
+            assert "优化诊断报告" in path.read_text(encoding="utf-8-sig")
+            return FileUploadResult(url="https://files.example/report.md", raw={})
+
+    result = AnswerReportPublisher(file_upload_client=CheckingFileUploadClient()).publish(data)
+    assert result.path.read_bytes().startswith(codecs.BOM_UTF8)
+    assert not plain_path.read_bytes().startswith(codecs.BOM_UTF8)
 
 
 def test_report_publisher_uploads_exact_written_path_with_safe_metadata(tmp_path: Path):

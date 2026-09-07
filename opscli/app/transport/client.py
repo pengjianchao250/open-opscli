@@ -11,6 +11,7 @@ from opscli.app.domain.constants import APPHUB_API_PREFIX
 from opscli.app.domain.exceptions import AppHubHttpError
 from opscli.auth import AuthClient
 from opscli.auth.config import get_apphub_url
+from opscli.config import __version__
 
 class AppHubClient:
     """封装应用创建、查询和 Git 凭据所需的 AppHub API。"""
@@ -49,13 +50,16 @@ class AppHubClient:
         return self._request_json("POST", "/git/credentials", json={"rotate": rotate})
 
     def _request_json(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        """构造无 Cookie 的 Bearer 请求并复用现有 JSON 错误处理。"""
         try:
-            response = self.http.request(
+            request = self.http.build_request(
                 method,
                 self._url(path),
                 headers=self._headers(has_json="json" in kwargs),
                 **kwargs,
             )
+            request.headers.pop("Cookie", None)
+            response = self.http.send(request)
         except httpx.HTTPError as exc:
             raise AppHubHttpError(
                 "UPSTREAM_ERROR",
@@ -67,9 +71,14 @@ class AppHubClient:
         return data if isinstance(data, dict) else payload
 
     def _headers(self, *, accept: str = "application/json", has_json: bool = False) -> dict[str, str]:
+        """每次请求复用 AuthClient 的 ops JWT 获取与刷新能力。"""
         if self.auth_client is None:
             self.auth_client = AuthClient()
-        headers = self.auth_client.build_session_headers()
+        token = self.auth_client.get_token("ops")
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Opscli-Version": __version__,
+        }
         headers["Accept"] = accept
         if has_json:
             headers["Content-Type"] = "application/json"

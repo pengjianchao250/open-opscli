@@ -17,9 +17,11 @@ class AnswerReportWriter:
         formatter: AnswerReportFormatter | None = None,
         *,
         unique_filenames: bool = False,
+        encoding: str = "utf-8",
     ) -> None:
         self.formatter = formatter or AnswerReportFormatter()
         self.unique_filenames = unique_filenames
+        self.encoding = encoding
 
     def write(self, data: dict, output_dir: str | Path | None = None) -> Path:
         """格式化并写入报告，返回报告路径。"""
@@ -28,7 +30,7 @@ class AnswerReportWriter:
         report_path = target_dir / self._build_filename(data)
         render_data = dict(data)
         render_data.setdefault("report_path", report_path.as_posix())
-        report_path.write_text(self.formatter.format_data(render_data), encoding="utf-8")
+        report_path.write_text(self.formatter.format_data(render_data), encoding=self.encoding)
         return report_path
 
     def _build_filename(self, data: dict) -> str:

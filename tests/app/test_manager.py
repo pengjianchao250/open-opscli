@@ -164,7 +164,9 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     assert "runtime" not in payload
     assert git.init_calls == []
     assert git.push_calls == []
-    assert credentials.saved[0]["token"] == "one-time-secret"
+    # 兼容旧服务响应，但 create 不再消费或保存内联 token。
+    assert credentials.saved == []
+    assert result["credential_saved"] is False
     binding_payload = json.loads(
         (tmp_path / ".opscli" / "app.json").read_text(encoding="utf-8")
     )
@@ -256,6 +258,8 @@ def test_init_creates_application_when_no_remote_match(tmp_path: Path) -> None:
 
     assert client.create_payloads[0]["name"] == "inventory-dashboard"
     assert result["slug"] == "inventory-dashboard"
+    assert client.issue_calls == [True]
+    assert credentials.saved[0]["token"] == "rotated-secret"
     assert git.init_calls[0][1] == {"repo_url": _repo_url("inventory-dashboard")}
 
 
@@ -300,9 +304,14 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     )
     client = FakeClient()
     git = FakeGit()
+    credentials = FakeCredentialStore()
 
-    result = _manager(client, git).push(tmp_path, message="优化首页")
+    result = _manager(client, git, credentials).push(tmp_path, message="优化首页")
 
+    assert client.issue_calls == [True]
+    assert credentials.saved[0]["token"] == "rotated-secret"
+    assert result["credential_refreshed"] is True
+    assert result["credential_rotated"] is True
     assert git.push_calls[0][1]["message"] == "优化首页"
     assert "release_id" not in result
     assert "version" not in result
