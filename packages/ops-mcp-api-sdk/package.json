@@ -1,0 +1,27 @@
+{
+  "name": "@aukeys/ops-mcp-api-sdk",
+  "version": "0.2.0",
+  "description": "OPS MCP REST API authenticated browser client",
+  "type": "module",
+  "types": "./src/index.d.ts",
+  "main": "./src/index.js",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "check": "node --check src/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "UNLICENSED"
+}

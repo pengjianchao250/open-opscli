@@ -1,5 +1,14 @@
 # 待归档变更记录
 
+## 2026-09-07 JavaScript SDK - 支持共享实例统一配置 API 地址
+
+**变更原因**：站点完成开发后，本地调试若需要额外创建并替换 `localClient`，会把地址判断扩散到业务模块；API 地址选择应集中在应用入口，业务代码始终使用同一个共享实例。
+**改动点**：`@aukeys/ops-mcp-api-sdk` 新增 `configureOpsMcpApi()`，将 `opsMcpApi` 改为引用稳定的共享代理；应用入口可统一设置 `apiBaseUrl`，重复配置只替换内部客户端并清理旧内存凭证，业务模块无需更换实例。地址规则简化为“不传则使用配置接口返回地址，传入则覆盖”，不再暴露作用重复的 environment/target 枚举；包版本提升至 `0.2.0`，更新类型声明和使用文档。
+**验证结果**：`npm test` 通过 16 个 Node 单元测试，覆盖共享实例引用稳定、统一覆盖 API 地址及原有凭证换取和安全行为；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认 `0.2.0` 发布包仍只包含 README、package.json、JavaScript 入口和类型声明。
+**影响范围**：JavaScript SDK 初始化接口和文档；原有 `opsMcpApi` 和 `createOpsMcpApiClient()` 调用保持兼容。
+**回滚方式**：回退 `packages/ops-mcp-api-sdk` 本次接口、测试和文档修改，并删除本条记录。
+---
+
 ## 2026-09-03 MCP采集 - 增加手动预取计划任务
 
 **变更原因**：高频采集请求需要在业务使用前主动刷新共享结果缓存，现有系统只有即时调用和结果沉淀，缺少可由用户手动维护的每日计划任务。
@@ -9057,6 +9066,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：认证 TokenManager、共享凭据、Keepa、REST API 和卖家精灵远端凭据兼容定向回归共 `63 passed`；卖家精灵整文件 `94 passed, 1 failed`，唯一失败为仓库既有 Skill 版本断言仍期望 `v0.0.20`、当前模板已为 `v0.0.21`，与本次改动无关。目标模块 `compileall`、文档 18 个 JSON 示例解析、代码围栏/尾随空白/敏感示例检查及 `git diff --check` 均通过。当前虚拟环境和系统均未安装 Ruff，因此未执行 Ruff 检查。
 **影响范围**：HTTP/SSE 多用户模式下的 OPS 凭据建立、Keepa 场景请求和新增认证诊断接口；卖家精灵继续复用同一凭据入口，默认不强制预取 JWT。
 **回滚方式**：回退共享凭据模块、Keepa 接入、REST 路由、对应测试、使用指南及本条记录。
+---
+
+## 2026-09-04 JavaScript SDK - 自动换取并注入 MCP API Key
+
+**变更原因**：OPS 域名下的站点调用 opscli MCP REST API 时不应要求用户手工填写 API Key，需要统一复用现有 OPS 登录信息完成凭证换取和请求鉴权。
+**改动点**：新增 `@aukeys/ops-mcp-api-sdk` 独立 ESM 包，默认从 `localStorage.OPERATION_TOKEN` 读取 OPS Token，并携带同源 Cookie 请求 `/api/v1/mcp-api-keys/config`；API Key 仅保存在实例内存中，业务请求自动注入 Bearer Header。客户端支持 API 基址覆盖、并发 single-flight、`invalid_api_key` 后一次刷新重试、来源白名单、超时、自定义 Token Provider 与 fetch，并兼容当前 MCP URL 和后续结构化 `data.api` 配置。
+**验证结果**：`npm test` 通过 15 个 Node 单元测试，覆盖自动注入、single-flight、失效刷新、API 地址覆盖、结构化配置回退、同源限制和内存凭证失效；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认发布包仅包含 README、package.json、JavaScript 入口和类型声明。
+**影响范围**：新增 JavaScript SDK 包，不修改现有 Python CLI、MCP 服务或站点原型行为。
+**回滚方式**：删除 `packages/ops-mcp-api-sdk` 及本条记录。
 ---
 ## 2026-09-04 SellerSprite Lens - 新增卖家精灵 JSON 场景站点
 
