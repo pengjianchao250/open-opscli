@@ -469,7 +469,7 @@ def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
         assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
 
     version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
-    assert version["version"] == "v0.0.20"
+    assert version["version"] == "v0.0.21"
 
 
 def test_listing_analysis_tools_require_explicit_user_trigger():
@@ -1760,6 +1760,52 @@ def test_seller_sprite_remote_export_requires_https_and_hides_server_path(monkey
 
     assert result["success"] is True
     assert result["data"]["url"] == "https://files.example.com/job-1.xlsx"
+    assert "path" not in result["data"]
+
+
+def test_seller_sprite_remote_json_export_returns_formatted_workbook(
+    monkeypatch, tmp_path: Path
+):
+    from opscli.mcp.context import mcp_request_ctx
+
+    workbook = {
+        "schema_version": "2.0",
+        "sheet_name": "Competitor-US-Last-30-days",
+        "columns": ["ASIN", "品牌", "月销量"],
+        "number_formats": [None, None, "#,##0"],
+        "rows": [["B0TEST1234", "Demo", 1200]],
+        "additional_sheets": [],
+    }
+    export_path = tmp_path / "job-1.json"
+    export_path.write_text(json.dumps(workbook, ensure_ascii=False), encoding="utf-8")
+
+    class JsonExportScheduler:
+        def job_status(self, job_id):
+            return {
+                "job_id": job_id,
+                "data": [{"guestId": None, "asin": "B0TEST1234"}],
+                "export": {
+                    "path": str(export_path),
+                    "filename": export_path.name,
+                    "format": "json",
+                    "url": "https://files.example.com/job-1.json",
+                },
+            }
+
+    _patch_job_owner(monkeypatch)
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_get_task_scheduler",
+        lambda **kwargs: JsonExportScheduler(),
+    )
+    token = mcp_request_ctx.set({"api_key": "remote-key"})
+    try:
+        result = _run(seller_sprite_tools.seller_sprite_export("job-1"))
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    assert result["data"]["json_data"] == workbook
     assert "path" not in result["data"]
 
 

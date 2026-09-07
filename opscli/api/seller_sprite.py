@@ -219,7 +219,7 @@ def _task_is_pending(status: dict[str, Any]) -> bool:
     }
 
 
-def _json_result_response(
+async def _json_result_response(
     result: dict[str, Any],
     *,
     requested_format: str | None = None,
@@ -269,6 +269,37 @@ def _json_result_response(
             },
         )
 
+    export = status.get("export")
+    formatted_result = export.get("json_data") if isinstance(export, dict) else None
+    if formatted_result is None:
+        from opscli.mcp.tools import seller_sprite_proxy
+
+        export_result = await _call_gateway_proxy(
+            seller_sprite_proxy.seller_sprite_export,
+            job_id=str(status.get("job_id") or ""),
+        )
+        if export_result.get("success") is not True:
+            return _result_response(export_result)
+        export_data = export_result.get("data")
+        if isinstance(export_data, dict):
+            formatted_result = export_data.get("json_data")
+    if (
+        not isinstance(formatted_result, dict)
+        or not isinstance(formatted_result.get("columns"), list)
+        or not isinstance(formatted_result.get("rows"), list)
+    ):
+        return JSONResponse(
+            status_code=502,
+            content={
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "SELLER_SPRITE_FORMATTED_RESULT_MISSING",
+                    "message": "卖家精灵任务缺少格式化 JSON 结果",
+                },
+            },
+        )
+
     inline = {
         "job_id": status.get("job_id"),
         "scenario": status.get("scenario"),
@@ -278,7 +309,7 @@ def _json_result_response(
         "stage": status.get("stage"),
         "ready": status.get("ready"),
         "row_count": status.get("row_count"),
-        "result": status.get("data"),
+        "result": formatted_result,
     }
     return JSONResponse(
         status_code=200,
@@ -377,7 +408,7 @@ async def seller_sprite_job_result_api(
         job_id=job_id,
         wait_seconds=wait_seconds,
     )
-    return _json_result_response(result)
+    return await _json_result_response(result)
 
 
 @router.get("/jobs/{job_id}/export")
@@ -401,7 +432,7 @@ async def seller_sprite_export_api(
     if isinstance(status, dict) and (
         _task_is_pending(status) or _export_format(status) == "json"
     ):
-        return _json_result_response(status_result)
+        return await _json_result_response(status_result)
 
     result = await _call_gateway_proxy(
         seller_sprite_proxy.seller_sprite_export,
@@ -461,7 +492,7 @@ async def seller_sprite_listing_analysis_result_api(
         export_format=export_format,
     )
     if export_format == "json":
-        return _json_result_response(result, requested_format=export_format)
+        return await _json_result_response(result, requested_format=export_format)
     return _result_response(result)
 
 

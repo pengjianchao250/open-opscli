@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-07 SellerSprite REST - 返回格式化 JSON v2 工作簿
+
+**变更原因**：SellerSprite Lens 查询竞品时，REST `/result` 返回接口原始商品对象，包含分页、请求状态及大量非展示字段，导致页面生成 128 列无效表格；任务生成的 JSON 导出本已按官方模板筛选和格式化，但未被 REST 使用。
+**改动点**：Collector `seller_sprite_export` 对 JSON 任务读取已生成的 JSON v2 工作簿并以内联 `json_data` 返回；REST JSON 结果接口改为读取该格式化工作簿，不再使用任务状态中的原始 `data`，缺少格式化结果时返回稳定错误。
+**验证结果**：SellerSprite REST API 17 项、MCP Tool 96 项、SellerSprite Lens 单元测试 11 项和 Playwright 端到端测试 8 项全部通过，站点生产构建成功。
+**影响范围**：SellerSprite JSON 任务的导出 MCP Tool 与 REST `/result`、`/export` 内联结果合同；XLSX 下载和任务状态合同不变。
+**回滚方式**：回退 SellerSprite JSON 导出读取、REST 格式化结果选择、相关测试和本条记录。
+
+---
+
 ## 2026-09-07 SellerSprite Lens - 接入 OPS MCP API JavaScript SDK
 
 **变更原因**：SellerSprite Lens 原型仍要求手动填写 MCP API Key，无法验证站点通过 OPS 浏览器登录态自动换取并注入业务请求的正式接入流程。
