@@ -13,7 +13,14 @@ class GitCredentialStore:
     def __init__(self, runner: GitRunner | None = None) -> None:
         self.runner = runner or GitRunner()
 
-    def has_credential(self, root: Path, *, repo_url: str, username: str | None) -> bool:
+    def has_credential(
+        self,
+        root: Path,
+        *,
+        repo_url: str,
+        username: str | None,
+        token_hint: str | None = None,
+    ) -> bool:
         request = _credential_payload(repo_url, username=username)
         result = self.runner.run(
             root,
@@ -24,9 +31,10 @@ class GitCredentialStore:
         if result.returncode != 0:
             return False
         fields = _parse_fields(result.stdout)
-        return bool(fields.get("password")) and (
-            username is None or fields.get("username") == username
-        )
+        password = fields.get("password")
+        if not password or (username is not None and fields.get("username") != username):
+            return False
+        return token_hint is None or password.endswith(token_hint)
 
     def save_credential(
         self,

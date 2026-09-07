@@ -7,7 +7,7 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 
 统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`main`。
 
-新项目通过 Git clone 获取完整模板。Skill 不再生成项目脚手架；它负责维护会随 opscli 发版更新的项目级规范和平台限制。
+新项目通过统一模板仓库 clone 获取完整模板，但不得继承模板仓库的 Git 元数据。Skill 提供安全 clone 脚本，在 clone 成功后立即删除并验证项目根目录 `.git`；Skill 不再生成项目脚手架，只负责维护会随 opscli 发版更新的项目级规范和平台限制。
 
 ## 规范归属
 
@@ -36,28 +36,30 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 ## 新项目
 
 1. 确认应用展示名称，并确认目标目录不存在或为空。
-2. 克隆模板：
+2. 使用当前 Skill 根目录下的安全脚本克隆模板；将 `<skill-directory>` 替换为当前 `ops-app-build-spec` Skill 的绝对路径：
 
    ```bash
-   git clone --branch main --single-branch http://10.1.13.143:3000/aukeys-admin/template "<project-directory>"
+   python "<skill-directory>/scripts/clone_template.py" "<project-directory>"
    ```
 
-3. 模板克隆成功后立即创建 AppHub 应用并写入本地 binding：
+   脚本直接 clone 到目标目录，成功后立即删除项目根目录 `.git` 并验证其不存在；不删除 `.gitignore`，不使用临时目录。任一步失败都停止，禁止手动跳过清理继续开发。
+
+3. 模板源码准备成功后立即创建 AppHub 应用并写入本地 binding：
 
    ```bash
    opscli app create "<app-name>" --path "<project-directory>" --json
    ```
 
-4. `create` 成功后立即初始化应用仓库并将模板 `origin` 切换为业务仓库：
+4. `create` 成功后立即初始化全新 Git 仓库并绑定 AppHub 业务仓库：
 
    ```bash
    opscli app init "<project-directory>" --json
    ```
 
-5. 核对分支、HEAD 和 `origin`，确认 `.opscli/app.json`、`app.yaml`、`AGENTS.md`、`frontend/`、`backend/app.py`、`backend/CLAUDE.md` 和 `docs/apphub-contract.md` 存在，且 `.opscli/app.json.slug == app.yaml.name`。
+5. 核对分支、HEAD 和 `origin`，确认 `origin` 不指向统一模板仓库；确认 `.opscli/app.json`、`app.yaml`、`AGENTS.md`、`frontend/`、`backend/app.py`、`backend/CLAUDE.md` 和 `docs/apphub-contract.md` 存在，且 `.opscli/app.json.slug == app.yaml.name`。
 6. 开发前读取目标项目的 `AGENTS.md`、`docs/apphub-contract.md`、`backend/CLAUDE.md` 和 `README.md`。
 
-新项目只通过 clone 获取模板，不使用 `opscli app create/init` 代替 clone；但 clone、`create` 和 `init` 是开始开发前连续执行的必需步骤。任一步失败都停止后续开发，并按错误处理规范保留证据；业务代码不得推回模板仓库。
+新项目只通过安全 clone 脚本获取模板，不使用 `opscli app create/init` 代替 clone；但 clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连续执行的必需步骤。任一步失败都停止后续开发，并按错误处理规范保留证据；业务代码不得推回模板仓库。
 
 不得运行项目生成器、手写替代脚手架，或从 Skill 复制应用代码和发布资产。
 
@@ -205,7 +207,7 @@ database:
 
 ## 错误处理
 
-- 模板克隆失败：保留 Git 原始错误并停止，不退回旧脚手架。
+- 模板克隆或 `.git` 清理验证失败：保留原始错误并停止，不退回旧脚手架，不执行 `create/init`。
 - 模板合同冲突：列出证据和影响，不猜测。
 - 迁移无法保持业务行为：停止迁移，保留源实现和失败证据。
 - `opscli` CLI 或 MCP 工具失败：按 `ops-feedback` 规范立即提交结构化反馈；认证未授权和用户取消除外。

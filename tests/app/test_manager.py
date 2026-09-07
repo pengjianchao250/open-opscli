@@ -98,7 +98,7 @@ class FakeCredentialStore:
         self.exists = exists
         self.saved: list[dict] = []
 
-    def has_credential(self, root, *, repo_url, username):
+    def has_credential(self, root, *, repo_url, username, token_hint=None):
         return self.exists
 
     def save_credential(self, root, *, repo_url, username, token):
@@ -160,7 +160,7 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
 
     assert len(client.create_payloads) == 1
     payload = client.create_payloads[0]
-    assert payload["database"] == {"path": None}
+    assert payload["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert "runtime" not in payload
     assert git.init_calls == []
     assert git.push_calls == []

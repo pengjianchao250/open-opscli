@@ -48,7 +48,7 @@ class AppCreateRequest:
             "description": self.description,
             "contact": self.contact,
             "resources": {"cpu": None, "memory": None},
-            "database": {"path": None},
+            "database": {"kind": "sqlite", "path": "/data/app.db"},
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
