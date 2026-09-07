@@ -6,6 +6,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,11 +36,39 @@ RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 
 _logger = logging.getLogger("opscli.file_uploads")
 
+_SENSITIVE_UPLOAD_TEXT = re.compile(
+    r"authorization|bearer|cookie|token|secret|password|credential|"
+    r"api[\s_-]?key|access[\s_-]?key|private[\s_-]?key|device[\s_-]?code|"
+    r"session|signature|签名|密钥|密码|凭证|"
+    r"eyJ[\w-]*\.[\w-]+|sk-[\w-]+|(?:LTAI|AKIA)[A-Za-z0-9]+|"
+    r"[{}<>]|https?://|(?:^|\s)\[", re.IGNORECASE,
+)
+
+
+def _safe_upload_message(message: str) -> str:
+    """在共享异常边界隐藏疑似凭证及响应转储，保护所有上传调用方。"""
+    if _SENSITIVE_UPLOAD_TEXT.search(message):
+        return "远端错误消息可能包含敏感信息，已隐藏"
+    return " ".join(message.split())[:500] or "文件上传失败"
+
+
+def _safe_upload_business_code(value: int | str | None) -> int | str | None:
+    """业务码也来自远端，只保留短标识符，排除凭证样式内容。"""
+    if type(value) not in (int, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", str(value)):
+        return None
+    if _SENSITIVE_UPLOAD_TEXT.search(str(value)):
+        return None
+    return value
+
 
 class FileUploadError(RemoteError):
     """文件上传错误。"""
 
     code = "FILE_UPLOAD_ERROR"
+
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(_safe_upload_message(message))
+        self.status_code = status_code
 
 
 class FileUploadHttpError(FileUploadError):
@@ -47,9 +76,9 @@ class FileUploadHttpError(FileUploadError):
 
     code = "FILE_UPLOAD_HTTP_ERROR"
 
-    def __init__(self, status_code: int, message: str):
-        super().__init__(message)
-        self.status_code = status_code
+    def __init__(self, status_code: int, message: str, *, business_code: int | str | None = None):
+        super().__init__(message, status_code=status_code)
+        self.business_code = _safe_upload_business_code(business_code)
 
 
 class FileUploadBusinessError(FileUploadError):
@@ -57,9 +86,9 @@ class FileUploadBusinessError(FileUploadError):
 
     code = "FILE_UPLOAD_BUSINESS_ERROR"
 
-    def __init__(self, business_code: int | str, message: str):
-        super().__init__(message)
-        self.business_code = business_code
+    def __init__(self, business_code: int | str, message: str, *, status_code: int | None = None):
+        super().__init__(message, status_code=status_code)
+        self.business_code = _safe_upload_business_code(business_code)
 
 
 class FileUploadBadJsonError(FileUploadError):
@@ -159,7 +188,7 @@ class FileUploadClient:
         payload = _parse_upload_response(response)
         url = _extract_upload_url(payload)
         if not url:
-            raise FileUploadBadJsonError("文件上传响应缺少下载链接")
+            raise FileUploadBadJsonError("文件上传响应缺少下载链接", status_code=response.status_code)
         _logger.info(
             "[KEEPA-TRACE] file_upload_request_done purpose=%s filename=%s status=%s elapsed_ms=%s",
             purpose,
@@ -203,18 +232,8 @@ class FileUploadClient:
                 if response.status_code not in RETRYABLE_HTTP_STATUS_CODES:
                     return response
                 if attempt >= max_attempts:
-                    raise FileUploadHttpError(
-                        response.status_code,
-                        _upload_context_message(
-                            file_path,
-                            endpoint=endpoint,
-                            purpose=purpose,
-                            folder=folder,
-                            attempt=attempt,
-                            max_attempts=max_attempts,
-                            message=f"远端返回 HTTP {response.status_code}",
-                        ),
-                    )
+                    # 交回统一解析器，保留最后一次响应的业务码和错误消息。
+                    return response
                 last_error = FileUploadHttpError(
                     response.status_code,
                     _upload_context_message(
@@ -342,14 +361,23 @@ def _parse_upload_response(response: httpx.Response) -> dict[str, Any]:
     try:
         payload = response.json()
     except Exception as exc:
-        raise FileUploadBadJsonError("远端返回了无法解析的 JSON") from exc
+        # 网关可能返回 HTML；仍保留 HTTP 状态，但不暴露响应正文。
+        if response.status_code >= 400:
+            raise FileUploadHttpError(response.status_code, "远端错误响应不是有效 JSON") from exc
+        raise FileUploadBadJsonError("远端返回了无法解析的 JSON", status_code=response.status_code) from exc
     if not isinstance(payload, dict):
-        raise FileUploadBadJsonError("远端返回结构不是 JSON 对象")
+        if response.status_code >= 400:
+            raise FileUploadHttpError(response.status_code, "远端错误响应不是 JSON 对象")
+        raise FileUploadBadJsonError("远端返回结构不是 JSON 对象", status_code=response.status_code)
     if response.status_code >= 400:
-        raise FileUploadHttpError(response.status_code, extract_error_message(payload) or f"远端请求失败，HTTP {response.status_code}")
+        raise FileUploadHttpError(
+            response.status_code,
+            extract_error_message(payload) or f"远端请求失败，HTTP {response.status_code}",
+            business_code=payload.get("code"),
+        )
     code = payload.get("code")
     if code not in (None, 0, 200, 201, "0", "200", "201"):
-        raise FileUploadBusinessError(code, extract_error_message(payload) or "远端业务执行失败")
+        raise FileUploadBusinessError(code, extract_error_message(payload) or "远端业务执行失败", status_code=response.status_code)
     return payload
 
 

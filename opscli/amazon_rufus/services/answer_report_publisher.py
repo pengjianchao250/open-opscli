@@ -5,9 +5,39 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
+
 from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
 from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
-from opscli.shared.file_uploads import FileUploadClient
+from opscli.auth.exceptions import AuthError
+from opscli.shared.file_uploads import FileUploadClient, FileUploadError
+
+
+def _upload_error_details(exc: Exception) -> dict:
+    """只返回可诊断的错误字段，敏感消息整体隐藏，不复制原始响应。"""
+    cause = exc
+    for _ in range(10):
+        if isinstance(cause, (httpx.TransportError, AuthError)) or cause.__cause__ is None:
+            break
+        cause = cause.__cause__
+    if isinstance(cause, httpx.TimeoutException):
+        message = "文件上传请求超时"
+    elif isinstance(cause, httpx.TransportError):
+        message = "文件上传网络连接失败"
+    elif isinstance(cause, AuthError):
+        message = "OPS 上传鉴权失败，请检查登录状态或凭证"
+    elif isinstance(exc, FileUploadError):
+        # 共享上传异常已过滤敏感消息，CLI/MCP 不再重复处理原始响应。
+        message = str(exc)
+    else:
+        message = "文件上传发生未预期异常，原始消息已隐藏"
+    return {
+        "type": type(cause if isinstance(cause, (httpx.TransportError, AuthError)) else exc).__name__,
+        "code": exc.code if isinstance(exc, FileUploadError) else None,
+        "http_status": getattr(exc, "status_code", None) if isinstance(exc, FileUploadError) else None,
+        "business_code": getattr(exc, "business_code", None) if isinstance(exc, FileUploadError) else None,
+        "message": message,
+    }
 
 
 @dataclass(frozen=True)
@@ -52,5 +82,5 @@ class AnswerReportPublisher:
                 metadata=metadata,
             )
         except Exception as exc:
-            raise RufusReportUploadError(report_path) from exc
+            raise RufusReportUploadError(report_path, upload_error=_upload_error_details(exc)) from exc
         return PublishedAnswerReport(path=report_path, url=upload_result.url)

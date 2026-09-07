@@ -1123,6 +1123,8 @@ def test_cli_get_backend_calls_backend_manager_publishes_report_with_payload_dis
 
 
 def test_cli_get_backend_returns_upload_error_and_keeps_local_report(monkeypatch, tmp_path: Path):
+    from opscli.shared.file_uploads import FileUploadHttpError
+
     class DummyManager:
         def get_backend(self, **kwargs):
             return {
@@ -1136,7 +1138,7 @@ def test_cli_get_backend_returns_upload_error_and_keeps_local_report(monkeypatch
 
     class FailingFileUploadClient:
         def upload(self, path: Path, **kwargs):
-            raise RuntimeError("remote sensitive response")
+            raise FileUploadHttpError(403, "没有文件上传权限", business_code="UPLOAD_DENIED")
 
     monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: DummyManager())
     monkeypatch.setattr(
@@ -1161,6 +1163,10 @@ def test_cli_get_backend_returns_upload_error_and_keeps_local_report(monkeypatch
             "code": "RUFUS_REPORT_UPLOAD_ERROR",
             "message": "Rufus 报告上传失败，已保留本地文件",
             "report_path": report_path.relative_to(tmp_path).as_posix(),
+            "upload_error": {
+                "type": "FileUploadHttpError", "code": "FILE_UPLOAD_HTTP_ERROR",
+                "http_status": 403, "business_code": "UPLOAD_DENIED", "message": "没有文件上传权限",
+            },
         },
     }
     assert "remote sensitive response" not in result.stdout

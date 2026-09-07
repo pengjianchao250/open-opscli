@@ -533,10 +533,14 @@ def test_amazon_rufus_get_returns_report_upload_error_without_stale_url(monkeypa
     from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
 
     report_path = Path("output/amazon-rufus/B0TEST1234-test.md")
+    details = {
+        "type": "FileUploadHttpError", "code": "FILE_UPLOAD_HTTP_ERROR",
+        "http_status": 403, "business_code": "UPLOAD_DENIED", "message": "没有文件上传权限",
+    }
 
     class DummyManager:
         def get(self, **kwargs):
-            raise RufusReportUploadError(report_path)
+            raise RufusReportUploadError(report_path, upload_error=details)
 
     monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda: DummyManager())
     monkeypatch.chdir(tmp_path)
@@ -555,6 +559,7 @@ def test_amazon_rufus_get_returns_report_upload_error_without_stale_url(monkeypa
         "code": "RUFUS_REPORT_UPLOAD_ERROR",
         "message": "Rufus 报告上传失败，已保留本地文件",
         "report_path": report_path.as_posix(),
+        "upload_error": details,
     }
     assert "report_url" not in json.dumps(result, ensure_ascii=False)
 
