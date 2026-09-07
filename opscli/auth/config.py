@@ -15,13 +15,13 @@ from opscli.config import CONFIG_DIR
 
 # 生产环境默认值
 DEFAULTS = {
-    "ops_url": "https://ops.api.xenkee.com/api",
-    "ops_system_url": "https://ops.api.xenkee.com",
+    "ops_url": "https://ops.api.qa.aukeyit.com/api",
+    "ops_system_url": "https://ops.api.qa.aukeyit.com",
     "ops_token_endpoint": "/api/v1/auth/cli-token",
-    "apphub_url": "https://apphub.api.xenkee.com",
+    "apphub_url": "https://apphub.qa.aukeyit.com",
     "app_template_repo": "http://10.1.13.143:3000/aukeys-admin/template.git",
     "app_template_branch": "main",
-    "polaris_system_url": "https://bi.api.xenkee.com",
+    "polaris_system_url": "https://biapi.qa.aukeyit.com",
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",
     # 控制 polaris 系统是否参与授权请求和 Token 刷新
