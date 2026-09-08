@@ -38,6 +38,8 @@
 → ops-app-data-builder 验证合同并生成数据层
 ```
 
+页面、API 或数据库需要持续取数时，由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步。缺少批准的系统运行时适配器时，固定同步必须标记为 `blocked`，不得复用访问者身份建立共享数据。
+
 `ops-app-build-spec` 不选择或猜测数据集、字段、聚合、筛选、第三方场景或运行时方法签名，也不复制数据 Skill 的规则。
 
 如果当前只是 `检查` 模式，只记录数据需求和违规风险，不修改数据层代码。
@@ -72,14 +74,14 @@
 
 - 开发期通过 `ops-keepa` 验证场景和样本。
 - 页面运行期由站点后端调用正式 `POST /api/v1/keepa/run`；场景列表只用于开发期合同验证。
-- 后端 Secret 使用 `OPSCLI_API_BASE_URL` 和 `OPSCLI_API_KEY`；不得进入 `VITE_*`。
+- 后端配置使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，后端 Secret 使用 `OPSCLI_THIRD_PARTY_DATA_API_KEY`；不得进入 `VITE_*`，不得回退读取旧变量名。
 - 同时检查 HTTP 状态和响应 `success`；失败不清空最后有效共享快照。
 - 多用户同步并发查询可以分别执行，成功 JSON 结果通过 `provider + request_hash` `UPSERT` 为一条共享快照。
 
 ### SellerSprite
 
 - 开发期通过 `ops-seller-sprite` 验证合同。
-- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端 Secret 与 Keepa 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
+- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端配置与 Keepa 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`。
 - 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务复用原 `job_id`，不得重复提交。
 - 只有成功 JSON 结果进入第三方共享快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
 - 用户查询历史、输入、收藏、备注和二次加工结果写入带 `owner_user_id` 的用户私有表。
@@ -107,7 +109,7 @@
 - Keepa 只使用正式同步 REST 和后端 Secret，HTTP 200 业务失败不会覆盖有效快照。
 - SellerSprite 使用正式异步 REST，pending `job_id` 被复用，终态和 HTTP 202 映射正确。
 - 第三方 JSON 原始数据、异步任务和用户私有加工结果分表；XLS/XLSX 和临时下载 URL 不进入 SQLite。
-- 只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 `OPSCLI_SELLER_SPRITE_E2E_*` 别名。
+- 只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不兼容旧变量别名。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。

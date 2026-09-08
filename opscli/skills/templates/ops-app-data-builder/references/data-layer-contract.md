@@ -1,6 +1,6 @@
 # 站点数据层合同
 
-用于把页面需求转换为可实现、可测试的数据产品合同。只记录已经由项目证据或对应数据 Skill 验证的内容；未验证项必须明确标记。
+用于把页面需求转换为可实现、可测试的数据产品合同。只记录已经由项目证据、当前在线元数据或对应数据 Skill 验证的内容；静态资料只能形成候选，未验证项必须明确标记。
 
 ## 1. 数据产品结构
 
@@ -18,9 +18,9 @@
   "natural_key": ["site", "asin"],
   "source_execution": {
     "auth": "backend-bearer-secret",
-    "base_url_env": "OPSCLI_API_BASE_URL",
+    "base_url_env": "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
     "production_base_url": "https://ops.mcp.xenkee.com",
-    "api_key_env": "OPSCLI_API_KEY",
+    "api_key_env": "OPSCLI_THIRD_PARTY_DATA_API_KEY",
     "submit_endpoint": "POST /api/v1/seller-sprite/jobs",
     "status_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}",
     "result_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}/result",
@@ -60,12 +60,25 @@
 
 | 状态 | 含义 |
 | --- | --- |
-| `draft` | 业务目标已识别，尚未验证真实来源 |
+| `candidate` | 业务目标或候选来源已识别，尚未由当前在线元数据验证 |
 | `verified` | 来源、字段或场景、参数和少量样本已验证 |
 | `blocked` | 正式端点、权限、返回格式或运行前置缺失 |
 | `mock-only` | 只允许前端联调和测试，不代表线上可取数 |
 
-不得用一个总状态覆盖所有数据产品。多来源产品要分别记录每个来源的状态。
+不得用一个总状态覆盖所有数据产品。多来源产品要分别记录每个来源的状态、验证时间和证据。静态字段目录、历史授权目录和应用清单不能把 `candidate` 提升为 `verified`。
+
+### 2.1 OPS 取数模式
+
+涉及 OPS 时先按 `references/ops-dataset-application-guide.md` 判定：
+
+- `one-off-query`：退出数据层构建，交给查询 Skill。
+- `guided-query`：先由 `$ops-query-wizard` 澄清。
+- `viewer-live`：当前访问者实时查询。
+- `viewer-private-persisted`：按可信 `owner_user_id` 保存用户私有历史或加工结果。
+- `approved-system-sync`：仅有经过批准的系统运行时适配器时允许。
+- `reference-only`：只形成候选，不生成运行时代码。
+
+OPS 数据产品在 data-spec 中记录 `acquisition_mode`。Keepa 和 SellerSprite 继续使用各自的 `execution_mode`，不强行套用 OPS 身份模式。
 
 ## 3. 执行模式
 
@@ -90,13 +103,19 @@ owner_key = owner_user_id
 
 用户私有表的创建、读取、更新、删除、索引、唯一约束和幂等键都必须包含 `owner_user_id`。
 
-### 4.2 第三方共享原始数据
+### 4.2 OPS 批准的系统同步
 
-Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`。共享前提是站点后端统一使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 和同一个 `ThirdPartyApiClient`；生产根域名固定为 `https://ops.mcp.xenkee.com`，endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。站点访问用户身份不作为上游调用凭证。
+标准模板不自动提供 OPS 无人值守系统身份。只有项目实际存在经过批准的运行时适配器，且身份、授权、白名单、确定性分页、批次、自然键、幂等、快照和失败恢复均有项目证据时，才允许生成系统同步实现。
+
+缺少任一前置时将来源标记为 `blocked`。不得保存访问者 `X-Ops-Token`、使用某个 viewer 身份生成站点共享快照、自行创建系统账号或伪造 SDK Client。
+
+### 4.3 第三方共享原始数据
+
+Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`。共享前提是站点后端统一使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY` 和同一个 `ThirdPartyApiClient`；生产根域名固定为 `https://ops.mcp.xenkee.com`，endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。站点访问用户身份不作为上游调用凭证。
 
 共享快照不得包含 API Key、Authorization、Session、JWT、Cookie、用户身份、完整敏感响应或非业务调用上下文。XLS/XLSX、二进制内容和临时下载 URL 不写入 SQLite。
 
-### 4.3 用户私有行为和加工结果
+### 4.4 用户私有行为和加工结果
 
 以下内容使用 `user-private`：
 
@@ -201,17 +220,18 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 
 ```text
 1. 页面与数据产品
-2. 数据源和验证证据
-3. 字段、粒度与业务口径
-4. 执行模式与身份边界
-5. source_execution 与 request_hash
-6. task/source/result storage
-7. 站点 API 与错误合同
-8. 二次加工和用户隔离
-9. SQLite 模型、迁移与清理
-10. 新鲜度、分页、超时与重试
-11. 环境变量与 Secret
-12. Mock、测试和阻塞项
+2. OPS acquisition_mode 与选择原因
+3. 候选来源、candidate/verified/blocked 状态和在线验证证据
+4. 字段、粒度、自然键、快照与业务口径
+5. 执行模式与身份边界
+6. source_execution 与 request_hash
+7. task/source/result storage
+8. 站点 API 与错误合同
+9. 二次加工和用户隔离
+10. SQLite 模型、迁移与清理
+11. 新鲜度、分页、截断、超时与重试
+12. 环境变量与 Secret
+13. Mock、测试和阻塞项
 ```
 
 第一阶段只生成 Markdown 规范，不新增运行时 YAML；数据规范不得形成第二套配置权威源。

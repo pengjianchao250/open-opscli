@@ -8,7 +8,8 @@
     "data/VERSION.json",
     "agents/openai.yaml",
     "references/data-layer-contract.md",
-    "references/runtime-source-routing.md"
+    "references/runtime-source-routing.md",
+    "references/ops-dataset-application-guide.md"
   ],
   "required_skill_terms": [
     "当前工作对象已通过 `opscli app create/init` 完成标准模板初始化",
@@ -16,7 +17,19 @@
     "$ops-query-wizard",
     "$ops-keepa",
     "$ops-seller-sprite",
+    "one-off-query",
+    "guided-query",
     "viewer-live",
+    "viewer-private-persisted",
+    "approved-system-sync",
+    "reference-only",
+    "candidate",
+    "verified",
+    "blocked",
+    "当前在线元数据",
+    "查询组件只用于",
+    "确定性分页",
+    "断点续传",
     "sync-request",
     "async-job",
     "docs/ops-app/data-spec.md",
@@ -25,8 +38,8 @@
     "ViewerQueryGateway",
     "app.yaml",
     "opscli.datasets",
-    "OPSCLI_API_BASE_URL",
-    "OPSCLI_API_KEY",
+    "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+    "OPSCLI_THIRD_PARTY_DATA_API_KEY",
     "https://ops.mcp.xenkee.com",
     "纯根域名",
     "同一个 `ThirdPartyApiClient`",
@@ -72,6 +85,14 @@
     {
       "id": "viewer-cache-boundary",
       "prompt": "把所有访问用户查到的 OPS 数据统一缓存到站点 SQLite，方便大家共用。"
+    },
+    {
+      "id": "approved-system-sync-gate",
+      "prompt": "给库存站点做每日全量同步，但项目里还没有 OPS 系统身份适配器。"
+    },
+    {
+      "id": "static-catalog-is-not-runtime-truth",
+      "prompt": "直接根据上个月导出的字段目录生成销售看板查询，不需要再核对线上元数据。"
     }
   ],
   "success_criteria": [
@@ -80,10 +101,14 @@
     "OPS 通过 Depends(get_query_gateway) 复用标准模板 QueryGateway，线上使用 ViewerQueryGateway",
     "真实 OPS 数据集同步加入 app.yaml.opscli.datasets 白名单",
     "测试使用 FakeGateway 和 dependency override，不访问真实 SDK、凭证或网络",
-    "Keepa 和 SellerSprite 使用统一生产根域名、同一个后端 Client 和同一组 OPSCLI_API_BASE_URL、OPSCLI_API_KEY 配置",
+    "Keepa 和 SellerSprite 使用统一生产根域名、同一个后端 Client 和同一组 OPSCLI_THIRD_PARTY_DATA_API_BASE_URL、OPSCLI_THIRD_PARTY_DATA_API_KEY 配置",
     "Keepa 只通过后端正式同步 REST 和 Secret 调用，业务失败不覆盖有效快照",
     "SellerSprite 使用正式异步 REST，保存并复用 pending job_id，成功 JSON 结果写共享快照",
     "OPS 原始和加工结果、用户查询历史及二次加工结果按 owner_user_id 隔离",
+    "静态资料只形成 candidate，只有当前在线元数据和少量真实查询可以标记 verified",
+    "缺少批准的 OPS 系统运行时适配器时，固定同步标记 blocked，不生成系统账号、定时任务或伪适配器",
+    "查询组件只用于权限枚举和筛选，不能作为经营业务结果",
+    "固定过程数据必须定义确定性分页、断点续传、批次、自然键、幂等和快照语义",
     "XLS/XLSX、二进制和临时下载 URL 不写入 SQLite",
     "前端只调用当前站点 /api，跨来源加工进入 FastAPI service",
     "生成 data-spec、schema、前端类型、迁移和测试",

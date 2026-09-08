@@ -196,7 +196,7 @@ database:
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
 - Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run` 和后端 Secret。
 - SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，pending `job_id` 被持久化并复用，成功 JSON 结果才进入共享快照。
-- Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 E2E 配置别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
+- Keepa 和 SellerSprite 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不读取旧变量别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器。

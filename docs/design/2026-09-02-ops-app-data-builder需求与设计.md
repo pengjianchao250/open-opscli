@@ -47,7 +47,7 @@
 3. SQLite 只允许单写实例，不适合多实例共享、高并发持续写入或高频任务队列。
 4. opscli REST API 当前正式覆盖 query、Keepa 同步查询和 SellerSprite 异步任务。
 5. 标准模板通过 `get_query_gateway` 选择 Gateway；AppHub 线上由 `ViewerQueryGateway` 使用宿主注入的 `X-Ops-Token`，业务代码不得自行创建 `AuthClient` 或 `QueryManager`。
-6. Keepa 和 SellerSprite 共用站点后端 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不能与 OPS viewer 身份混用。
+6. Keepa 和 SellerSprite 共用站点后端 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不能与 OPS viewer 身份混用，也不兼容旧变量别名。
 7. API Key、JWT、Cookie 和账号信息不得进入源码、前端产物、日志或项目文档。
 
 ## 4. 当前缺口
@@ -202,8 +202,8 @@ ops-app-data-builder
 计划使用的后端配置名称：
 
 ```text
-OPSCLI_API_BASE_URL
-OPSCLI_API_KEY
+OPSCLI_THIRD_PARTY_DATA_API_BASE_URL
+OPSCLI_THIRD_PARTY_DATA_API_KEY
 ```
 
 真实值不写入 `.env.example`。

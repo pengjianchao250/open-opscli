@@ -109,7 +109,7 @@
       "binary": true,
       "binary_full": true,
       "tier": "internal",
-      "reason": "Codex 中基于标准模板 QueryGateway 为 opscli app 站点验证 OPS 用户隔离、Keepa 同步和 SellerSprite 异步数据合同，并生成前后端数据层、SQLite 迁移、测试和 data-spec"
+      "reason": "Codex 中为标准 opscli app 站点判定 OPS 取数模式、验证在线数据合同和用户隔离，并生成前后端数据层、SQLite 迁移、测试和 data-spec"
     },
     "ops-dataset-query": {
       "source": true,
