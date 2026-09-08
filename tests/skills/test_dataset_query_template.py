@@ -99,3 +99,36 @@ def test_main_entry_is_kernel_flow():
     assert "opscli query plan" in cli_md
     # 图表/Excel 消费端脚本仍由图表指南承接
     assert "scripts/chart_map.py" in (TEMPLATE / "references" / "chart-excel-guide.md").read_text(encoding="utf-8")
+
+
+def test_bundled_evidence_script_matches_kernel_on_real_result_shape(tmp_path):
+    """随包 evidence_contract.py 必须与内核实现同口径：真实返回形状下行证据非空、error:null 不算缺失。
+
+    第二轮 E2E 实测：随包脚本仍是内核修复前的旧实现，对 `opscli query flow` 落盘结果
+    输出 required_evidence=[] 且 missing_paths=["error"]，图表路径因此没有可用证据合同。
+    """
+    import subprocess
+    import sys
+
+    from opscli.query.services.planner import evidence_contract as kernel
+
+    source = {
+        "success": True,
+        "data": [{"platform_name": "Temu", "price": "318810.19620000"}],
+        "meta": {"rowCount": 1, "totalCount": 1, "currency": "CNY"},
+        "error": None,
+    }
+    result_file = tmp_path / "result.json"
+    result_file.write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+    completed = subprocess.run(
+        [sys.executable, str(TEMPLATE / "scripts" / "evidence_contract.py"), "--input", str(result_file)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    output = json.loads(completed.stdout)
+    assert output == kernel.build_evidence_contract(source)
+    assert output["required_evidence"], output
+    assert "error" not in output["missing_paths"]
+    assert "currency_not_declared" not in output["required_disclosure_codes"]

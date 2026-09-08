@@ -11,9 +11,27 @@ description: 当前已认证账号的 MCP-only 元数据与查询路由
 
 认证或远程元数据失败时阻断选择，先完成认证或恢复远程元数据。不得使用任何替代来源，也不得混用其他账号的响应。
 
+## 工具清单（`query_*`，共 13 个）
+
+| 工具 | 作用 | 何时用 |
+| --- | --- | --- |
+| `query_flow` | 一体化：只规划一次并执行（单币种一次，多币种按 `query_templates` 逐项执行） | **MCP 取数主线入口** |
+| `query_plan` | 只规划不执行，返回规划合同 | 需要先看合同再决定时 |
+| `query_metadata` | 数据集卡片 / 指定数据集完整字段 + `select_columns` / 全量字段（`include_all_fields=True`） | 手工路线选表与取字段 |
+| `query_simple` | 结构化参数执行正式查询 | 手工路线的正式执行入口 |
+| `query_build` | 只构造 payload 不执行（**不需要认证**） | 需要先离线生成并审阅 payload 时 |
+| `query_run` | 执行已有 payload | 与 `query_build` 配对使用 |
+| `query_build_and_run` | CLI 风格字符串参数，一步构造并执行 | `query_simple` 无法表达的参数形态 |
+| `query_catalog` | 读取数据集业务语义索引（intents） | 卡片列表不易定位数据集时的选表参考 |
+| `query_intent_match` | 把自然语言匹配到 catalog intents，返回候选与业务约束 | 同上；命中后仍须回 `query_metadata(dataset=...)` 核对字段 |
+| `query_chart` | 按 `chart_uuid` 取图表结构，`run=True` 执行全部子查询 | 用户给出图表 UUID 或要求复杂图表时 |
+| `query_chart_doc` | 生成该图表的 API 调用 Markdown 文档 | 需要图表字段映射与过滤规则说明时 |
+| `query_preferences` | 返回当前用户已保存的图表字段偏好（各数据集的维度/指标） | 手工路线选字段时优先采用偏好字段；规划器主线不需要 |
+| `query_spec_must_read` | 返回 MCP 取数规范全文（`QUERY_SPEC.md` 的服务端存档） | **仅在未安装/已禁用本 Skill 时**调用；本 Skill 已启用的会话不要调用，规则以本目录 `SKILL.md` 与本文件为准 |
+
 ## 规划器入口（优先）
 
-MCP 会话存在传输层已验证账号（remote 模式的 transport 邮箱 / fixed 模式的隔离凭证缓存 / stdio 本地登录态）时，自然语言取数优先调用内核规划器工具：`query_flow(request="<用户原文>")` 一次完成规划与执行（`status=planned` 时单币种执行一次、多币种按 `query_templates` 逐项执行），`query_plan(request=...)` 只规划不执行。合同的处置（`planned` / `clarify_required` / `blocked`、`result_disclosures`、内嵌 `evidence_contract`）与 SKILL.md「查询规划主线」一致；`query_flow` 不支持落盘，行数较大时改传更小的 `limit` 或按维度/时间拆分多次查询。只持有显式 `session_id`/`jwt`、没有传输层已验证账号的调用方，这两个工具会失败——此时改走下方标准流程的手工路线。
+MCP 会话存在传输层已验证账号（remote 模式的 transport 邮箱 / fixed 模式的隔离凭证缓存 / stdio 本地登录态）时，自然语言取数优先调用内核规划器工具：`query_flow(request="<用户原文>")` 一次完成规划与执行（`status=planned` 时单币种执行一次、多币种按 `query_templates` 逐项执行），`query_plan(request=...)` 只规划不执行。合同的处置（`planned` / `clarify_required` / `blocked`、`result_disclosures`、内嵌 `evidence_contract`）与 SKILL.md「查询规划主线」一致；`query_flow` 不支持落盘，行数较大时改传更小的 `limit` 或按维度/时间拆分多次查询。`result_disclosures` 按场景还带 `order_disclosure_zh`（排序生效的中文确认句，如「排序已生效：按「销售额」降序」）、`order_fallback`（服务端排序未生效、执行器已本地重排或按总行数加量重查后本地取前 N，必须披露）与 `freshness_disclosure_zh`（查询窗口包含今天（窗口末日不早于今天）且返回未声明新鲜度时出现，今日/末日数值不得当作业务事实）。快照指标的窗口收敛口径见 `execution_ref.snapshot_policy`，字段别名映射见 `model_view.field_alias_mappings_zh`，处置一律同 SKILL.md 主线规则。只持有显式 `session_id`/`jwt`、没有传输层已验证账号的调用方，这两个工具会失败——此时改走下方标准流程的手工路线。
 
 ## 标准流程
 
@@ -35,7 +53,7 @@ MCP 会话存在传输层已验证账号（remote 模式的 transport 邮箱 / f
 
 - 维度、指标、聚合和输出名称以已选数据集响应为准，不跨数据集补字段。
 - 公式字段含 `formula_config`、`summary_expression` 或 `detail_expression` 时不再传普通 `aggregation`。
-- 快照类指标（如库存量）默认取最新快照日的值，禁止跨日累加；需要趋势时按日展示快照序列。
+- 快照类指标（如库存量，合同中 `is_snapshot=true`）只反映某一天的切面，禁止跨日累加；需要趋势时按日展示快照序列，不求和。走 `query_flow` 时规划器已自动把「未按时间粒度维度分组的多日窗口」收敛为最新完整快照日，并在 `execution_ref.snapshot_policy` 与强制披露里说明；手工路线（`query_simple`）没有这层收敛，必须自己把窗口限定到单个快照日。
 - 环比、同比或上期对比同时传主周期日期 `filters` 和 `data_comparison`。
 
 ## 查询组件
@@ -65,4 +83,4 @@ MCP 会话存在传输层已验证账号（remote 模式的 transport 邮箱 / f
 
 ## 结果与失败
 
-`query_flow` 已返回内嵌 `evidence_contract` 时优先按其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论；手工路线按 `references/result-analysis.md` 的证据顺序输出。0 行、需要澄清、预期的认证未就绪和用户取消不是工具故障。只有意外 MCP 失败才按 `references/feedback-guide.md` 提交一次反馈；成功查询不自动提交反馈。
+`query_flow` 已返回内嵌 `evidence_contract` 时优先按其 `required_evidence`、`required_disclosures_zh`、`forbidden_inferences_zh` 组织结论。`query_chart(run=True)` 的返回同样自带 `evidence_contract`（只由 `merged` 段生成，构建失败时为 `evidence_contract_error`），直接使用，不需要补跑任何证据脚本。只有手工路线（`query_simple` 等）拿到的裸结果才按 `references/result-analysis.md` 的证据顺序输出。0 行、需要澄清、预期的认证未就绪和用户取消不是工具故障。只有意外 MCP 失败才按 `references/feedback-guide.md` 提交一次反馈；成功查询不自动提交反馈。
