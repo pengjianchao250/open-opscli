@@ -9,15 +9,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import io
 import sys
 import tarfile
 import zipfile
 from pathlib import Path
-
-# 强制 stdout/stderr 使用 UTF-8，避免 Windows cp1252 编码中文字符报错
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING_MODULE = REPO_ROOT / "opscli" / "skills" / "packaging.py"
@@ -110,5 +105,21 @@ def main() -> int:
     return 0
 
 
+def _force_utf8_stdio() -> None:
+    # 强制 stdout/stderr 使用 UTF-8，避免 Windows cp1252 编码中文字符报错。
+    # 只在脚本直跑时调用，且用 reconfigure 原地改属性：本模块会被
+    # tests/skills/test_packaging.py 以模块方式导入，若在导入期替换
+    # sys.stdout，旧 wrapper 会被 GC 关闭底层 buffer，进而弄崩 pytest 捕获。
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass
+
+
 if __name__ == "__main__":
+    _force_utf8_stdio()
     raise SystemExit(main())

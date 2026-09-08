@@ -28,7 +28,11 @@ from opscli.skills.domain.models import (
     runtime_to_tool_name,
 )
 from opscli.skills.link.linker import SkillsLinker
-from opscli.skills.packaging import get_builtin_templates_dir, get_central_skills_dir
+from opscli.skills.packaging import (
+    get_builtin_templates_dir,
+    get_central_skills_dir,
+    load_release_manifest,
+)
 from opscli.skills.sync.updater import UPGRADE_MANAGED_FILES, SkillsUpdater
 
 _logger = logging.getLogger("opscli.skills")
@@ -189,6 +193,7 @@ class SkillsManager:
         target_root: Path,
         runtime: str,
         force: bool,
+        source: str | None = "builtin",
     ) -> SkillBatchInstallResult:
         """旧复制模式：将模板直接复制到指定目录（兼容 --skills-dir 用法）。"""
         target_root.mkdir(parents=True, exist_ok=True)
@@ -214,7 +219,7 @@ class SkillsManager:
             )
             self._restore_runtime_metadata(target_dir, stash_path, stashed)
 
-        self._record_install(skill_name, target_dir, runtime)
+        self._record_install(skill_name, target_dir, runtime, source=source)
         return SkillBatchInstallResult(
             name=skill_name,
             installs=[
@@ -240,6 +245,7 @@ class SkillsManager:
         cwd: Path | None,
         runtime: str | list[str] | None,
         force: bool,
+        source: str | None = "builtin",
     ) -> SkillBatchInstallResult:
         """中央存储模式：复制到 ~/.opscli/skills，再在各工具目录建链接。"""
         central_skill_dir = self._central_skills_dir / skill_name
@@ -300,6 +306,7 @@ class SkillsManager:
                 target_runtime,
                 central_dir=central_skill_dir,
                 link_method=link_result.method,
+                source=source,
             )
             installs.append(
                 SkillInstallResult(
@@ -316,6 +323,16 @@ class SkillsManager:
 
         # 无 AI 工具可链接时：用一条 "central" 记录表示中央存储安装结果
         if not installs:
+            # 同时补写注册表记录（runtime=central）：否则"只落中央存储、无任何工具链接"
+            # 的安装完全无账可查，后续 uninstall / 下架清理都无法识别其归属
+            self._record_install(
+                skill_name,
+                central_skill_dir,
+                "central",
+                central_dir=central_skill_dir,
+                link_method=None,
+                source=source,
+            )
             installs.append(
                 SkillInstallResult(
                     name=skill_name,
@@ -463,6 +480,160 @@ class SkillsManager:
             results.append(dataclasses.replace(base, runtime=t.runtime, target_dir=t.root))
 
         return SkillBatchUpgradeResult(name=name, results=results)
+
+    def uninstall(
+        self,
+        skill_name: str,
+        *,
+        skills_dir: str | None = None,
+        dry_run: bool = False,
+    ) -> dict:
+        """完整卸载一个 Skill：移除各工具目录的链接/副本、中央存储实体和注册表记录。
+
+        与 skills unlink 的区别：unlink 只删工具目录链接、保留中央存储；
+        uninstall 是 Skill 生命周期的终点，链接、实体、账本三者全清。
+
+        清理位置按以下来源聚合（去重）：
+          1. 注册表中该 Skill 的全部 target_dir（含 --skills-dir 自定义目录副本
+             和无工具场景下的中央存储记录）；
+          2. 显式 skills_dir 下的 <skills_dir>/<skill_name>；
+          3. 全局已安装的 AI 工具 skills 目录（注册表丢失时的兜底；
+             用 detect_global_install_targets，无虚假回退目标、不创建目录）；
+          4. 中央存储 ~/.opscli/skills/<skill_name>。
+
+        Args:
+            skill_name: 要卸载的 Skill 名称
+            skills_dir: 额外清理的自定义安装目录（--skills-dir 安装模式的落盘位置）
+            dry_run: 仅统计将清理的内容，不执行任何删除
+
+        Returns:
+            汇总 dict：name / removed_links / skipped_links / central_dir /
+            central_removed / registry_cleared / dry_run
+        """
+        # Step 1：聚合清理目标（注册表优先，工具目录探测兜底）
+        registry = self._read_registry()
+        entries = registry.get(skill_name, [])
+        target_dirs: list[Path] = []
+        seen_paths: set[str] = set()
+
+        def _add_target(path: Path) -> None:
+            key = str(path)
+            if key not in seen_paths:
+                seen_paths.add(key)
+                target_dirs.append(path)
+
+        for entry in entries:
+            raw_target = str(entry.get("target_dir", ""))
+            if raw_target:
+                _add_target(Path(raw_target))
+        if skills_dir:
+            _add_target(Path(skills_dir).expanduser() / skill_name)
+        try:
+            for _runtime, tool_skills_dir in self.detector.detect_global_install_targets():
+                _add_target(tool_skills_dir / skill_name)
+        except Exception as _detect_exc:
+            # 工具目录探测失败不阻断卸载：注册表记录的位置仍然会被清理
+            _logger.debug("卸载时工具目录探测失败（忽略）: %s", _detect_exc)
+
+        central_skill_dir = self._central_skills_dir / skill_name
+
+        # Step 2：移除各工具目录下的链接 / 副本
+        removed_links: list[str] = []
+        skipped_links: list[str] = []
+        for target_dir in target_dirs:
+            if not target_dir.exists() and not target_dir.is_symlink():
+                skipped_links.append(str(target_dir))
+                continue
+            if not dry_run:
+                self.linker.unlink(target_dir)
+            removed_links.append(str(target_dir))
+
+        # Step 3：移除中央存储实体（实体目录同样走 _safe_remove 的安全删除语义）
+        central_existed = central_skill_dir.exists() or central_skill_dir.is_symlink()
+        central_removed = central_existed
+        if central_existed and not dry_run:
+            central_removed = self.linker.unlink(central_skill_dir)
+
+        # Step 4：清理注册表记录
+        registry_cleared = skill_name in registry
+        if registry_cleared and not dry_run:
+            registry.pop(skill_name, None)
+            try:
+                self._write_registry(registry)
+            except Exception as _reg_exc:
+                _logger.warning("注册表清理写入失败: %s", _reg_exc)
+
+        if not (removed_links or central_removed or registry_cleared):
+            raise ValueError(
+                f"未找到已安装 Skill: {skill_name}（无注册表记录，中央存储和工具目录中也不存在）"
+            )
+
+        return {
+            "name": skill_name,
+            "removed_links": removed_links,
+            "skipped_links": skipped_links,
+            "central_dir": str(central_skill_dir),
+            "central_removed": central_removed,
+            "registry_cleared": registry_cleared,
+            "dry_run": dry_run,
+        }
+
+    def list_delisted_skills(self) -> list[str]:
+        """列出"由 opscli 内置模板安装、但当前发行包已不包含"的下架 Skill。
+
+        判定规则（保守取向，宁漏勿错删）：
+          1. 只考虑注册表记录过的 Skill——opscli 自己装的才有账可查；
+          2. 当前模板目录（list_templates）仍然存在的 Skill 永不清理；
+          3. 记录来源含 remote（技能广场安装）的 Skill 永不清理；
+          4. 记录来源为 builtin 且模板已不存在 → 下架，可清理；
+          5. 旧版本注册表条目没有 source 字段（升级前安装的存量记录）：
+             仅当 Skill 名称出现在当前发行包 manifest.json 的 skills 声明里
+             （确认属于 opscli 体系、且下架时按惯例保留了 manifest 条目）才清理。
+
+        中央存储中存在但注册表完全无记录的 Skill 不参与判定，
+        避免误删用户手动放置或来源不明的内容。
+        """
+        packaged = {item["name"] for item in self.list_templates()}
+
+        manifest_universe: set[str] = set()
+        try:
+            manifest_universe = set(load_release_manifest(self.templates_dir).get("skills", {}).keys())
+        except Exception:
+            # 发行包未附带 manifest.json（如源码开发目录被裁剪）时退化为空集，
+            # 存量无 source 记录一律不动，仅清理能凭 source=builtin 证明归属的 Skill
+            manifest_universe = set()
+
+        registry = self._read_registry()
+        delisted: list[str] = []
+        for skill_name, entries in registry.items():
+            if skill_name in packaged or not entries:
+                continue
+            sources = {str(entry.get("source") or "") for entry in entries}
+            if "remote" in sources:
+                continue
+            if "builtin" in sources or skill_name in manifest_universe:
+                delisted.append(skill_name)
+        return sorted(delisted)
+
+    def prune_delisted_skills(self, *, dry_run: bool = False) -> dict:
+        """清理所有下架 Skill（当前发行包已不包含、且确认由 opscli 安装），返回汇总。
+
+        批量 install（skills install 无 NAME / self-update 自动同步）收尾时调用，
+        使本地安装集合与当前发行包对齐：新包少了谁，本地就移除谁。
+
+        Returns:
+            汇总 dict：pruned（每个 Skill 的 uninstall 结果）/ failed / dry_run
+        """
+        names = self.list_delisted_skills()
+        pruned: list[dict] = []
+        failed: list[dict] = []
+        for name in names:
+            try:
+                pruned.append(self.uninstall(name, dry_run=dry_run))
+            except Exception as exc:
+                _logger.warning("清理下架 Skill 失败: %s: %s", name, exc)
+                failed.append({"name": name, "error": str(exc)})
+        return {"pruned": pruned, "failed": failed, "dry_run": dry_run}
 
     def _detect_link_targets(
         self,
@@ -613,12 +784,16 @@ class SkillsManager:
         *,
         central_dir: Path | None = None,
         link_method: str | None = None,
+        source: str | None = "builtin",
     ) -> None:
         """在注册表中写入一条安装记录。
 
         同一 skill 可安装到多个目录，每个目录保留独立记录。
         若同路径已有记录则更新 installed_at，避免重复追加。
         central_dir / link_method 为中央存储模式新增字段，旧模式为 None。
+        source 标记安装来源（builtin=内置模板 / remote=技能广场），
+        是下架清理判定"归属"的依据；传 None 表示不关心来源、保留已有值，
+        供 skills link 这类"补链接而非安装"的场景避免误改归属。
         写入失败时静默忽略，不影响 install 主流程。
         """
         try:
@@ -632,6 +807,8 @@ class SkillsManager:
                 if entry.get("target_dir") == target_str:
                     entry["installed_at"] = now
                     entry["runtime"] = runtime
+                    if source is not None:
+                        entry["source"] = source
                     if central_dir is not None:
                         entry["central_dir"] = str(central_dir)
                     if link_method is not None:
@@ -643,6 +820,8 @@ class SkillsManager:
                     "runtime": runtime,
                     "installed_at": now,
                 }
+                if source is not None:
+                    new_entry["source"] = source
                 if central_dir is not None:
                     new_entry["central_dir"] = str(central_dir)
                 if link_method is not None:

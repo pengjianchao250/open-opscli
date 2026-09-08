@@ -286,6 +286,44 @@ def get_builtin_templates_dir() -> Path:
 - `opscli skills list` 不受影响，它列出的是用户已安装到全局目录的 Skill。
 - `opscli skills upgrade <name>` 只允许升级已支持远端升级的 Skill，不依赖内置模板是否存在。
 
+### 9.1 下架 Skill 的运行时清理（install 自动对齐）
+
+业务场景：旧版发行包装了 10 个 Skill，业务电脑全部安装；新版发行包下架
+其中 1 个后，业务电脑需要把下架的 Skill 移除出去。
+
+机制：批量安装（`skills install` 不带 NAME，含 self-update 升级后自动执行的
+`skills install --force --yes`）收尾时自动执行"对齐"——本地安装集合与当前
+发行包取差集，多出来的（且确认由 opscli 安装的）被完整卸载：工具目录链接、
+中央存储 `~/.opscli/skills/<name>`、注册表 `installed_skills.json` 三处全清。
+因此业务电脑只需正常升级 opscli，下架 Skill 即被自动移除，无需额外操作。
+
+归属判定（宁漏勿错删，见 `SkillsManager.list_delisted_skills`）：
+
+1. 只处理注册表记录过的 Skill（opscli 自己装的才有账可查）；
+2. 当前发行包模板目录（`list_templates()`）仍存在的 Skill 永不清理；
+3. 注册表 `source=remote`（技能广场安装）的 Skill 永不清理——
+   `source` 字段由 `_record_install` 在安装时写入，内置模板安装写
+   `builtin`，远程安装写 `remote`，`skills link` 补链接不改变已有归属；
+4. `source=builtin` 且模板已不存在 → 下架，清理；
+5. 升级前的存量注册表条目没有 `source` 字段：仅当 Skill 名称出现在当前
+   发行包 manifest.json 的 skills 声明里才清理。**因此下架 Skill 时必须
+   保留 manifest 条目、只把四个准入开关置 false**（如 `ops-amazon` 的
+   做法），把条目整个删掉会导致存量业务电脑无法自动清理该 Skill。
+
+配套命令：
+
+- `opscli skills uninstall <name>`：完整卸载单个 Skill（区别于只删链接的
+  `unlink`），支持 `--dry-run`。
+- `opscli skills prune`：手动执行一次下架清理，支持 `--dry-run` 预览。
+
+边界与限制：
+
+- `--skills-dir` 隔离安装模式跳过自动清理：该模式承诺只写指定目录，
+  全局清理会破坏隔离语义。
+- 中央存储中存在但注册表完全无记录的 Skill（极早期版本安装、或用户手动
+  放置）不参与判定，避免误删。
+- 清理失败不影响 install 主流程的退出码，仅输出告警。
+
 ## 10. CI 与质量门禁
 
 新增发版前检查：
