@@ -1,3 +1,5 @@
+"""Rufus 报告上传、编码及错误脱敏测试。"""
+
 import codecs
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -28,7 +30,8 @@ def test_default_publisher_uploads_utf8_bom_report(monkeypatch, tmp_path):
     class CheckingFileUploadClient:
         def upload(self, path, **kwargs):
             assert path.read_bytes() == codecs.BOM_UTF8 + plain_path.read_bytes()
-            assert "优化诊断报告" in path.read_text(encoding="utf-8-sig")
+            # 送礼问题应保留问答内容，同时继续验证上传字节携带 UTF-8 BOM。
+            assert "## 第 1 题：这个商品适合送礼吗？" in path.read_text(encoding="utf-8-sig")
             return FileUploadResult(url="https://files.example/report.md", raw={})
 
     result = AnswerReportPublisher(file_upload_client=CheckingFileUploadClient()).publish(data)

@@ -1,3 +1,15 @@
+## 2026-09-08 AppHub 镜像 - 发布名称增加 release
+
+**变更原因**：基础镜像名称需要标明 release 分支，流水线旧校验仍要求已从运行镜像移除的 Node、pnpm、uv 和 UID 10001。
+
+**改动点**：已通过 Jenkins 配置页将 `opscli-ops-apphub-base-image` 任务的 `IMAGE_REPOSITORY` 改为 `ops-apphub/opscli-base-release`，继续发布提交前 6 位及 `latest` 标签；镜像验证改为 Python 3.12、构建工具不存在、UID/GID 1000、依赖目录不可写。下游模板同步镜像引用。
+
+**验证结果**：保存后重新打开配置页，完整脚本回读与预期一致；新运行环境与权限检查在本地 `localhost/opscli-base:verify-20260908` 镜像上通过，未触发 Jenkins 构建或推送镜像。新名称需等待下一次成功构建发布后可用。
+
+**影响范围**：基础镜像发布地址及运行验收；任务名、Webhook 地址、release 分支和凭证引用保持不变。
+
+**回滚方式**：将 Jenkins 的 `IMAGE_REPOSITORY` 与下游引用同时恢复为 `ops-apphub/opscli-base`；如恢复旧 Dockerfile，应同时恢复旧运行校验。
+
 ## 2026-09-08 AppHub 镜像 - 分离构建工具与运行环境
 
 **变更原因**：下游应用将使用本仓库基础镜像，需要对齐 Python 3.12 与 UID/GID 1000，并避免把 Node、编译器和开发依赖带入业务容器。
@@ -8936,4 +8948,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：`tests/app tests/auth/test_config.py` 通过，`54 passed`；build-spec 版本/模板/master 部署契约/安装、模板 clone 和 data-builder 定向测试通过，`18 passed`。完整 build-spec 契约文件另有 4 条与本次分支修改无关的既有文档断言失败，本次未扩展处理。
 
 **回滚方式**：回退 `opscli/app` 分支参数化、模板默认分支、两份 Skill 版本与门禁、相关测试及本条设计文档。
+---
+## 2026-09-08 amazon-rufus - 修复报告丢失回答正文
+
+**变更原因**：`get-backend B0CSN6FR1W US -q "这个商品适合送礼吗？"` 实际取得完整 Rufus 回答，但报告优先取商品链接并套用标题诊断模板，正文丢失。
+
+**改动点**：共享报告格式化器按题目要求的固定章节识别诊断题，普通问题复用已有逐题渲染；诊断正文提取先读取正文、blocks 和总结，再回退到链接。补充原始 SSE 同时包含正文和链接、单题及六/七题普通问答、三类诊断正文来源、内置七题报告的回归测试；上传 BOM 测试改为断言送礼问答格式。
+
+**验证结果**：修改前现有报告用例为 4 failed、1 passed；首批新增 4 条回归全部先复现失败。最终 `.venv/Scripts/python.exe -X utf8 -m pytest tests/amazon_rufus tests/mcp/test_amazon_rufus_tools.py -q -k "not test_get_platform_cookie_sends_platform_query"` 为 169 passed、1 deselected，采集器精简诊断报告定向测试另有 1 passed，`git diff --check` 通过。排除项是预存平台 Cookie 超时断言失败（期望 10，实际 180），已用原 HEAD 格式化器复核。原命令在项目虚拟环境实跑成功，生成 `output/amazon-rufus/B0CSN6FR1W-20260908-112545-46abaddde2b14c79b6efbded2e80edf3.md` 并上传，已读取正文确认包含完整送礼回答。未运行全库测试。
+
+**影响范围**：CLI、MCP 和采集报告共用的 Rufus 报告渲染；普通问答恢复逐题显示，默认诊断报告保留原有章节。
+
+**回滚方式**：撤销本次报告格式化器、新增回归测试及本条记录的变更，保留其他已有修改。
+
 ---
