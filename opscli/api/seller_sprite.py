@@ -9,9 +9,11 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
+
+from opscli.api.auth import require_apphub_principal
 
 
 SellerSpriteExportFormat = Literal["xls", "xlsx", "json"]
@@ -74,7 +76,11 @@ class SellerSpriteListingAnalysisRequest(BaseModel):
     job_id: SellerSpriteJobId | None = None
 
 
-router = APIRouter(prefix="/api/v1/seller-sprite", tags=["seller-sprite"])
+router = APIRouter(
+    prefix="/api/v1/seller-sprite",
+    tags=["seller-sprite"],
+    dependencies=[Depends(require_apphub_principal)],
+)
 
 
 def _authentication_error() -> JSONResponse | None:

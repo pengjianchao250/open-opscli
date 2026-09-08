@@ -39,9 +39,17 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
         CORSMiddleware,
         allow_origins=list(LOCAL_PROTOTYPE_ORIGINS),
         allow_origin_regex=PRIVATE_LAN_PROTOTYPE_ORIGIN,
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Ops-Token",
+            "X-Session-Id",
+            "X-User-Email",
+            "X-User-Id",
+            "X-User-Name",
+        ],
     )
     register_exception_handlers(app)
     app.include_router(health.router)

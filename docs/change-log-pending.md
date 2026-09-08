@@ -1,3 +1,12 @@
+## 2026-09-08 REST API - Keepa 与 SellerSprite 统一 AppHub 认证
+
+**变更原因**：Keepa、SellerSprite 的浏览器 REST 接口仍通过 OPS 配置接口换取 MCP API Key，和 AppHub 标准的 viewer/session/local 认证重复；SellerSprite 又由通用 MCP 代理到 Collector，不能直接把浏览器凭证当 Collector MCP Key 使用。
+**改动点**：新增 AppHub principal 依赖，REST 支持 `X-Ops-Token + X-User-*` viewer、`polarisUserToken`/`X-Session-Id` session 和显式本地回退；组合服务只对 `/mcp`、`/sse` 保留 MCP API Key 鉴权。Keepa 显式使用请求 JWT/session；SellerSprite 使用受限文件中的内部 Collector 网关 Key，并透传已验证用户身份及任务级 JWT/session。浏览器 SDK 删除 `/api/v1/mcp-api-keys/config` 换 Key逻辑，改为直接携带 AppHub 认证且包含 Cookie。
+**验证结果**：API/MCP/query 专项回归 163 项、额外 Keepa/SellerSprite MCP 回归 119 项、SDK Node 测试 10 项、JSON Lens 单测 6 项与 E2E 36 项、SellerSprite Lens 单测 11 项与 E2E 8 项全部通过；模板 API 文档镜像一致性、两个原型生产构建、SDK 语法检查、Python compileall 和 `git diff --check` 通过。真实进程冒烟确认 health/Keepa 公开端点 200、未认证 SellerSprite 与无 Key `/mcp` 均 401、AppHub viewer SellerSprite 经内部 Collector 通道返回 200。Collector 内部 Key、viewer/session、JWT-only 调度与本地凭证转发均有回归覆盖。
+**影响范围**：`/api/v1/*` REST 调用方需使用 AppHub 登录态；现有 `/mcp`、`/sse` 客户端继续使用原 MCP API Key，不改变协议和 Key 校验方式。部署 SellerSprite REST 时，通用 MCP 与 Collector 需配置相同的 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。
+**回滚方式**：恢复全局 API Key 中间件、SDK 配置换取流程及 Collector 用户 Key 透传；移除 AppHub principal 和内部网关 Key 配置。
+---
+
 ## 2026-09-08 tests - 删除 Keepa 与 SellerSprite debug CLI 用例
 
 **变更原因**：Keepa 与 SellerSprite 的 debug CLI 已停用，相关测试持续验证不再公开的入口并形成已知失败基线。

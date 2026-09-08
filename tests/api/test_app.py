@@ -30,7 +30,7 @@ def test_query_flow_requires_authenticated_user(monkeypatch):
         "data": None,
         "error": {
             "code": "authentication_required",
-            "message": "请先完成 opscli 账号授权",
+            "message": "请先完成 AppHub 账号授权",
         },
     }
 
@@ -42,10 +42,8 @@ def test_query_flow_returns_shared_service_result(monkeypatch):
 
     captured = {}
 
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
 
     def fake_flow(payload, *, user_email):
         captured["payload"] = payload
@@ -77,10 +75,72 @@ def test_query_flow_returns_shared_service_result(monkeypatch):
     assert captured["payload"].order_by[0].desc is True
 
 
-def test_query_flow_rejects_unknown_fields():
+def test_query_flow_accepts_apphub_viewer_headers(monkeypatch):
+    from opscli.api import create_api_app
+    from opscli.api.routers import query as query_router
+
+    captured = {}
+
+    def fake_flow(payload, *, user_email):
+        captured["user_email"] = user_email
+        return {"status": "planned"}
+
+    monkeypatch.setattr(query_router, "_query_flow", fake_flow)
+    response = TestClient(create_api_app()).post(
+        "/api/v1/query/flow",
+        headers={
+            "X-Ops-Token": "viewer-jwt",
+            "X-User-Email": "Viewer@Example.com",
+            "X-User-Id": "u-1",
+        },
+        json={"request": "本月销售额"},
+    )
+
+    assert response.status_code == 200
+    assert captured["user_email"] == "viewer@example.com"
+
+
+def test_query_flow_validates_apphub_session_cookie(monkeypatch):
+    from opscli.api import create_api_app
+    from opscli.api.routers import query as query_router
+    from opscli.auth import AuthClient
+
+    captured = {}
+
+    def fake_get_me(self, session_id=None, jwt=None):
+        captured["session_id"] = session_id
+        captured["jwt"] = jwt
+        return {
+            "data": {
+                "username": "session@example.com",
+                "inherit_email": "other@example.com",
+                "id": 42,
+            }
+        }
+
+    monkeypatch.setattr(AuthClient, "get_me", fake_get_me)
+    monkeypatch.setattr(
+        query_router,
+        "_query_flow",
+        lambda payload, *, user_email: {"user_email": user_email},
+    )
+    response = TestClient(create_api_app()).post(
+        "/api/v1/query/flow",
+        headers={"Authorization": "Bearer session-jwt"},
+        cookies={"polarisUserToken": "session-cookie"},
+        json={"request": "本月销售额"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["user_email"] == "session@example.com"
+    assert captured == {"session_id": "session-cookie", "jwt": "session-jwt"}
+
+
+def test_query_flow_rejects_unknown_fields(monkeypatch):
     """REST 合同必须拒绝 MCP/内部参数混入，避免接口随 Tool 演化漂移。"""
     from opscli.api import create_api_app
 
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
     response = TestClient(create_api_app()).post(
         "/api/v1/query/flow",
         json={"request": "查询本月销售额", "session_id": "should-not-be-accepted"},
@@ -126,12 +186,12 @@ def test_auth_ensure_returns_status_without_credentials(monkeypatch):
     from opscli.api import app as api_module
     from opscli.mcp.ops_credentials import OpsCredentialBinding
 
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
 
-    async def fake_ensure(*, require_jwt):
+    async def fake_ensure(*, provided_session, provided_jwt, require_jwt):
+        assert provided_session is None
+        assert provided_jwt is None
         assert require_jwt is True
         return OpsCredentialBinding(
             credential_scope="isolated-scope",
@@ -182,10 +242,8 @@ def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
     from opscli.api import app as api_module
     from opscli.api.routers import keepa as keepa_router
 
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
     captured = {}
 
     async def fake_run(payload):
@@ -254,10 +312,11 @@ def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
     assert keepa_module._KEEPA_API_MODE.get() is False
 
 
-def test_keepa_run_rejects_path_traversal_job_id():
+def test_keepa_run_rejects_path_traversal_job_id(monkeypatch):
     """Keepa 自定义 job_id 不能改变服务端导出目录。"""
     from opscli.api import create_api_app
 
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
     response = TestClient(create_api_app()).post(
         "/api/v1/keepa/run",
         json={
@@ -396,20 +455,16 @@ def test_mcp_server_adds_cors_header_to_private_lan_auth_failure():
 
     assert response.status_code == 401
     assert response.headers["access-control-allow-origin"] == "http://10.6.53.56:4173"
-    assert response.json()["reason"] == "invalid_api_key"
+    assert response.json()["error"]["code"] == "authentication_required"
 
 
-def test_mcp_server_exposes_api_route_behind_api_key():
-    """真实 MCP 入口应同时提供 API，并沿用现有 API Key 鉴权。"""
+def test_mcp_server_exposes_public_health_outside_mcp_api_key_boundary():
+    """健康检查不应被 MCP API Key 鉴权边界拦截。"""
     from opscli.mcp.server import _build_dual_endpoint_app
 
     app = _build_dual_endpoint_app(api_key="test-api-key")
     with TestClient(app) as client:
-        assert client.get("/health/live").status_code == 401
-        response = client.get(
-            "/health/live",
-            headers={"Authorization": "Bearer test-api-key"},
-        )
+        response = client.get("/health/live")
 
     assert response.status_code == 200
     assert response.json() == {"status": "live"}

@@ -6,10 +6,8 @@ from starlette.testclient import TestClient
 
 
 def _authenticate(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
 
 
 def test_seller_sprite_submit_requires_authenticated_user(monkeypatch):
@@ -535,8 +533,6 @@ def test_seller_sprite_route_is_behind_shared_api_key_middleware(monkeypatch):
     from opscli.api import seller_sprite as api_module
     from opscli.mcp.server import _build_dual_endpoint_app
 
-    _authenticate(monkeypatch)
-
     async def fake_proxy(fn, **kwargs):
         assert fn.__name__ == "seller_sprite_scenarios"
         assert kwargs == {}
@@ -549,7 +545,10 @@ def test_seller_sprite_route_is_behind_shared_api_key_middleware(monkeypatch):
         unauthorized = client.get("/api/v1/seller-sprite/scenarios")
         authorized = client.get(
             "/api/v1/seller-sprite/scenarios",
-            headers={"Authorization": "Bearer test-api-key"},
+            headers={
+                "X-Ops-Token": "apphub-token",
+                "X-User-Email": "user@example.com",
+            },
         )
 
     assert unauthorized.status_code == 401

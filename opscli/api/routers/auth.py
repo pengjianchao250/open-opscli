@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from opscli.api.auth import AppHubPrincipal, require_apphub_principal
 from opscli.api.deps import require_authenticated_user
 from opscli.api.errors import error_response, success_response
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/api/v1", tags=["auth"])
 @router.post("/auth/ensure")
 async def auth_ensure(
     _user_email: str = Depends(require_authenticated_user),
+    principal: AppHubPrincipal = Depends(require_apphub_principal),
 ) -> JSONResponse:
     """校验并预热当前 API Key 隔离的 OPS 凭据，不返回敏感凭证。"""
     from opscli.mcp.ops_credentials import (
@@ -22,7 +24,11 @@ async def auth_ensure(
     )
 
     try:
-        binding = await ensure_ops_credentials(require_jwt=True)
+        binding = await ensure_ops_credentials(
+            provided_session=principal.session_id,
+            provided_jwt=principal.jwt,
+            require_jwt=True,
+        )
     except OpsCredentialBindingError as exc:
         return error_response(
             code=exc.code,

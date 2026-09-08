@@ -9,7 +9,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from weakref import WeakKeyDictionary, WeakValueDictionary
 
-from opscli.mcp.context import get_current_api_key, get_current_user_email
+from opscli.mcp.context import (
+    get_current_api_key,
+    get_current_auth_mode,
+    get_current_user_email,
+)
 from opscli.mcp.tools.auth import auth_mcp_login
 from opscli.mcp.tools.helpers import (
     _decode_jwt_payload,
@@ -66,9 +70,9 @@ class OpsCredentialBinding:
 
     credential_scope: str
     user_email: str
-    session_id: str
+    session_id: str | None
     jwt: str | None
-    runtime_auth: tuple[str, str | None] | None = None
+    runtime_auth: tuple[str | None, str | None] | None = None
     refreshed: bool = False
 
 
@@ -210,6 +214,38 @@ async def ensure_ops_credentials(
     Raises:
         OpsCredentialBindingError: 无法登录、凭证不完整或凭证邮箱与请求身份不一致。
     """
+    auth_mode = str(get_current_auth_mode() or "")
+    if auth_mode in {"apphub_viewer", "apphub_session", "internal"} and (
+        provided_session or provided_jwt
+    ):
+        user_email = str(get_current_user_email() or "").strip().lower()
+        if not user_email:
+            raise OpsCredentialBindingError("当前 AppHub 用户邮箱缺失，无法安全执行 OPS 任务")
+        jwt = provided_jwt
+        refreshed = False
+        if require_jwt and not jwt:
+            if not provided_session:
+                raise OpsCredentialBindingError("当前 AppHub 请求缺少可用的 OPS JWT")
+            try:
+                from opscli.auth import AuthClient
+
+                jwt = await asyncio.to_thread(
+                    AuthClient().get_token_by_session,
+                    provided_session,
+                    "ops",
+                )
+                refreshed = True
+            except Exception as exc:
+                raise OpsCredentialBindingError(f"获取 OPS JWT 失败：{exc}") from exc
+        return OpsCredentialBinding(
+            credential_scope=f"{auth_mode}:{user_email}",
+            user_email=user_email,
+            session_id=provided_session,
+            jwt=jwt,
+            runtime_auth=(provided_session, jwt),
+            refreshed=refreshed,
+        )
+
     api_key = get_current_api_key()
     if api_key:
         credential_dir = _get_credential_dir()

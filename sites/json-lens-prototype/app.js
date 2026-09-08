@@ -1,4 +1,8 @@
 import { configureOpsMcpApi, opsMcpApi } from "@aukeys/ops-mcp-api-sdk";
+
+const LOCAL_API_BASE_URL = ["127.0.0.1", "localhost"].includes(location.hostname)
+  ? "http://127.0.0.1:8765"
+  : undefined;
 import { tableCsv, tableKeys, tableValue, visibleTableRows } from "./table-utils.js";
 
 const HISTORY_STORAGE_KEY = "json-lens-query-history";
@@ -351,7 +355,7 @@ class JsonLensApp extends HTMLElement {
     super();
     const requestedVariant = new URLSearchParams(location.search).get("variant");
     const savedTheme = localStorage.getItem("json-lens-theme");
-    configureOpsMcpApi();
+    configureOpsMcpApi({ apiBaseUrl: LOCAL_API_BASE_URL });
     this.state = {
       variant: VARIANTS[requestedVariant] ? requestedVariant : "a",
       theme: savedTheme === "business" ? "business" : "corporate",
@@ -420,7 +424,9 @@ class JsonLensApp extends HTMLElement {
     }
     if (field) this.state[field] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
     if (field === "apiBaseUrl") {
-      configureOpsMcpApi({ apiBaseUrl: normalizeApiBaseUrl(this.state.apiBaseUrl) || undefined });
+      configureOpsMcpApi({
+        apiBaseUrl: normalizeApiBaseUrl(this.state.apiBaseUrl) || LOCAL_API_BASE_URL,
+      });
     }
     const param = event.target?.dataset?.param;
     if (param) this.state.params[param] = event.target.type === "checkbox" ? event.target.checked : event.target.value;
@@ -713,7 +719,7 @@ class JsonLensApp extends HTMLElement {
       ${this.renderScenarioSelector()}
       <label class="site-selector"><span>站点 <span class="required-mark">必填</span></span><select class="select select-bordered select-sm w-full" data-field="site">${[["US", "美国"], ["GB", "英国"], ["DE", "德国"], ["FR", "法国"], ["JP", "日本"], ["CA", "加拿大"], ["IT", "意大利"], ["ES", "西班牙"], ["IN", "印度"], ["MX", "墨西哥"], ["BR", "巴西"]].map(([site, label]) => `<option value="${site}" ${this.state.site === site ? "selected" : ""} ${site === "BR" && !scenarioSupportsBrazil(this.state.scenario) ? "disabled" : ""}>${site} · ${label}</option>`).join("")}</select></label>
       ${this.renderScenarioForm()}
-      <details class="connection-options details-box"><summary class="details-title">连接设置 <span class="tiny">OPS 登录态鉴权</span></summary><div class="details-content flow-stack connection-body"><label>MCP API 地址（可选）<input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用 OPS 配置返回地址"></label><p class="field-hint alert alert-soft alert-info">连接时读取当前浏览器的 OPS 登录态，MCP API Key 仅保存在页面内存。</p></div></details>
+      <details class="connection-options details-box"><summary class="details-title">连接设置 <span class="tiny">AppHub 登录态鉴权</span></summary><div class="details-content flow-stack connection-body"><label>MCP API 地址（可选）<input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用当前站点地址"></label><p class="field-hint alert alert-soft alert-info">连接时直接复用当前浏览器的 AppHub Token、Session 和用户身份。</p></div></details>
       <details class="common-options details-box"><summary class="details-title">执行设置 <span class="tiny">等待策略</span></summary><div class="details-content field-grid"><label class="check-field"><input class="toggle toggle-primary toggle-sm" type="checkbox" data-field="wait" ${this.state.wait ? "checked" : ""}><span>等待任务完成</span></label></div></details>
       <div class="row"><button class="btn btn-primary" type="submit" ${this.state.loading ? "disabled" : ""}>${this.state.loading ? "请求中..." : "运行" + escapeHtml(SCENARIOS[this.state.scenario].title)}</button><button class="btn btn-outline" type="button" data-sample>载入样例</button></div>
       <div class="status-line ${this.state.tone ? `alert alert-soft ${this.state.tone === "error" ? "alert-error" : "alert-success"}` : ""}" data-tone="${this.state.tone}">${escapeHtml(this.state.status)}</div>

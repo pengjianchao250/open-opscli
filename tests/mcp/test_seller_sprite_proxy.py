@@ -237,5 +237,92 @@ def test_registration_does_not_apply_common_mcp_quota(monkeypatch):
     assert registered == [seller_sprite_proxy.seller_sprite_run]
     assert catalog.get_catalog()[0]["module"] == "seller_sprite"
     assert telemetry_options == [
-        {"module": "seller_sprite", "runtime_role": "gateway_proxy"}
+        {
+            "module": "seller_sprite",
+            "runtime_role": "gateway_proxy",
+            "dimension_resolver": None,
+        }
     ]
+
+
+def test_apphub_proxy_uses_internal_gateway_key_and_forwards_request_auth(
+    monkeypatch,
+    tmp_path,
+):
+    RecordingRemoteClient.calls = []
+    key_file = tmp_path / "collector-gateway.key"
+    key_file.write_text("collector-gateway-key", encoding="utf-8")
+    monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
+    monkeypatch.setenv("OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE", str(key_file))
+    monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", RecordingRemoteClient)
+    token = mcp_request_ctx.set(
+        {
+            "api_key": None,
+            "auth_mode": "apphub_session",
+            "user_id": "u-1",
+            "email": "user@example.com",
+            "session_id": "apphub-session",
+            "jwt": "apphub-jwt",
+        }
+    )
+    try:
+        result = _run(
+            seller_sprite_proxy.seller_sprite_run(
+                scenario="keyword-reverse",
+                params={"asin": "B012345678"},
+            )
+        )
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    call = RecordingRemoteClient.calls[0]
+    assert call["headers"] == {
+        "X-Collector-Gateway-Key": "collector-gateway-key",
+        "X-AppHub-User-Email": "user@example.com",
+        "X-AppHub-Auth-Mode": "session",
+        "X-AppHub-User-Id": "u-1",
+    }
+    assert call["arguments"]["session_id"] == "apphub-session"
+    assert call["arguments"]["jwt"] == "apphub-jwt"
+
+
+def test_apphub_local_proxy_forwards_local_ops_credentials(monkeypatch, tmp_path):
+    RecordingRemoteClient.calls = []
+    key_file = tmp_path / "collector-gateway.key"
+    key_file.write_text("collector-gateway-key", encoding="utf-8")
+    monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
+    monkeypatch.setenv("OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE", str(key_file))
+    monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", RecordingRemoteClient)
+    monkeypatch.setattr(
+        "opscli.mcp.tools.helpers._get_auth_pair",
+        lambda system, session_id, jwt: ("local-session", "local-jwt"),
+    )
+    token = mcp_request_ctx.set(
+        {
+            "api_key": None,
+            "auth_mode": "apphub_local",
+            "user_id": "local",
+            "email": "local@example.com",
+        }
+    )
+    try:
+        result = _run(
+            seller_sprite_proxy.seller_sprite_run(
+                scenario="keyword-reverse",
+                params={"asin": "B012345678"},
+            )
+        )
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    call = RecordingRemoteClient.calls[0]
+    assert call["headers"] == {
+        "X-Collector-Gateway-Key": "collector-gateway-key",
+        "X-AppHub-User-Email": "local@example.com",
+        "X-AppHub-Auth-Mode": "local",
+        "X-AppHub-User-Id": "local",
+    }
+    assert call["arguments"]["session_id"] == "local-session"
+    assert call["arguments"]["jwt"] == "local-jwt"

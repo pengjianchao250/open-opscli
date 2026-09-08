@@ -65,7 +65,13 @@ async def _run_keepa_scenario(payload: KeepaRunRequest) -> dict:
     _trace_keepa_api("governance_ready scenario=%s" % payload.scenario)
     api_mode_token = _KEEPA_API_MODE.set(True)
     try:
-        result = await governed_run(**payload.model_dump(exclude_none=True))
+        from opscli.mcp.context import get_current_jwt, get_current_session_id
+
+        result = await governed_run(
+            **payload.model_dump(exclude_none=True),
+            session_id=get_current_session_id(),
+            jwt=get_current_jwt(),
+        )
     except Exception as exc:
         _logger.warning(
             "[KEEPA-TRACE] api_error scenario=%s site=%s error_type=%s elapsed_ms=%s",

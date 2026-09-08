@@ -1,6 +1,6 @@
 # Keepa 与卖家精灵线上 API 使用指南
 
-> 文档日期：2026-09-04
+> 文档日期：2026-09-08
 >
 > 适用范围：opscli 场景 REST API v1
 >
@@ -15,30 +15,36 @@
 项目根目录 `.env` 使用以下配置：
 
 ```env
-OPSCLI_SELLER_SPRITE_E2E_BASE_URL=https://ops.mcp.xenkee.com
-OPSCLI_SELLER_SPRITE_E2E_API_KEY=your_api_key
+OPSCLI_REST_BASE_URL=https://ops.mcp.xenkee.com
+OPSCLI_APPHUB_OPS_TOKEN=your_ops_token
+OPSCLI_APPHUB_SESSION_ID=your_session_id
+OPSCLI_APPHUB_USER_EMAIL=user@aukeys.com
 ```
 
-变量名称虽然带有 `SELLER_SPRITE`，当前同一个 Base URL 和 API Key 也用于 Keepa REST API。不要把真实 API Key 写入代码、日志、任务参数或版本库。
+Keepa 与 SellerSprite 使用同一个 REST Base URL 和 AppHub 登录态。不要把 Token、Session、Cookie 或 Collector 内部凭证写入代码、日志、任务参数或版本库。
 
 ### 1.2 鉴权
 
-推荐使用 Bearer Token：
+推荐直接传 AppHub Session；viewer 环境也可传 OPS Token 与受信用户身份：
 
 ```http
-Authorization: Bearer <API_KEY>
+X-Session-Id: <APPHUB_SESSION>
+X-Ops-Token: <OPS_TOKEN>
+X-User-Email: <USER_EMAIL>
 Content-Type: application/json
 Accept: application/json
 ```
 
-服务也兼容 `?api_key=<API_KEY>` 查询参数，但查询参数容易进入访问日志和浏览器历史，只应在无法设置请求头的客户端中使用。
+存在 Session 时，服务端通过 `AuthClient.get_me()` 校验并解析身份，`X-User-Email` 可省略。没有 Session 时必须同时提供 `X-Ops-Token` 与可信的 `X-User-Email`；浏览器应使用 SDK 的 `credentials: include` 携带 `polarisUserToken` Cookie。`?api_key=` 和 MCP Bearer Key 只属于 `/mcp`、`/sse`，不再用于 REST。
 
 PowerShell 公共变量：
 
 ```powershell
-$baseUrl = $env:OPSCLI_SELLER_SPRITE_E2E_BASE_URL.TrimEnd('/')
+$baseUrl = $env:OPSCLI_REST_BASE_URL.TrimEnd('/')
 $headers = @{
-    Authorization = "Bearer $env:OPSCLI_SELLER_SPRITE_E2E_API_KEY"
+    "X-Session-Id" = $env:OPSCLI_APPHUB_SESSION_ID
+    "X-Ops-Token" = $env:OPSCLI_APPHUB_OPS_TOKEN
+    "X-User-Email" = $env:OPSCLI_APPHUB_USER_EMAIL
     Accept = "application/json"
     "Content-Type" = "application/json"
 }
@@ -46,21 +52,13 @@ $headers = @{
 
 ### 1.3 OPS 凭据自动保障
 
-API Key 用于识别调用用户。Keepa 在未配置 `OPSCLI_KEEPA_API_KEY` 时，还需要通过 OPS Session/JWT 获取集成账号；这部分凭据现在由服务端统一静默维护，普通调用方不需要先调用登录接口。
+REST 认证与 MCP API Key 已分离。Keepa 直接使用当前 AppHub 请求的 OPS Token/Session；只有 Session、没有 JWT 时，服务端按需换取 OPS JWT。凭据只在请求上下文中使用，不写入 MCP API Key 隔离目录。
 
-每次需要 OPS JWT 的业务请求会在访问 Keepa 上游前执行以下流程：
+SellerSprite 由通用 REST 网关代理到 Collector。浏览器仍只提交 AppHub 登录态；网关与 Collector 之间使用权限受限文件 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 中的内部 Key，并转发已验证用户身份和任务级 Session/JWT。浏览器不得接触该内部 Key。
 
-1. 读取当前 API Key 隔离的有效 JWT。
-2. JWT 缺失时，使用当前 Session 换取并缓存 JWT。
-3. Session 缺失或本地已过期时，自动执行一次 MCP 一步登录。
-4. Session 本地仍有效但 OPS 换取 JWT 返回 401/403 时，清除该隔离作用域的 Session/JWT，自动重新登录一次，再换取新 JWT。
-5. 凭据建立完成后才发起 Keepa 上游请求；Keepa 上游请求一旦开始，不会因认证修复而自动重试，避免重复消耗 Keepa token。
+REST 请求体不接受 `session_id`、`jwt`、`output_dir` 等内部字段，也不会在响应中返回 Session 或 JWT。`auth_mcp_login` 仅属于 MCP 客户端流程，不是 REST 前置步骤。
 
-并发请求按凭据作用域执行 single-flight，同一个 API Key 作用域只会有一个请求实际登录，其他请求复用新凭据。API Key 与 MCP `clientInfo.name` 仍共同决定 MCP 调用的隔离目录；REST 请求没有 `clientInfo.name` 时按 API Key 隔离。
-
-REST 请求不接受 `session_id`、`jwt`、`output_dir` 等内部字段，也不会在响应中返回 Session 或 JWT。`auth_mcp_login` 继续保留为 MCP Tool，供兼容和人工诊断使用，不再是 Keepa REST 调用的前置步骤。
-
-若线上服务配置了 `OPSCLI_KEEPA_API_KEY`，Keepa 仍可不依赖 OPS 凭据直接执行。卖家精灵继续复用统一的凭据绑定入口，普通 REST 调用方不需要传卖家精灵账号、密码、OPS Session 或 JWT。
+若线上服务配置了 `OPSCLI_KEEPA_API_KEY`，Keepa 可不依赖用户 OPS 凭据直接执行；身份、额度与审计仍使用 AppHub principal。
 
 ## 2. 通用返回合同
 
@@ -94,7 +92,7 @@ REST 请求不接受 `session_id`、`jwt`、`output_dir` 等内部字段，也�
 | 方法 | 路径 | 说明 | 成功状态 |
 | --- | --- | --- | --- |
 | GET | `/health/live` | 服务存活检查 | 200 |
-| POST | `/api/v1/auth/ensure` | 可选：检查并预热当前 API Key 的 OPS 凭据 | 200 |
+| POST | `/api/v1/auth/ensure` | 可选：检查当前 AppHub OPS 凭据 | 200 |
 | GET | `/api/v1/keepa/scenarios` | Keepa 场景列表 | 200 |
 | POST | `/api/v1/keepa/run` | 执行 Keepa 同步场景 | 200 |
 | GET | `/api/v1/seller-sprite/scenarios` | 卖家精灵场景列表 | 200 |
@@ -150,7 +148,7 @@ $authStatus = Invoke-RestMethod `
 
 `refreshed=true` 表示本次请求新建了 Session 或获取了新的 OPS JWT；`false` 表示直接复用了已有有效凭据。响应不会包含用户邮箱、凭据目录、Session ID 或 JWT。
 
-凭据无法建立时返回 HTTP 502 和错误码 `OPS_CREDENTIAL_ENSURE_FAILED`。API Key 缺失、无效或无法解析已验证用户身份时返回 HTTP 401。
+凭据无法建立时返回 HTTP 502 和错误码 `OPS_CREDENTIAL_ENSURE_FAILED`。AppHub Session/Token 缺失、无效或无法解析身份时返回 HTTP 401。
 
 ## 5. Keepa API
 
@@ -663,19 +661,19 @@ if ($response.data.state -eq "succeeded") {
 | --- | --- | --- |
 | 200 | 查询成功，或业务信封已返回 | 继续检查 `success` 和任务 `state` |
 | 202 | 卖家精灵任务已受理或仍在执行 | 保存 `job_id`，稍后查询 |
-| 401 | API Key 缺失/无效，或业务身份未建立 | 检查 Bearer Key 和 API Key 用户绑定 |
-| 403 | 当前 API Key 没有工具权限 | 联系管理员调整权限 |
-| 404 | `job_id` 不存在或不属于当前用户 | 检查任务 ID 和 API Key |
+| 401 | AppHub Session/Token 缺失、无效或身份不完整 | 刷新 AppHub 登录态并重试 |
+| 403 | 当前 AppHub 用户没有业务权限 | 联系管理员调整权限 |
+| 404 | `job_id` 不存在或不属于当前用户 | 检查任务 ID 和当前 AppHub 用户 |
 | 409 | 用 JSON result 接口读取 XLS/XLSX 任务 | 改用 `/export` |
 | 422 | 请求字段、类型、范围或场景参数无效 | 修正请求，不要原样重试 |
 | 502 | 上游接口、Collector 调用或结果转换失败 | 记录错误码和任务 ID，有限重试或联系管理员 |
-| 503 | API Key 校验依赖或 Collector 暂时不可用 | 遵循 `Retry-After`，退避重试 |
+| 503 | Collector 配置缺失或服务暂时不可用 | 检查内部网关 Key 配置并退避重试 |
 
 常见错误码：
 
 | 错误码 | 含义 |
 | --- | --- |
-| `authentication_required` | API Key 已通过网关，但当前请求没有可用用户身份 |
+| `authentication_required` | 当前请求没有有效 AppHub 用户身份 |
 | `OPS_CREDENTIAL_ENSURE_FAILED` | 服务端自动建立 OPS Session/JWT 失败，可用预热接口复现并诊断 |
 | `KEEPA_CONFIG_ERROR` | Keepa 参数或服务端集成账号配置问题；新版会在访问 Keepa 前先修复 OPS 凭据 |
 | `KEEPA_API_ERROR` | Keepa 上游请求失败 |
@@ -689,7 +687,7 @@ if ($response.data.state -eq "succeeded") {
 
 建议日志只记录请求时间、耗时、`scenario`、`site`、`job_id`、HTTP 状态、`success`、`state`、`error.code` 和 `row_count`。
 
-禁止记录 API Key、Authorization 请求头、Session、JWT、Cookie、卖家精灵账号密码和完整敏感业务响应。
+禁止记录 OPS Token、Session、JWT、Cookie、Collector 内部 Key、MCP API Key、卖家精灵账号密码和完整敏感业务响应。
 
 ## 9. 线上验收记录
 

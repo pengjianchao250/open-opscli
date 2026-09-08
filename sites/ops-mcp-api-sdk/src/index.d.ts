@@ -1,20 +1,33 @@
 export interface OpsMcpApiEvent {
   type:
-    | "credential_fetch_start"
-    | "credential_fetch_success"
-    | "credential_refresh"
-    | "credential_invalidated";
+    | "auth_attached"
+    | "auth_invalidated";
   targetOrigin?: string;
-  reason?: "invalid_api_key";
+  mode?: "viewer" | "session";
+}
+
+export interface OpsMcpApiCurrentUser {
+  email?: string | null;
+  username?: string | null;
+  user_email?: string | null;
+  inherit_email?: string | null;
+  id?: string | number | null;
+  user_id?: string | number | null;
+  uuid?: string | null;
+  name?: string | null;
+  display_name?: string | null;
 }
 
 export interface OpsMcpApiClientOptions {
   apiBaseUrl?: string;
-  configEndpoint?: string;
   operationTokenProvider?: () => string | null | Promise<string | null>;
+  sessionIdProvider?: () => string | null | Promise<string | null>;
+  currentUserProvider?: () =>
+    | OpsMcpApiCurrentUser
+    | null
+    | Promise<OpsMcpApiCurrentUser | null>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-  allowedConfigOrigins?: readonly string[];
   allowedApiOrigins?: readonly string[];
   onEvent?: (event: OpsMcpApiEvent) => void;
 }

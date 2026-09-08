@@ -427,6 +427,26 @@ def test_stdio_binding_preserves_explicit_runtime_credentials(monkeypatch):
     assert binding.runtime_auth == ("local-session", "local-jwt")
 
 
+def test_apphub_viewer_binding_accepts_trusted_jwt_without_session(monkeypatch):
+    from opscli.mcp import ops_credentials
+
+    monkeypatch.setattr(ops_credentials, "get_current_auth_mode", lambda: "apphub_viewer")
+    monkeypatch.setattr(ops_credentials, "get_current_user_email", lambda: "user@example.com")
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: None)
+
+    binding = asyncio.run(
+        ops_credentials.ensure_ops_credentials(
+            provided_jwt="viewer-jwt",
+            require_jwt=True,
+        )
+    )
+
+    assert binding.session_id is None
+    assert binding.jwt == "viewer-jwt"
+    assert binding.user_email == "user@example.com"
+    assert binding.runtime_auth == (None, "viewer-jwt")
+
+
 def test_force_relogin_renews_session_even_when_locally_unexpired(monkeypatch, tmp_path):
     """force_relogin 必须无视 is_authenticated()，强制换一张新 Session。
 

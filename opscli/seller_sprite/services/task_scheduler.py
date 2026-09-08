@@ -140,7 +140,7 @@ class SellerSpriteTaskScheduler:
         )
         self.manager_factory = manager_factory or self._default_manager_factory
         self.collection_submitter = collection_submitter
-        self._runtime_auth: dict[str, tuple[str, str | None]] = {}
+        self._runtime_auth: dict[str, tuple[str | None, str | None]] = {}
         self._account_credential_scope: str | None = None
         self._account_expected_user_email: str | None = None
         self._runner_task: asyncio.Task | None = None
@@ -305,7 +305,7 @@ class SellerSpriteTaskScheduler:
                 requested_account_id=requested_account_id,
                 requested_account_key=requested_account_key,
             )
-        if session_id:
+        if session_id or jwt:
             # 显式凭证仅按 job_id 短暂保存在内存中，禁止写入 SQLite 或跨任务复用。
             self._runtime_auth[str(normalized.job_id)] = (session_id, jwt)
         if credential_scope:
@@ -1935,7 +1935,7 @@ def _login_stage(exc: Exception, failover_count: int) -> str:
 def _resolve_task_auth(
     context: dict[str, Any],
     *,
-    runtime_auth: tuple[str, str | None] | None = None,
+    runtime_auth: tuple[str | None, str | None] | None = None,
     require_auth: bool = False,
     expected_user_email: str | None = None,
 ) -> tuple[str | None, str | None]:

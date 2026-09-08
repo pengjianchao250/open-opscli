@@ -1,4 +1,8 @@
 import { configureOpsMcpApi, opsMcpApi } from "@aukeys/ops-mcp-api-sdk";
+
+const LOCAL_API_BASE_URL = ["127.0.0.1", "localhost"].includes(location.hostname)
+  ? "http://127.0.0.1:8765"
+  : undefined;
 import { formatMatrixValue, matrixCsv, resultSheets, visibleMatrixRows } from "./result-utils.js";
 import { buildScenarioParams, periodOptionsForScenario, scenarioDefaults, scenarioPeriod, SCENARIO_GROUPS, SCENARIOS, SITE_OPTIONS } from "./scenarios.js";
 
@@ -121,7 +125,7 @@ class SellerSpriteLens extends HTMLElement {
     const preferences = loadJson(PREFERENCE_STORAGE_KEY, {});
     const scenario = SCENARIOS[preferences.scenario] ? preferences.scenario : "keyword-reverse";
     const apiBaseUrl = normalizeApiBaseUrl(preferences.apiBaseUrl ?? preferences.apiBase);
-    configureOpsMcpApi({ apiBaseUrl: apiBaseUrl || undefined });
+    configureOpsMcpApi({ apiBaseUrl: apiBaseUrl || LOCAL_API_BASE_URL });
     this.state = {
       apiBaseUrl,
       theme: ["dark", "business"].includes(preferences.theme) ? "business" : "corporate",
@@ -213,7 +217,9 @@ class SellerSpriteLens extends HTMLElement {
     }
     this.state[field] = target.type === "checkbox" ? target.checked : target.value;
     if (field === "apiBaseUrl") {
-      configureOpsMcpApi({ apiBaseUrl: this.state.apiBaseUrl.trim() || undefined });
+      configureOpsMcpApi({
+        apiBaseUrl: this.state.apiBaseUrl.trim() || LOCAL_API_BASE_URL,
+      });
     }
     if (["apiBaseUrl", "site", "period"].includes(field)) this.savePreferences();
     if (field === "filter") {
@@ -484,7 +490,7 @@ class SellerSpriteLens extends HTMLElement {
   }
 
   renderConnection() {
-    return `<details class="connection bg-base-100"><summary>连接设置</summary><div class="connection-grid"><label class="form-field"><span>MCP API 地址（可选）</span><input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用 OPS 配置返回地址"></label><button type="button" class="secondary-button btn btn-outline btn-sm" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button></div><p>连接时读取当前浏览器的 OPS 登录态，MCP API Key 仅保存在页面内存。</p></details>`;
+    return `<details class="connection bg-base-100"><summary>连接设置</summary><div class="connection-grid"><label class="form-field"><span>MCP API 地址（可选）</span><input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用当前站点地址"></label><button type="button" class="secondary-button btn btn-outline btn-sm" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button></div><p>连接时直接复用当前浏览器的 AppHub Token、Session 和用户身份。</p></details>`;
   }
 
   renderRequestPanel() {
