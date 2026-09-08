@@ -108,6 +108,22 @@ def test_query_without_channel_value_passes_through():
     assert _channel_filters(contract) == []
 
 
+def test_selected_dataset_name_is_not_reused_as_component_value():
+    """数据集身份已在选表阶段消费，名称里的渠道原值不得再次变成筛选。"""
+    contract = _channel_contract()
+    contract["model_view"]["dataset_name_zh"] = "莱福特-美国销售数据集"
+
+    resolved = query_plan._resolve_component_filters(
+        contract,
+        "在“莱福特-美国销售数据集”中查看渠道和ASIN",
+        lambda *_args, **_kwargs: CHANNEL_VALUES,
+        auto_enum=True,
+    )
+
+    assert resolved["status"] == "planned"
+    assert _channel_filters(resolved) == []
+
+
 def test_enum_failure_is_fail_closed():
     """枚举拿不到授权原值时一律阻断，绝不放行成全范围查询。"""
     contract = _resolve("查渠道是傲彼瑞的所有ASIN", [])
@@ -145,6 +161,60 @@ def test_channel_label_does_not_swallow_trailing_words():
     assert query_plan._extract_labeled_value("渠道为傲彼瑞-美国，近7天", terms) == "傲彼瑞-美国"
     # 维度点名不是筛选值
     assert query_plan._extract_labeled_value("查渠道和ASIN", terms) == ""
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ("国家=加拿大看销量", "加拿大"),
+        ("品牌是OHWILL查询毛利", "OHWILL"),
+        ("渠道:傲彼瑞-美国统计订单", "傲彼瑞-美国"),
+    ],
+)
+def test_labeled_component_value_stops_at_new_action(query, expected):
+    terms = {
+        "国家": ("国家",),
+        "品牌": ("品牌",),
+        "渠道": ("渠道",),
+    }
+    label = next(item for item in terms if item in query)
+    assert query_plan._extract_labeled_value(query, terms[label]) == expected
+
+
+def test_iso_date_literals_are_reserved_from_component_patterns():
+    assert query_plan._date_literals_consumed(
+        "查看2026-08-01和2026-08-31的公司SKU"
+    ) == {"2026-08-01", "2026-08-31"}
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "麻烦分析Shein退货退款中查看部门、退货数量",
+        "按部门汇总销售额",
+        "按事业部汇总销售额",
+        "事业部维度看销量",
+        "汇总事业部销售额",
+        "海运在途SKU明细: show 上船时效(天) by 事业部, Aug 2026",
+        "GROUP BY 部门看销量",
+        "groupby 集团事业部看销售额",
+        "按组成数量从高到低看各事业部前5名",
+        "海运在途SKU明细中查看事业部、上船时效",
+    ],
+)
+def test_department_extractor_ignores_field_and_grouping_phrases(query):
+    """字段展示与分组措辞不是具体部门值，不得被宽后缀兜底截取。"""
+    assert query_plan._extract_requested_department_value(query) == ""
+
+
+def test_english_by_inside_word_is_not_treated_as_grouping():
+    """英文分组词必须有单词边界，不能吞掉普通英文单词尾部。"""
+    assert query_plan._DEPARTMENT_GROUPING_RE.search("standby事业部") is None
+
+
+@pytest.mark.parametrize("query", ["事业部和指标", "部门与销售额", "事业部、上船时效"])
+def test_department_extractor_ignores_field_list_phrases(query):
+    assert query_plan._extract_requested_department_value(query) == ""
 
 
 def test_longer_label_wins_over_prefix():

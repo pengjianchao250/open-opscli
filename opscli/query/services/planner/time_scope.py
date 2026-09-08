@@ -60,7 +60,11 @@ _NEGATED_SPAN_RE = re.compile(
     # 「非亚马逊VC」这类真否定不受影响。
     r"|(?<![除并莫若是无绝])非(?!常)"
     r"|勿)"
-    r"[^，。；！？,;!?]{0,12}"
+    # “排除加拿大后看8月”中，“后看”开启新的查询子句；否定范围必须在此停止，
+    # 否则后面的时间、维度和指标都会被一起遮蔽。
+    r"(?:(?!(?:后(?:再)?|然后|之后|随后|接着)(?:看|查|统计|分析|汇总)"
+    r"|再(?:看|查|统计|分析|汇总))"
+    r"[^，。；！？,;!?]){0,12}"
 )
 
 
@@ -93,7 +97,37 @@ _MONTH_RE = re.compile(
     r"(?:(20\d{2})\s*年\s*)?(1[0-2]|[1-9])\s*月份?",
     re.IGNORECASE,
 )
-_COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
+_ENGLISH_MONTH_TOKEN = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?"
+)
+_ENGLISH_MONTH_RE = re.compile(
+    rf"\b(?:"
+    rf"(?P<month_first>{_ENGLISH_MONTH_TOKEN})\.?\s*[,/-]?\s*(?P<year_after>20\d{{2}})"
+    rf"|(?P<year_before>20\d{{2}})\s*[-/,]?\s*"
+    rf"(?P<month_after>{_ENGLISH_MONTH_TOKEN})\.?)\b",
+    re.IGNORECASE,
+)
+_NUMERIC_MONTH_RE = re.compile(
+    r"(?<!\d)(?P<year>20\d{2})[-/.](?P<month>1[0-2]|0?[1-9])"
+    r"(?![-/.\d])"
+)
+_ENGLISH_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|和|较|比|vs\.?", re.IGNORECASE)
 _MONTH_THRESHOLD_LEFT_RE = re.compile(
     r"(?:超(?:过)?|大于|高于|多于|不少于|至少|库龄|账龄|货龄|周转)\s*$"
 )
@@ -147,17 +181,28 @@ def _month_window(year: int, month: int) -> tuple[date, date]:
 
 
 def _calendar_month_matches(query: str):
-    """只返回自然月表达，排除“超6月/库龄6个月以上”等业务阈值。"""
+    """返回按原文顺序排列的 ``(year, month)``，并排除业务月份阈值。"""
+    matches: list[tuple[int, str | None, int]] = []
     for match in _MONTH_RE.finditer(query):
         # 显式年份足以证明是日历月份，不受附近业务词影响。
         if match.group(1):
-            yield match
+            matches.append((match.start(), match.group(1), int(match.group(2))))
             continue
         left = query[max(0, match.start() - 8) : match.start()]
         right = query[match.end() : match.end() + 8]
         if _MONTH_THRESHOLD_LEFT_RE.search(left) or _MONTH_THRESHOLD_RIGHT_RE.search(right):
             continue
-        yield match
+        matches.append((match.start(), None, int(match.group(2))))
+    for match in _ENGLISH_MONTH_RE.finditer(query):
+        raw_month = match.group("month_first") or match.group("month_after") or ""
+        year = match.group("year_after") or match.group("year_before")
+        matches.append(
+            (match.start(), year, _ENGLISH_MONTH_NUMBERS[raw_month.casefold()[:3]])
+        )
+    for match in _NUMERIC_MONTH_RE.finditer(query):
+        matches.append((match.start(), match.group("year"), int(match.group("month"))))
+    for _position, year, month in sorted(matches):
+        yield year, month
 
 
 def _explicit_comparison(
@@ -198,9 +243,9 @@ def _explicit_comparison(
             "end": _fmt(end),
             "label_zh": "显式对比周期",
         }
-    for month_match in _calendar_month_matches(comparison_text):
-        year = int(month_match.group(1) or today.year)
-        start, end = _month_window(year, int(month_match.group(2)))
+    for month_year, month in _calendar_month_matches(comparison_text):
+        year = int(month_year or today.year)
+        start, end = _month_window(year, month)
         if primary is not None and (start, end) == primary:
             continue
         return {
@@ -258,10 +303,10 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         return start, end, f"上季度（{year}年第{quarter}季度）", False
 
     # 指定自然月必须优先于自然年匹配，否则“2026年6月”会被截断成全年。
-    month_match = next(_calendar_month_matches(query), None)
-    if month_match:
-        year = int(month_match.group(1) or today.year)
-        month = int(month_match.group(2))
+    calendar_month = next(_calendar_month_matches(query), None)
+    if calendar_month:
+        month_year, month = calendar_month
+        year = int(month_year or today.year)
         start, end = _month_window(year, month)
         return start, end, f"{year}年{month}月（自然月）", False
 
@@ -277,7 +322,7 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         return date(year, 1, 1), date(year, 12, 31), f"去年（{year}年全年）", False
 
     m = re.search(
-        r"[近最][近]?\s*([0-9]+|[一两二三四五六七八九十]+)\s*"
+        r"(?:[近最][近]?|前|过去)\s*([0-9]+|[一两二三四五六七八九十]+)\s*"
         r"(天|日|tian|days?|周|个?月)",
         query,
         re.IGNORECASE,
@@ -377,6 +422,29 @@ def parse(query: str, *, today: date | None = None) -> dict:
                 "start": _fmt(prev_last.replace(day=1)),
                 "end": _fmt(prev_last),
                 "label_zh": "环比（上一个自然月）",
+            }
+        elif (
+            start.day == 1
+            and start.month in {1, 4, 7, 10}
+            and (start, end) == _quarter_window(start.year, (start.month - 1) // 3 + 1)
+        ):
+            previous_end = start - timedelta(days=1)
+            previous_quarter = (previous_end.month - 1) // 3 + 1
+            previous_start, previous_end = _quarter_window(
+                previous_end.year, previous_quarter
+            )
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(previous_start),
+                "end": _fmt(previous_end),
+                "label_zh": "环比（上一个自然季度）",
+            }
+        elif start == date(start.year, 1, 1) and end == date(start.year, 12, 31):
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(date(start.year - 1, 1, 1)),
+                "end": _fmt(date(start.year - 1, 12, 31)),
+                "label_zh": "环比（上一个自然年）",
             }
         else:
             length = (end - start).days + 1

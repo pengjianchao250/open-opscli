@@ -10,7 +10,7 @@ description: >
   即可，合同未给出 recovery_command 时不得自行升级）；只有规划器客观不可用（澄清/阻断、命令报错重跑仍失败、
   命令窗口连续超时、opscli 命令无法启动）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.4.4
+version: 1.4.6
 ---
 
 # ops-dataset-query
@@ -53,14 +53,14 @@ opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
    - 未明确指定数据集时，规划器优先检查当前账号已授权的“即时综合数据集”。该推荐表通过业务与字段指导校验后，`default_dataset_recommendation_zh.auto_selected=true` 且 `confirmation_required=false`，直接按该数据集继续，不调用提问工具，也不得因其他普通数据集的文本打分更高而改选。用户显式指定数据集、明确拒绝推荐表，或请求命中账单销售、流量转化等专用业务提示时，仍按对应数据集处理。请求没有命中任何具体查询字段、仍无法确定要查什么时，只询问采用哪些推荐字段，不再二次确认数据集；推荐表本身不满足业务或字段要求时仍按候选歧义正常澄清，不得强行使用。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
 4. **趋势/按日/每天类表述**（「按日趋势」「每天的」「趋势」等）规划器会自动把数据集主日期字段加为分组维度，并在 `answer_contract.required_disclosures_zh` 说明「按日期序列表述」；结论必须按日期序列讲，不得只报合计。原文含「不按日拆分」等否定语境时不加。**排序由规划器负责**：模板含时间粒度维度（日期/月份等）且用户未点名排序时，规划器已把 `orderBy: [{"field": <日期字段>, "desc": false}]`（按日期升序）写进模板；执行器若发现服务端未按此排序会本地重排，并在 `result_disclosures.order_fallback` / `order_disclosure_zh` 披露。Agent 不需要、也不得自行对趋势结果重新排序或改写模板排序。
-5. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
+5. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/前7天/近30tian/Aug 2026/2026 Aug` 等相对或英文月份描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
 6. `platform_semantic_members` 表示请求语义，**一律是展示名**（亚马逊SC / 亚马逊VC / TikTok / Walmart / Wayfair / Temu / Shopify / SHEIN / 山姆），不是内部键，可直接向用户复述；内部枚举名保留在 `execution_ref.platform_semantic_keys`。用户只说“亚马逊”且未指定 SC/VC 时默认包含亚马逊SC + 亚马逊VC；明确亚马逊SC/SC 时只含 SC，明确亚马逊VC/VC 时只含 VC。**收敛判据**：`execution_ref.platform_filter_state=resolved` 且 `execution_ref.resolved_platform_values` 非空即已收敛，直接进入执行（`platform_enum_source=auto_enum_service` 只在自动枚举路径出现，不是唯一判据，没有它不代表未收敛）。仍为 `requires_permission_enum` 时说明自动枚举未完成（实时枚举与本地枚举缓存都不可用），规划器不会下发模板：先恢复登录态或等待组件服务可用后原样重跑，不得手工执行 `execution_ref.platform_enum_command` 后自行拼装平台值。裸“亚马逊”只枚举到部分成员时，直接按 `platform_effective_members` 和 `resolved_platform_values` 查询可用部分，但必须原样披露 `platform_scope_disclosures_zh`，不得把部分结果表述为完整亚马逊范围。
 7. `execution_ref` 仅用于正式查询构造，禁止作为业务判断理由或向用户展示。需确认的合同里 `dimensions`/`metrics` 条目带 `selection_source=recommended`（系统推荐、用户未点名；`planned` 合同不带该键），确认前规划器不会下发 `query_template`。`status=planned` 时一体化入口直接执行完整性摘要绑定的原始模板；Agent 不得提取、编辑或重新拼装该模板。
 8. `query_mode=chart_uuid` 时无需本地数据集元数据，规划器会输出 `chart_uuid`、`chart_action` 和可直接执行的 `query_command`。直接执行该命令（返回自带 `evidence_contract`），不得再用普通数据集选表或手工改写；只有需要图表字段映射、异常检测或 Excel 导出时才读 `references/chart-excel-guide.md`。多个 UUID 时规划器返回 `clarify_required`，确认后把单个 UUID 写回原请求重跑规划器。
 9. **快照指标的时间窗口会被收敛**：指标带 `is_snapshot=true`（元数据 `snapshot_metric=1`，如总库存、平台库存）且本次没有按时间粒度维度分组时，多日窗口自动收敛为**最新完整快照日**（今天之前的最后一天）：`execution_ref.snapshot_policy = {policy: "latest_complete_snapshot_day", snapshot_day, requested_window: {start, end}, metrics[]}`，`model_view.time_scope_zh` 以「快照口径：最新完整快照日 …」开头，`answer_contract.required_disclosures_zh` 含「快照指标已按最新完整快照日 X 取值…未跨日累加」。结论必须说明这是该快照日的库存切面，不得表述为整个请求窗口的累计或平均。按日期维度分组（每天/趋势）时保留完整窗口不收敛，按日展示快照序列；环比/同比时主周期与对比周期各取该周期末日的快照。快照指标与流量指标（销售额等）混查且未按日分组时，规划器返回 `clarify_required` + 澄清码 `snapshot_metric_window_conflict`：提示用户改按日期维度分组，或把两类指标拆成两次查询，不得自行放行。
-10. **字段称呼被映射时必须披露**：用户用稳定别名点名（订单量/单量 → 销量，销售金额/收入 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实际落到数据集口径字段时，`model_view.field_alias_mappings_zh = [{requested, field_zh, field_name}]`，且 `required_disclosures_zh` 含「字段称呼已按数据集口径对应：「订单量」对应「销量」…」。结论必须以数据集口径命名（用 `field_zh`），并说明该对应关系，不得沿用用户原词静默替换。
+10. **字段称呼被映射时必须披露**：用户用稳定别名点名（订单量/单量 → 销量，销售金额/收入 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实际落到数据集口径字段时，`model_view.field_alias_mappings_zh = [{requested, field_zh, field_name}]`，且 `required_disclosures_zh` 含「字段称呼已按数据集口径对应：「订单量」对应「销量」…」。结论必须以数据集口径命名（用 `field_zh`），并说明该对应关系，不得沿用用户原词静默替换。完整授权字段标签优先于其中的稳定短别名：例如“主营业务收入”“市场总销量”中的“收入”“销量”不构成额外指标诉求；只有短别名在完整标签之外独立出现时才另算一项。已确认的数据集完整名称只用于选表，不得再次从名称中提取指标、维度或组件筛选值。
 
-`query_component` 只用于权限枚举，不是业务结果数据集；只有用户明确请求枚举/可用值（“有哪些渠道可选”“列出当前可见部门”）时才可作为查询目标。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。
+`query_component` 只用于权限枚举，不是业务结果数据集；只有用户明确请求枚举/可用值（“有哪些渠道可选”“列出当前可见部门”）时才可作为查询目标并生成可执行的维度查询模板，普通业务分析仍须阻断。自然语言选表只依据当前账号元数据中的中文名称和中文说明；英文 key 仅在用户明确给出精确完整技术标识时精确匹配，不能从中文请求推断或模糊匹配。组件筛选值必须来自用户点名值与当前账号授权枚举的完整等值匹配；“按部门”“各事业部”“中查看部门”“by 事业部”“group by 部门”等分组或句法片段只表示字段/分组，不得当作具体筛选值。组件筛选允许“只看字段值”“字段值除外”等省略系词的自然表达；同一字段后的 `、/逗号/和/与/或` 多值必须整体归属该字段，完整销售小组、渠道等复合值一旦命中，其内部部门、大组、品牌或国家片段不得再次消费。筛选表达中的字段标签只表示筛选，不得同时加入分组维度。
 
 ### MCP-only：当前请求元数据
 

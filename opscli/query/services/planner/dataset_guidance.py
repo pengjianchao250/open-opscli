@@ -31,6 +31,10 @@ MAX_QUERY_CHARS = 4096
 MAX_REQUESTED_FIELDS = 32
 MAX_FIELD_TEXT_CHARS = 256
 ASCII_IDENTIFIER_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+COMPONENT_FIELD_LABEL_SUFFIXES = ("名称",)
+DATE_FIELD_NAME_TOKENS = frozenset(
+    {"date", "datetime", "time", "timestamp", "day", "week", "month", "year"}
+)
 DEPARTMENT_VALUE_RE = re.compile(
     r"(?:项目)?[零〇一二三四五六七八九十百\d]+部"
     r"|部门\s*(?:为|是|=|＝|：|:|等于)\s*[\u4e00-\u9fffA-Za-z0-9_-]{1,30}?"
@@ -161,9 +165,13 @@ def _field_score(
     for label in _field_labels(field):
         verbose_name = _normalize(label)
         base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
-        if verbose_name and verbose_name in normalized_query:
+        if verbose_name and field_semantics.has_standalone_term_occurrence(
+            verbose_name, normalized_query
+        ):
             score = 90 + min(len(verbose_name), 9)
-        elif len(base_name) >= 2 and base_name in normalized_query:
+        elif len(base_name) >= 2 and field_semantics.has_standalone_term_occurrence(
+            base_name, normalized_query
+        ):
             score = 80 + min(len(base_name), 9)
         else:
             score = len(_tokens(base_name).intersection(query_tokens))
@@ -190,15 +198,19 @@ def _is_formula(field: dict) -> bool:
 
 
 def _is_date_field(field: dict) -> bool:
-    """判断日期类维度：技术名含 date/time 或中文名含 日期/时间。
+    """判断日期类维度：技术名含独立日期词元，或中文名含日期/时间。
 
     为什么需要：时间过滤与 dataComparison 都必须使用授权日期字段，
     但用户几乎从不口头点名日期字段，规划器必须无条件携带日期字段引用，
     否则模型只能靠扫盘或猜字段名补齐（e2e 实测的高频探查形态）。
     """
-    name = str(field.get("field_name", "")).casefold()
+    name_tokens = set(str(field.get("field_name", "")).casefold().split("_"))
     label = str(field.get("verbose_name", ""))
-    return "date" in name or "time" in name or "日期" in label or "时间" in label
+    return bool(
+        name_tokens.intersection(DATE_FIELD_NAME_TOKENS)
+        or "日期" in label
+        or "时间" in label
+    )
 
 
 def _is_snapshot(field: dict) -> bool:
@@ -250,11 +262,21 @@ def _select_fields(
     其余字段按匹配分降序补足；仍不足 limit 时按原始顺序兜底填充，
     并用 selection_source 标注来源（explicit / query / fallback）。
     """
+    fields = list(fields)
     normalized_query = _normalize(query)
     query_tokens = _tokens(normalized_query)
     # 业务别名只在当前授权字段中兑现：例如用户说“销量”，表中存在
     # order_qty 时选中该字段；字段不存在时不会凭映射创造新字段。
-    semantic_fields = field_semantics.requested_canonical_fields(normalized_query)
+    protected_metric_labels = [
+        label
+        for field in fields
+        if field.get("field_type") == "metric"
+        for label in _field_labels(field)
+        if _normalize(label) in normalized_query
+    ]
+    semantic_fields = field_semantics.requested_canonical_fields(
+        normalized_query, protected_terms=protected_metric_labels
+    )
     ranked = [
         (
             (
@@ -433,6 +455,41 @@ def _resolve_requested_fields(
         else:
             unknown.append(raw_value)
     return selected, unknown
+
+
+def _component_short_label_fields(fields: list[dict], query: str) -> set[str]:
+    """把组件字段的唯一自然短称解析为技术字段名。
+
+    仅处理可安全省略的展示名后缀；短称必须在全部组件字段标签中只命中一个
+    前缀，避免存在“渠道名称/渠道类型”时把“渠道”武断绑定到其中之一。
+    """
+    normalized_query = _normalize(query)
+    resolved = set()
+    for field in fields:
+        for label in _field_labels(field):
+            normalized_label = _normalize(label)
+            suffix = next(
+                (
+                    item
+                    for item in COMPONENT_FIELD_LABEL_SUFFIXES
+                    if normalized_label.endswith(item)
+                ),
+                "",
+            )
+            short_label = normalized_label[: -len(suffix)] if suffix else ""
+            if len(short_label) < 2 or short_label not in normalized_query:
+                continue
+            matches = {
+                candidate["field_name"]
+                for candidate in fields
+                if any(
+                    _normalize(candidate_label).startswith(short_label)
+                    for candidate_label in _field_labels(candidate)
+                )
+            }
+            if len(matches) == 1:
+                resolved.update(matches)
+    return resolved
 
 
 def _default_filters(
@@ -696,6 +753,9 @@ def build_guidance(
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields
     )
+    category = dataset.get("dataset_category", "")
+    if category == "query_component":
+        explicit_names.update(_component_short_label_fields(dataset_fields, query))
     dimensions = [row for row in dataset_fields if row["field_type"] == "dimension"]
     metrics = [row for row in dataset_fields if row["field_type"] == "metric"]
     selected_dimensions = _select_fields(
@@ -712,7 +772,6 @@ def build_guidance(
         explicit_names,
         output_mode,
     )
-    category = dataset.get("dataset_category", "")
     status = (
         "clarify_required"
         if unknown_fields

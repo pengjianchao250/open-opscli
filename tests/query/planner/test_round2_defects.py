@@ -60,6 +60,24 @@ def test_explicit_order_wins_over_trend_default():
     assert _template(contract)["orderBy"] == [{"field": "price", "desc": True}]
 
 
+def test_rank_metric_name_does_not_override_daily_trend_order():
+    """指标名自带「排名」不等于排序指令，按日趋势仍须按日期升序。"""
+    dataset, fields = _instant_dataset()
+    fields.append(
+        {
+            **fields[-1],
+            "field_name": "search_frequency_rank",
+            "verbose_name": "搜索频率排名",
+        }
+    )
+    contract = _plan(
+        _adapter(lambda: (dataset, fields)),
+        "按日查看2026年8月搜索频率排名趋势",
+    )
+    assert contract["status"] == "planned"
+    assert _template(contract)["orderBy"] == [{"field": "date_id", "desc": False}]
+
+
 # ── 3. 无行数单位的 TopN ────────────────────────────────────────────────────────
 
 

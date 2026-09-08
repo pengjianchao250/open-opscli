@@ -8,7 +8,10 @@
 """
 
 import json
+from calendar import monthrange
 from importlib.resources import files
+
+import pytest
 
 
 def test_intent_rules_resource_loads():
@@ -31,6 +34,12 @@ def test_query_plan_schema_resource_loads():
     assert isinstance(data, dict) and data
 
 
+def test_sales_team_phrase_is_not_a_sales_person_request():
+    from opscli.query.services.planner import field_semantics
+
+    assert field_semantics.sales_person_dimension_requested("按销售小组看销售额") is False
+
+
 def test_time_scope_relative_parse():
     """近7天解析为绝对起止窗口（Asia/Shanghai），matched=True。"""
     from opscli.query.services.planner import time_scope
@@ -46,6 +55,122 @@ def test_time_scope_relative_parse():
     end = date.fromisoformat(scope["end"])
     assert (end - start).days == 6
     assert "近7天" in scope["label_zh"]
+
+
+def test_time_scope_leading_days_use_recent_window():
+    """“前7天”按产品约定等同近7天，不能回落默认 30 天。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse("前7天各部门销量", today=date(2026, 9, 8))
+    assert (scope["start"], scope["end"]) == ("2026-09-02", "2026-09-08")
+    assert scope["is_default"] is False
+    assert scope["label_zh"].startswith("近7天")
+
+
+@pytest.mark.parametrize(
+    ("wording", "expected_start"),
+    [
+        ("过去7天各部门销量", "2026-09-02"),
+        ("过去2周各部门销量", "2026-08-26"),
+        ("过去2个月各部门销量", "2026-07-11"),
+    ],
+)
+def test_time_scope_past_windows_are_explicit(wording, expected_start):
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(wording, today=date(2026, 9, 8))
+    assert (scope["start"], scope["end"]) == (expected_start, "2026-09-08")
+    assert scope["is_default"] is False
+
+
+@pytest.mark.parametrize("wording", ["2026-08", "2026/08", "2026.08"])
+def test_time_scope_numeric_year_month_formats(wording):
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(wording, today=date(2026, 9, 8))
+    assert (scope["start"], scope["end"]) == ("2026-08-01", "2026-08-31")
+    assert scope["is_default"] is False
+
+
+@pytest.mark.parametrize(
+    "month, abbreviation, number",
+    [
+        ("January", "Jan", 1),
+        ("February", "Feb", 2),
+        ("March", "Mar", 3),
+        ("April", "Apr", 4),
+        ("May", "May", 5),
+        ("June", "Jun", 6),
+        ("July", "Jul", 7),
+        ("August", "Aug", 8),
+        ("September", "Sep", 9),
+        ("October", "Oct", 10),
+        ("November", "Nov", 11),
+        ("December", "Dec", 12),
+    ],
+)
+def test_time_scope_english_month_full_and_abbreviated_in_both_orders(
+    month: str, abbreviation: str, number: int
+) -> None:
+    """十二个月全称/缩写及“月 年”“年 月”顺序都解析为自然月。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    expected = (
+        f"2026-{number:02d}-01",
+        f"2026-{number:02d}-{monthrange(2026, number)[1]:02d}",
+    )
+    for wording in (
+        f"{month} 2026 sales",
+        f"{abbreviation} 2026 sales",
+        f"2026 {month} sales",
+        f"2026 {abbreviation} sales",
+    ):
+        scope = time_scope.parse(wording, today=date(2026, 9, 8))
+        assert (scope["start"], scope["end"]) == expected, wording
+        assert scope["is_default"] is False, wording
+
+
+def test_time_scope_english_month_explicit_comparison():
+    """英文自然月同样支持显式主周期与对比周期。"""
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse("August 2026 vs Jul 2026 sales", today=date(2026, 9, 8))
+    assert (scope["start"], scope["end"]) == ("2026-08-01", "2026-08-31")
+    assert (scope["comparison"]["start"], scope["comparison"]["end"]) == (
+        "2026-07-01",
+        "2026-07-31",
+    )
+
+
+def test_time_scope_starts_new_clause_after_exclusion():
+    """排除条件后的“后看/再看”开启新子句。
+
+    后续自然月不能被否定跨度吞掉。
+    """
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    for query in (
+        "排除加拿大后看8月各渠道销量",
+        "不要亚马逊VC，再看8月份销售额",
+        "去掉加拿大然后看8月各渠道销量",
+        "排除加拿大之后查8月销量",
+        "忽略加拿大接着统计8月销量",
+    ):
+        scope = time_scope.parse(query, today=date(2026, 9, 8))
+        assert (scope["start"], scope["end"]) == ("2026-08-01", "2026-08-31")
+        assert scope["is_default"] is False
 
 
 def test_time_scope_default_window_when_unmatched():
@@ -133,6 +258,43 @@ def test_explicit_comparison_keeps_existing_trailing_forms():
     )
 
 
+@pytest.mark.parametrize(
+    "wording",
+    [
+        "查询2026年7月和2026年8月对比",
+        "查询2026年7月比2026年8月",
+    ],
+)
+def test_explicit_comparison_supports_common_month_connectors(wording):
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(wording, today=date(2026, 9, 8))
+    assert (scope["start"], scope["end"]) == ("2026-07-01", "2026-07-31")
+    assert (scope["comparison"]["start"], scope["comparison"]["end"]) == (
+        "2026-08-01",
+        "2026-08-31",
+    )
+
+
+@pytest.mark.parametrize(
+    ("wording", "expected"),
+    [
+        ("2026Q3环比", ("2026-04-01", "2026-06-30")),
+        ("2026Q1环比", ("2025-10-01", "2025-12-31")),
+        ("2024年环比", ("2023-01-01", "2023-12-31")),
+    ],
+)
+def test_natural_period_comparison_uses_previous_calendar_period(wording, expected):
+    from datetime import date
+
+    from opscli.query.services.planner import time_scope
+
+    scope = time_scope.parse(wording, today=date(2026, 9, 8))
+    assert (scope["comparison"]["start"], scope["comparison"]["end"]) == expected
+
+
 def test_explicit_comparison_absent_when_only_primary_window_present():
     """句中只有主周期一个区间时不得伪造对比期（无第二区间可用）。"""
     from datetime import date
@@ -170,6 +332,42 @@ def test_field_semantics_requested_canonical_fields():
     # 毛利率派生自 gross_profit 与 price 两个基础字段
     assert "gross_profit" in matched
     assert "price" in matched
+
+
+def test_exact_authorized_metric_labels_protect_contained_short_aliases():
+    """完整指标名中的短别名不构成第二个指标诉求。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert field_semantics.requested_canonical_fields(
+        "主营业务收入、营业外收入",
+        protected_terms=("主营业务收入", "营业外收入"),
+    ) == {}
+    assert field_semantics.requested_canonical_fields(
+        "市场总销量和市场总销售额(原币)",
+        protected_terms=("市场总销量", "市场总销售额(原币)"),
+    ) == {}
+
+
+def test_short_alias_outside_exact_metric_label_remains_requested():
+    """长标签之外另写的短别名仍是独立诉求。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert field_semantics.requested_canonical_fields(
+        "主营业务收入和收入",
+        protected_terms=("主营业务收入",),
+    ) == {"price": "收入"}
+
+
+def test_field_term_cannot_start_inside_query_action_word():
+    """动作词尾部不得与后续文本跨边界拼成字段标签。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert not field_semantics.has_standalone_term_occurrence(
+        "总周转天数", "汇总周转天数(可售)"
+    )
+    assert field_semantics.has_standalone_term_occurrence(
+        "总周转天数", "汇总总周转天数"
+    )
 
 
 def test_field_semantics_broad_sales_business_terms_select_standard_metrics():

@@ -83,11 +83,26 @@ PERMISSION_ENUM_TERMS = (
     "可用枚举值",
     "枚举值",
     "可选值",
+    "当前账号可见",
+    "当前账户可见",
     "合法值",
     "允许值",
     "权限值",
     "enumerate",
     "enum",
+)
+PERMISSION_ENUM_PATTERNS = (
+    re.compile(r"当前(?:账号|账户)(?:能|可以|可)?(?:看到|查看)"),
+    re.compile(r"当前可见"),
+    re.compile(r"(?:有哪些|有什么|列出|列表|罗列).{0,24}(?:可选|可用|允许|可见)"),
+    re.compile(
+        r"(?:可选|可用|允许|可见)的?[^，。；;！？!?]{0,24}"
+        r"(?:有哪些|有什么|是什么|列表)"
+    ),
+)
+COMPONENT_BUSINESS_ANALYSIS_RE = re.compile(
+    r"业绩|销售额|销量|销售量|订单|利润|毛利|收入|成本|转化率|点击率|"
+    r"退款率|退货率|趋势|表现|同比|环比"
 )
 DEFAULT_DATASET_REJECTION_TERMS = (
     "不使用即时综合数据集",
@@ -195,7 +210,15 @@ def _explicit_candidates(query: str, profiles: list[dict]) -> list[dict]:
 
 
 def _permission_enum_requested(query: str) -> bool:
-    return any(_term_matches(term, query) for term in PERMISSION_ENUM_TERMS)
+    normalized_query = _normalize(query)
+    if COMPONENT_BUSINESS_ANALYSIS_RE.search(normalized_query):
+        return False
+    return any(
+        _term_matches(term, normalized_query) for term in PERMISSION_ENUM_TERMS
+    ) or any(
+        pattern.search(normalized_query)
+        for pattern in PERMISSION_ENUM_PATTERNS
+    )
 
 
 def _description_candidates(query: str, profiles: list[dict]) -> list[dict]:

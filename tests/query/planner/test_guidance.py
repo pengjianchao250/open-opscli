@@ -74,6 +74,19 @@ def test_build_guidance_ready_with_dimensions_and_metrics():
     assert isinstance(result["metadata_fingerprint"], str) and result["metadata_fingerprint"]
 
 
+def test_runtime_identifier_is_not_misclassified_as_date_field():
+    """runtime_role 中的字符串 time 不是日期词元，不能抢占真实事件时间。"""
+    assert dataset_guidance._is_date_field(
+        {"field_name": "runtime_role", "verbose_name": "运行角色"}
+    ) is False
+    assert dataset_guidance._is_date_field(
+        {"field_name": "occurred_at", "verbose_name": "事件发生时间"}
+    ) is True
+    assert dataset_guidance._is_date_field(
+        {"field_name": "report_date", "verbose_name": "报告周期"}
+    ) is True
+
+
 def test_snapshot_metric_uses_snapshot_aggregation_policy():
     """snapshot_metric==1 的库存量落入快照聚合口径（禁止跨期累加）。"""
     adapter = MetadataAdapter(_payload())

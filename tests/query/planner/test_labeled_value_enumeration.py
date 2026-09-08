@@ -55,6 +55,24 @@ def test_labeled_value_match(query: str, expected_first: str, expected_enumerate
     assert enumerated is expected_enumerated
 
 
+def test_copula_less_compound_list_is_enumerated():
+    first, enumerated = query_plan._labeled_value_match(
+        "渠道傲创-美国、傲创-加拿大的销量", CHANNEL_TERMS
+    )
+
+    assert first == "傲创-美国"
+    assert enumerated is True
+
+
+def test_unlabeled_dimension_list_is_not_a_filter():
+    first, enumerated = query_plan._labeled_value_match(
+        "按渠道和ASIN看销量", CHANNEL_TERMS
+    )
+
+    assert first == ""
+    assert enumerated is False
+
+
 def test_single_value_helper_unchanged():
     """保留的单值签名行为不变，既有调用方不受影响。"""
     assert query_plan._extract_labeled_value(

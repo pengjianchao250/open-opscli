@@ -37,12 +37,13 @@ _BROAD_SALES_METRIC_RE = re.compile(
 )
 _SALES_PERSON_NOUN = (
     r"(?:销售负责人|销售人员|销售员|销售)"
-    r"(?!额|金额|量|数据|情况|表现|业绩|概况|趋势|走势|怎么样|如何|好不好|好吗|订单)"
+    r"(?!额|金额|量|小组|数据|情况|表现|业绩|概况|趋势|走势|怎么样|如何|好不好|好吗|订单)"
 )
 _SALES_PERSON_CONTEXT_RE = re.compile(
     rf"(?:按|依|以|各|每(?:个|位)?|所有|全部)\s*{_SALES_PERSON_NOUN}"
     rf"|{_SALES_PERSON_NOUN}\s*(?:为|是|=|＝|：|:|等于|筛选|过滤|分组|维度)"
 )
+_QUERY_ACTION_TERMS = ("查询", "查看", "分析", "获取", "汇总", "统计", "展示", "列出")
 
 
 def normalize(value: object) -> str:
@@ -71,17 +72,73 @@ def sales_person_dimension_requested(query: str) -> bool:
     return bool(_SALES_PERSON_CONTEXT_RE.search(text))
 
 
-def requested_canonical_fields(query: str) -> dict[str, str]:
+def _term_spans(term: str, text: str) -> list[tuple[int, int]]:
+    """返回 term 在 text 中的全部重叠命中区间。"""
+    spans: list[tuple[int, int]] = []
+    start = text.find(term)
+    while start >= 0:
+        spans.append((start, start + len(term)))
+        start = text.find(term, start + 1)
+    return spans
+
+
+def has_standalone_term_occurrence(term: str, query: str) -> bool:
+    """字段词至少独立出现一次，不能从查询动作词内部起始后跨出。"""
+    text = normalize(query)
+    needle = normalize(term)
+    if not needle:
+        return False
+    action_spans = [
+        span
+        for action in _QUERY_ACTION_TERMS
+        for span in _term_spans(normalize(action), text)
+    ]
+    return any(
+        not any(
+            action_start < start < action_end and end >= action_end
+            for action_start, action_end in action_spans
+        )
+        for start, end in _term_spans(needle, text)
+    )
+
+
+def _has_uncovered_occurrence(
+    term: str, text: str, protected_terms: Iterable[str]
+) -> bool:
+    """term 是否至少有一次独立出现，而非仅属于更长的精确字段标签。"""
+    term_spans = _term_spans(term, text)
+    if not term_spans:
+        return False
+    covering_spans = [
+        span
+        for raw_protected in protected_terms
+        if (protected := normalize(raw_protected))
+        and protected != term
+        and term in protected
+        for span in _term_spans(protected, text)
+    ]
+    return any(
+        not any(start <= term_start and term_end <= end for start, end in covering_spans)
+        for term_start, term_end in term_spans
+    )
+
+
+def requested_canonical_fields(
+    query: str, *, protected_terms: Iterable[str] = ()
+) -> dict[str, str]:
     """返回查询明确命中的规范字段及其首个业务说法。
 
     返回字典而不是集合，便于后续审计字段为何被选择。只有规范技术字段真实
-    存在于当前授权元数据时，调用方才会采用这里的结果。
+    存在于当前授权元数据时，调用方才会采用这里的结果。protected_terms 是
+    当前数据集在原文中精确出现的完整指标标签；稳定短别名若只出现在这些
+    长标签内部，不再被误判为另一个指标诉求。
     """
     text = normalize(query)
     matched: dict[str, str] = {}
+    protected = tuple(protected_terms)
     for field_name, terms in FIELD_QUERY_TERMS.items():
         for term in terms:
-            if normalize(term) in text:
+            if _has_uncovered_occurrence(normalize(term), text, protected):
                 matched.setdefault(field_name, term)
                 break
     for term, field_names in DERIVED_METRIC_COMPONENTS.items():
