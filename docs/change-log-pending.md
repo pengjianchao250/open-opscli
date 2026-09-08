@@ -9503,3 +9503,16 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：`git revert` 本次提交；或 `git checkout -- opscli/query/services/planner opscli/query/commands/cli.py opscli/mcp/tools/query.py opscli/skills/templates/ops-dataset-query tests/query tests/skills/test_dataset_query_template.py && rm tests/query/planner/test_snapshot_policy.py tests/query/planner/test_round2_defects.py`，再重新安装 Skill。
 ---
+
+## 2026-09-08 ops-dataset-query / 规划器内核 - 默认推荐数据集直通与部门筛选消歧
+
+**变更原因**：真实请求“查询十一部8月的收入情况”先要求确认推荐数据集，随后又把“十一部”中的“一部”误识别为销售小组，造成不必要的交互和错误筛选风险。
+
+**改动点**：`agent_query_planner.py` 将通过校验的默认即时综合数据集标记为自动选择；`field_semantics.py` 增加“收入”到销售额的稳定别名；`query_plan.py` 删除默认数据集二次确认分支，并在组件解析前预留完整部门词，避免“十一部”被销售小组“一部”截取，同时扩展筛选匹配合同。`SKILL.md`、`QUERY_SPEC.md` 和版本文件同步到 1.4.2；新增默认选表、模糊字段澄清边界、部门子串冲突与合同文案测试。
+
+**验证结果**：新增用例先红后绿（实现前 3 failed / 9 passed，实现后定向 30 passed）；最终规划器、MCP 规划入口与 Skill 模板定向回归 433 passed，修改过的三个 Python 模块均通过 `py_compile`。扩大到 `tests/query`、MCP 规划器与 Skill 模板共 604 条时 600 passed，剩余 4 条为既有 `respx` mock URL 与当前 QA 地址不匹配（`test_intent_attribution_headers.py` 2 条、`test_intent_match_report.py` 2 条），与本次改动无关；`git diff --check` 通过。
+
+**影响范围**：未指定数据集的自然语言查询、收入指标别名、部门与销售小组筛选解析。
+
+**回滚方式**：回滚本条涉及的规划器、Skill 文档、版本文件和回归测试改动。
+---

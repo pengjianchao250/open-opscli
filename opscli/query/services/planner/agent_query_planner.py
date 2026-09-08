@@ -583,7 +583,7 @@ def _default_dataset_candidate(
 def _with_default_dataset_recommendation(
     result: dict, candidate: dict | None, *, override_existing: bool = False
 ) -> dict:
-    """把默认候选标为必须确认的推荐，而不是可直接执行的静默选表。
+    """把唯一且覆盖请求语义的默认候选标为自动选用。
 
     override_existing=True 时允许默认候选覆盖已选出的其他候选：调用方已判定
     既有首选候选拿不出请求点名指标的精确中文证据、而默认即时综合数据集拿得出
@@ -610,7 +610,8 @@ def _with_default_dataset_recommendation(
     )
     recommended["default_dataset_recommendation"] = {
         "kind": "instant_comprehensive",
-        "confirmation_required": True,
+        "confirmation_required": False,
+        "auto_selected": True,
     }
     return recommended
 

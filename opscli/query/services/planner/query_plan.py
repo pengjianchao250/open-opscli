@@ -215,7 +215,6 @@ CLARIFICATION_MESSAGES = {
     "field_identity": "点名字段对应多个同名物理字段，当前中文标签无法唯一绑定。",
     "time_scope_confirmation": "未识别到明确时间范围，需要确认是否使用默认近30天。",
     "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
-    "default_dataset_confirmation": "未明确指定数据集，建议使用已授权且兼容的即时综合数据集，需要确认是否采用。",
     "time_comparison_unsupported": "该数据集没有日期字段，无法按时间筛选，也无法做环比或同比。",
     # 2026-09-07 验收缺陷修复新增：点名指标不在数据集、白名单外币种、组件筛选澄清三类
     "metric_not_in_dataset": "当前数据集没有请求的指标，请更换数据集，或改用该数据集已有的指标"
@@ -325,6 +324,7 @@ FILTER_VALUE_MATCH_POLICY = {
         "trim",
         "casefold",
         "department_arabic_chinese_numeral_equivalence",
+        "department_token_precedence_over_component_substrings",
     ],
     "exact_match_is_exclusive": True,
     "exact_match_confirmation_required": False,
@@ -334,6 +334,7 @@ FILTER_VALUE_MATCH_POLICY = {
         "先对用户筛选值与当前账号组件枚举原值做规范化完整等值比较；"
         "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值并直接执行，"
         "不得再次向用户确认，也不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
+        "完整部门词优先于其他组件的子串匹配，“十一部”不得被拆成销售小组“一部”；"
         "例如“9部”只匹配“九部”，不匹配“项目九部”；"
         "“范泰克”不匹配“范泰克体系外”。"
     ),
@@ -1376,10 +1377,7 @@ def _answer_contract(
     required = []
     if platform_filter_state == "requires_permission_enum":
         required.append("permission_enum_required")
-    if any(
-        reason in clarification_reasons
-        for reason in ("dataset_constraints", "default_dataset_confirmation")
-    ):
+    if "dataset_constraints" in clarification_reasons:
         required.append("dataset_confirmation_required")
     if guidance.get("guidance_status") == "clarify_required":
         required.append("field_confirmation_required")
@@ -2217,22 +2215,15 @@ def build_model_contract(
                 "metrics": [str(item.get("field_name", "")) for item in snapshot_metrics],
             }
     default_dataset_recommendation = selection.get("default_dataset_recommendation") or {}
-    # 即时综合数据集已经通过当前账号授权、业务语义和字段指导三层校验，且原文确实
-    # 命中了至少一个查询字段时，默认选表本身已无歧义，不能再制造一次人工确认。
-    # 完全模糊、没有任何字段命中的请求仍保留推荐确认，避免擅自决定查询内容。
+    # 即时综合数据集已经通过当前账号授权、业务语义和字段指导三层校验，默认选表
+    # 本身已无歧义，直接采用；请求没有命中字段时只澄清字段口径，不再重复确认数据集。
     default_dataset_auto_selected = bool(
         default_dataset_recommendation
         and guidance.get("guidance_status") == "ready"
-        and (dimensions or metrics)
     )
     if default_dataset_auto_selected:
         default_dataset_recommendation["confirmation_required"] = False
         default_dataset_recommendation["auto_selected"] = True
-    if default_dataset_recommendation.get("confirmation_required"):
-        status = "clarify_required"
-        if "default_dataset_confirmation" not in clarification_reasons:
-            clarification_reasons.append("default_dataset_confirmation")
-        pending_confirmations_zh.append("确认是否使用推荐的即时综合数据集")
     # 只查维度、不查指标（如「某渠道下全部 ASIN」）时，默认时间窗口没有业务意义：
     # 用户要的是去重维度全集，卡近 30 天只会漏掉更早出现过的值。
     # 该规则一度因「筛选值不写入模板导致静默全量」收回，现由组件筛选值解析
@@ -2342,7 +2333,7 @@ def build_model_contract(
     if default_dataset_recommendation:
         model_view["default_dataset_recommendation_zh"] = {
             "name_zh": str(dataset.get("display_name_zh", "")),
-            "reason_zh": "未明确指定数据集，且该数据集在当前授权范围内并覆盖已明确的业务与字段。",
+            "reason_zh": "未明确指定数据集，已自动采用当前授权范围内通过业务与字段校验的推荐数据集。",
             "confirmation_required": bool(
                 default_dataset_recommendation.get("confirmation_required")
             ),
@@ -2351,10 +2342,7 @@ def build_model_contract(
     if ambiguous_field_labels:
         model_view["ambiguous_field_labels_zh"] = ambiguous_field_labels
         model_view["next_action"] = "ask_user_for_field_clarification"
-    if default_dataset_recommendation.get("confirmation_required"):
-        model_view["pending_confirmations_zh"] = pending_confirmations_zh
-        model_view["next_action"] = "ask_user_for_default_dataset_confirmation"
-    elif pending_confirmations_zh:
+    if pending_confirmations_zh:
         model_view["pending_confirmations_zh"] = pending_confirmations_zh
         model_view["next_action"] = "ask_user_for_query_scope_confirmation"
     if scope:
@@ -3776,6 +3764,17 @@ def _time_literals_consumed(contract: dict) -> set:
     return literals
 
 
+def _department_literals_consumed(query: str) -> set:
+    """预留原文中的完整部门词，避免较短组件枚举从中截取子串。
+
+    部门仍由自身组件做授权枚举和完整等值校验；这里仅提前登记文本所有权。
+    即使当前数据集没有部门组件，“十一部”也不能被销售小组“一部”二次消费。
+    """
+    requested = _extract_requested_department_value(query)
+    normalized = _normalize_component_value(requested)
+    return {normalized} if normalized else set()
+
+
 def _resolve_component_filters(
     contract: dict,
     query: str,
@@ -3793,8 +3792,12 @@ def _resolve_component_filters(
         return contract
     contract = _resolve_asin_filter(contract, query, adapter)
     enum_cache: dict = {}
-    # 时间字面量与币种关键词都已被各自的解析消费，不得再被组件形态抽取/反查二次消费
-    consumed: set = _time_literals_consumed(contract) | _currency_literals_consumed(query)
+    # 时间、币种与完整部门词都已有明确语义，不得被其他组件形态抽取/反查二次消费。
+    consumed: set = (
+        _time_literals_consumed(contract)
+        | _currency_literals_consumed(query)
+        | _department_literals_consumed(query)
+    )
     # 两趟：先落实用户显式点名的字段并登记已消费的值，再做形态抽取与枚举反查
     for labeled_only in (True, False):
         for spec in _ENUM_COMPONENT_SPECS:

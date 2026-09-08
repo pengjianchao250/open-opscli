@@ -15,7 +15,7 @@ from collections.abc import Iterable
 # 仅收录跨数据集长期稳定、且物理字段身份唯一的业务别名。
 FIELD_QUERY_TERMS: dict[str, tuple[str, ...]] = {
     "order_qty": ("销量", "单量", "订单量"),
-    "price": ("销售额", "销售金额"),
+    "price": ("销售额", "销售金额", "收入"),
     "advertising_fee": ("广告费", "广告花费"),
     "gross_profit": ("毛利", "毛利额"),
     "purchase_cost": ("采购成本", "采购费用"),

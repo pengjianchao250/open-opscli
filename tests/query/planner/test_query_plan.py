@@ -316,7 +316,6 @@ def test_every_clarification_code_has_dedicated_message():
         "field_identity",
         "time_scope_confirmation",
         "recommended_fields_confirmation",
-        "default_dataset_confirmation",
         "time_comparison_unsupported",
         # 2026-09-07 验收缺陷修复新增的合同层澄清码
         "metric_not_in_dataset",
