@@ -17,28 +17,30 @@
 
 - OPS 使用 AppHub 批准的当前 viewer 身份，通过 `Depends(get_query_gateway)` 注入。
 - Keepa 和 SellerSprite 线上取数服务统一使用生产根域名 `https://ops.mcp.xenkee.com`，共用同一个 `ThirdPartyApiClient`。
-- `OPSCLI_API_BASE_URL` 是后端普通配置，生产默认值为 `https://ops.mcp.xenkee.com`；该值必须是纯根域名，不得包含 `/api`、接口路径或末尾 `/`。
-- `OPSCLI_API_KEY` 只从站点后端 Secret 注入；缺失时启动或首次调用必须快速失败。
+- `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 是后端普通配置，生产默认值为 `https://ops.mcp.xenkee.com`；该值必须是纯根域名，不得包含 `/api`、接口路径或末尾 `/`。
+- `OPSCLI_THIRD_PARTY_DATA_API_KEY` 只从站点后端 Secret 注入；缺失时启动或首次调用必须快速失败。
 - 第三方 Client 使用 Bearer Header，不把 Key 放进 URL、请求体、前端、日志或 SQLite。
-- 所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接；不得分别定义 Keepa、SellerSprite Base URL，不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`、`OPSCLI_SELLER_SPRITE_E2E_API_KEY` 或第二套运行时配置。
+- 所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接；不得分别定义 Keepa、SellerSprite Base URL，不读取旧变量别名或第二套运行时配置。
 - 站点访问用户身份只用于本地用户数据归属，不作为第三方 API 调用凭证。
 
 生产后端配置：
 
 ```env
-OPSCLI_API_BASE_URL=https://ops.mcp.xenkee.com
-OPSCLI_API_KEY=<backend-secret>
+OPSCLI_THIRD_PARTY_DATA_API_BASE_URL=https://ops.mcp.xenkee.com
+OPSCLI_THIRD_PARTY_DATA_API_KEY=<backend-secret>
 ```
 
-生成的后端 Client 可以为 `OPSCLI_API_BASE_URL` 提供上述生产默认值，但不得为 `OPSCLI_API_KEY` 提供默认值。两个变量都不得进入 `VITE_*` 或其他前端构建变量。
+生成的后端 Client 可以为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 提供上述生产默认值，但不得为 `OPSCLI_THIRD_PARTY_DATA_API_KEY` 提供默认值。两个变量都不得进入 `VITE_*` 或其他前端构建变量，也不得回退读取旧变量名。
 
 ## 3. OPS
 
 ### 3.1 开发期验证
 
+- 先读取 `references/ops-dataset-application-guide.md`，判定单次查询、引导查询、`viewer-live`、用户私有持久化、批准的系统同步或静态参考。
 - 清晰需求使用 `$ops-dataset-query`。
 - 缺参、模糊或有歧义的需求使用 `$ops-query-wizard`。
 - 不凭记忆填写数据集、字段、聚合、公式或筛选枚举。
+- 静态字段目录、历史授权目录和应用清单只形成 `candidate`；只有当前在线元数据和少量真实查询可以标记 `verified`。
 - 样本只用于合同验证，不提交到源码。
 
 ### 3.2 运行期
@@ -64,6 +66,12 @@ OPS 使用标准模板的 `backend/core/auth.py` 和 `backend/clients/ops_query_
 业务 API 必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`，service 通过参数接收 Gateway。允许调用的模板合同为 `list_datasets`、`get_dataset_metadata`、`build_simple` 和 `build_simple_and_run`；不得绕过 Gateway 直接创建 `AuthClient`、`QueryManager` 或拼装 viewer 请求。
 
 OPS 原始数据和基于 OPS 的加工结果如果持久化，必须写入带 `owner_user_id` 的用户私有表。列表、读取、更新、删除、索引和唯一约束都限定当前用户。测试使用 FakeGateway 和 FastAPI dependency override，不访问真实网络或本机凭证。
+
+### 3.3 批准的系统同步
+
+页面、API 或数据库需要统一固定同步时，必须先确认项目实际提供经过批准的 OPS 系统运行时适配器。标准模板的 `ViewerQueryGateway`、`OpsQueryGateway` 和 `LocalQueryGateway` 都不能被推断为无人值守共享同步身份。
+
+允许实现前必须具备身份与授权证据、`app.yaml.opscli.datasets` 白名单、确定性分页、断点续传、批次状态、自然键、幂等写入、快照语义和失败恢复合同。缺少任一前置时在 data-spec 标记 `blocked`，不得保存或复用访问者 `X-Ops-Token`，不得自行创建系统账号、定时任务或不存在的 SDK Client。
 
 ## 4. Keepa
 

@@ -13,16 +13,16 @@ description: AppHub 模板业务项目的开发规范。创建、开发、排错
 - 目录、依赖、命令和辅助函数以目标项目实际代码为准。发现 Skill、项目文档与代码冲突时列出证据和影响，不静默覆盖配置或用兼容分支掩盖漂移。
 - 项目可补充业务约定；通用规则只在 Skill 维护，平台运行合同只在项目合同维护，避免多份文档重复。
 
-| 本轮任务 | 读取 |
-| --- | --- |
-| 前端页面、组件、样式或状态 | [前端规范](references/frontend-standard.md) |
-| 修改前端请求、错误处理或前后端共享类型 | [前端规范](references/frontend-standard.md)、[后端红线](references/backend-redlines.md) |
-| 修改 FastAPI API、服务、任务或配置 | [后端红线](references/backend-redlines.md) |
-| SQLite 模型、事务、迁移或备份 | [SQLite 规范](references/sqlite-standard.md) |
-| 后端调用 opscli SDK 或 REST | [opscli 接入规范](references/opscli-integration-standard.md) |
-| 页面需要真实业务数据 | [数据访问规范](references/data-access-standard.md)，按其要求使用 `$ops-app-data-builder` |
-| 项目迁移或补齐后端规范 | [迁移规范](references/migration-standard.md) |
-| 创建应用、绑定仓库、提交源码或检查交付条件 | [源码交付规范](references/deployment-standard.md) |
+| 本轮任务                                   | 读取                                                                                     |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------- |
+| 前端页面、组件、样式或状态                 | [前端规范](references/frontend-standard.md)                                              |
+| 修改前端请求、错误处理或前后端共享类型     | [前端规范](references/frontend-standard.md)、[后端红线](references/backend-redlines.md)  |
+| 修改 FastAPI API、服务、任务或配置         | [后端红线](references/backend-redlines.md)                                               |
+| SQLite 模型、事务、迁移或备份              | [SQLite 规范](references/sqlite-standard.md)                                             |
+| 后端调用 opscli SDK 或 REST                | [opscli 接入规范](references/opscli-integration-standard.md)                             |
+| 页面需要真实业务数据                       | [数据访问规范](references/data-access-standard.md)，按其要求使用 `$ops-app-data-builder` |
+| 项目迁移或补齐后端规范                     | [迁移规范](references/migration-standard.md)                                             |
+| 创建应用、绑定仓库、提交源码或检查交付条件 | [源码交付规范](references/deployment-standard.md)                                        |
 
 首次接手或相关文件变化时，读取项目 `AGENTS.md`、`README.md` 和 `docs/apphub-contract.md`；进入子目录时读取适用的项目规则。后端改动与接口变化再核对 `backend/CLAUDE.md`、受影响路由、Pydantic Schema 和 OpenAPI；纯样式改动不额外读取后端全文。普通开发不读取 `assets/backend/` 中的全文规范。
 

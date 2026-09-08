@@ -32,7 +32,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.13"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.14"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -199,9 +199,22 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         "前端不得持有 API Key、JWT、Cookie",
         "不选择或猜测数据集、字段、聚合、筛选",
         "默认按访问者实时取数",
+        "由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步",
+        "固定同步必须标记为 `blocked`",
         "Mock、测试替身和本地回退不得被描述成线上真实接入",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "OPSCLI_THIRD_PARTY_DATA_API_KEY",
+        "不兼容旧变量别名",
     ):
         assert required in content
+
+    for obsolete_env in (
+        "OPSCLI_" + "API_BASE_URL",
+        "OPSCLI_" + "API_KEY",
+        "OPSCLI_SELLER_SPRITE_" + "E2E_BASE_URL",
+        "OPSCLI_SELLER_SPRITE_" + "E2E_API_KEY",
+    ):
+        assert obsolete_env not in content
 
 
 def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
@@ -325,7 +338,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.13"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.14"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

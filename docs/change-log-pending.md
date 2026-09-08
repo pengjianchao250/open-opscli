@@ -9,6 +9,17 @@
 **影响范围**：仅内置 Skill 主文件、前端/部署参考、版本和相关校验；不修改后端规范、克隆脚本、模板项目或用户全局配置。
 
 **回滚方式**：恢复本次 Skill、版本和专项测试差异，无项目或数据迁移。
+## 2026-09-08 Skills - 第三方数据 API 环境变量收窄命名
+
+**变更原因**：原第三方数据 API 根地址与密钥变量当前只服务于站点后端调用 Keepa 与 SellerSprite，但命名过于通用，容易被误解为整个 OPSCLI 平台的公共 API 配置。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 将新项目运行时合同统一改为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`；同步更新数据层合同、运行时路由、静态评估、设计文档和契约测试。新合同不读取旧变量别名，不修改线上 API 使用指南，也不迁移已有数据项目。Skill 版本分别升至 `v0.1.9` 和 `v0.0.14`。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；已有项目继续保持原配置，不提供兼容回退。
+
+**回滚方式**：恢复两份 Skill 及其 Reference、版本、评估、测试和设计文档中的旧变量合同，并删除本节记录。
+
+---
 
 ## 2026-09-08 AppHub 镜像 - 发布名称增加 release
 
@@ -346,7 +357,7 @@ all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模�
 
 **改动点**：`ops-app-data-builder` 升级到 `v0.1.4`，明确 OPS 原始及加工结果持久化时按 `owner_user_id` 隔离；Keepa 成功 JSON 原始数据按 `provider + request_hash` 写入站点共享快照；SellerSprite 使用正式异步 REST，保存并复用 pending `job_id`，仅将成功 JSON 结果写入共享快照，XLS/XLSX、二进制和临时下载 URL 不入库；用户查询历史、输入、收藏、备注以及 OPS/第三方加工结果均按用户隔离。同步将 `ops-app-build-spec` 升级到 `v0.0.5`，更新 Reference、静态 eval、发行清单、测试、需求设计和落地计划。
 
-**配置边界**：Keepa 与 SellerSprite 运行时只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 `OPSCLI_SELLER_SPRITE_E2E_*` 别名；Keepa 页面运行时只调用 `POST /api/v1/keepa/run`；不处理第三方额度检查、扣减、归属、账号调度或复杂分布式锁。
+**配置边界**：Keepa 与 SellerSprite 运行时只使用当时约定的通用第三方数据 API 根地址与密钥变量，不引入 SellerSprite E2E 别名；Keepa 页面运行时只调用 `POST /api/v1/keepa/run`；不处理第三方额度检查、扣减、归属、账号调度或复杂分布式锁。
 
 **验证结果**：`tests/skills/test_ops_app_data_builder_skill.py` 通过，`10 passed`；`ops-app-build-spec` 元数据、真实数据路由和安装声明专项测试通过，`3 passed`；两个 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`；`scripts/check_skill_release_manifest.py` 校验通过。
 
@@ -356,7 +367,7 @@ all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模�
 
 **变更原因**：`ops-app-data-builder` 的运行时路由仍把 `/api/v1/keepa/scenarios` 与 `/api/v1/keepa/run` 并列为线上入口，但当前站点运行时只允许调用 `/api/v1/keepa/run`。继续保留 scenarios 会误导站点生成不应存在的运行时代码。
 
-**改动点**：Skill 升级到 `v0.1.3`；Keepa 开发期仍通过 `ops-keepa` 验证场景、参数和少量样本，站点线上运行时只允许后端通过 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 调用 `/api/v1/keepa/run`；同步更新运行时 Reference、落地计划和契约测试，并增加 scenarios 路径零残留断言。
+**改动点**：Skill 升级到 `v0.1.3`；Keepa 开发期仍通过 `ops-keepa` 验证场景、参数和少量样本，站点线上运行时只允许后端通过当时约定的通用第三方数据 API 根地址与密钥变量调用 `/api/v1/keepa/run`；同步更新运行时 Reference、落地计划和契约测试，并增加 scenarios 路径零残留断言。
 
 **影响范围**：只影响 `ops-app-data-builder` 生成 Keepa 站点数据层时的运行时端点选择，不修改 `opscli keepa` CLI/MCP 自身命令面，也不影响 OPS QueryGateway 或 SellerSprite 阻塞策略。
 
@@ -8830,9 +8841,9 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ## 2026-09-04 ops-app-data-builder Skill - 统一 Keepa 与 SellerSprite 线上取数根域名
 
-**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但现有 Skill 只约束两者共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
+**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但当时的 Skill 只约束两者共用一组通用第三方数据 API 根地址与密钥变量，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
 
-**改动点**：`ops-app-data-builder` 明确 `OPSCLI_API_BASE_URL` 的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；`OPSCLI_API_KEY` 继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
+**改动点**：`ops-app-data-builder` 明确当时通用第三方数据 API 根地址变量的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；对应密钥变量继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
 
 **验证结果**：`.venv/Scripts/python.exe -m pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest --basetemp .tmp/pytest-ops-app-data-builder-noconftest` 通过，`10 passed`；`ops-app-data-builder.json` 与 `data/VERSION.json` JSON 解析校验通过。直接加载 `tests/skills/conftest.py` 仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻断，因此沿用既有基线使用 `--noconftest` 验证。
 
