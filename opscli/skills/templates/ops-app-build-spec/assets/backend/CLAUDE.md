@@ -143,7 +143,8 @@ repositories/  →  models/
 
 - 数据库为本应用独占的 SQLite，唯一变量为 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。ORM 基类 `app/models/base.py` 的 `Base`，Alembic 只管理该 metadata。
 - 表名蛇形复数，无前缀；主键 `id`；软删除统一用 `〈deleted_at / status〉`。
-- 引擎 `sqlite+aiosqlite` + `NullPool`，`app/database.py` 在 `connect` 事件注入 PRAGMA 基线（WAL、`foreign_keys=ON`、`busy_timeout=5000`），写事务 `BEGIN IMMEDIATE`；每个参数都有取值依据注释。
+- 引擎使用 `sqlite+aiosqlite`，`app/database.py` 在 `connect` 事件注入 PRAGMA 基线（WAL、`foreign_keys=ON`、`busy_timeout=5000`），写事务 `BEGIN IMMEDIATE`；每个参数都有取值依据注释。
+- AppHub 共享卷暴露的文件型 SQLite 使用 SQLAlchemy 标准异步池 `AsyncAdaptedQueuePool`（当前依赖默认池），不使用 `NullPool`；每次请求独立 Session，结束事务并关闭 Session、归还连接，保留默认 rollback。空闲物理连接不会阻塞 checkpoint，长读事务才会妨碍推进；保持自动 checkpoint，lifespan 的 finally 在启动失败、正常及异常退出时执行 `await engine.dispose()`。内存测试仍显式使用 `StaticPool`；运行镜像的池类型与真实 readonly 挂载验收见 SQLite 通用规范 §1.5。
 - SQLite 任何时刻只有一个写者：线上保持单写实例，事务必须短，禁止事务内网络调用。需要多副本或高并发写时停止并联系 IT，不得硬扛。
 - 类型规则以《SQLite 数据库使用通用规范》为准：金额 `INTEGER` 最小单位、时间 UTC 单一表示、`STRICT` 表、JSON 列 `json_valid`。
 - 迁移 `render_as_batch=True`；改列类型、约束、主键外键必须走 batch 重建，并显式重建索引与触发器。
