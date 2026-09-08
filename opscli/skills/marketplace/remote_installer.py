@@ -206,6 +206,7 @@ def install_remote_skill(
                 cwd=Path.home(),   # 从家目录探测全局 AI 工具，不受调用时的工作目录影响
                 runtime=runtime,
                 force=force,
+                source="remote",  # 注册表标记技能广场来源，下架清理据此跳过远程安装的 Skill
             )
     except Exception as exc:
         return {"success": False, "command": command, "data": None, "error": error_to_dict(exc)}

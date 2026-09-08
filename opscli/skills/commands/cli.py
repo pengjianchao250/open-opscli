@@ -831,13 +831,38 @@ def _install_interactive(
     if "ops-feedback" in skill_names and not skills_dir and all_installs:
         _inject_rules_for_installs(all_installs, verbose=verbose)
 
+    # Step 4：对齐发行包 —— 清理"已下架且确认由 opscli 安装"的 Skill。
+    # 只处理注册表能证明是内置模板安装（source=builtin，或旧记录 + manifest 声明兜底）、
+    # 且当前发行包模板已不存在的 Skill；用户自装 / 技能广场安装的同名 Skill 不受影响。
+    # 详见 SkillsManager.list_delisted_skills。self-update 升级后会自动执行本命令，
+    # 因此业务电脑升级 opscli 即可自动移除下架 Skill，无需额外操作。
+    # --skills-dir 隔离模式跳过：该模式承诺只写指定目录，全局清理会破坏隔离语义。
+    pruned_names: list[str] = []
+    if not skills_dir:
+        try:
+            prune_result = manager.prune_delisted_skills()
+            pruned_names = [item["name"] for item in prune_result["pruned"]]
+            for item in prune_result["pruned"]:
+                _console.print(
+                    f"  [yellow]↓ 已清理下架 Skill[/yellow] [bold]{item['name']}[/bold] "
+                    f"[dim]（当前发行包已不包含，已移除链接、中央存储与安装记录）[/dim]"
+                )
+            for item in prune_result["failed"]:
+                _console.print(
+                    f"  [yellow]× 下架 Skill 清理失败[/yellow] [bold]{item['name']}[/bold] "
+                    f"[yellow]{item['error']}[/yellow]"
+                )
+        except Exception as exc:
+            # 清理失败不影响安装主流程的退出码与结果
+            _console.print(f"[yellow]下架 Skill 清理检查失败（不影响安装结果）: {exc}[/yellow]")
+
     _console.print()
     if errors:
         _console.print(f"[yellow]完成：{len(all_results)} 个成功，{len(errors)} 个失败[/yellow]")
         payload = {
             "success": False,
             "command": "skills install",
-            "data": {"results": all_results},
+            "data": {"results": all_results, "pruned_skills": pruned_names},
             "error": {
                 "type": "BatchInstallError",
                 "message": "; ".join(errors),
@@ -852,7 +877,7 @@ def _install_interactive(
         payload = {
             "success": True,
             "command": "skills install",
-            "data": {"results": all_results},
+            "data": {"results": all_results, "pruned_skills": pruned_names},
             "error": None,
         }
         # 默认只输出成功/失败个数汇总；完整 JSON payload 仅在 --verbose 或 --pretty 显式要求时输出
@@ -1804,6 +1829,11 @@ def install_skill(
 
     技能实体始终落在中央存储 ~/.opscli/skills/<name>，各目标目录只放指向它的链接。
 
+    批量安装（不指定 NAME）结束后会自动清理已下架的内置 Skill：当前发行包
+    已不包含、且注册表确认由 opscli 安装的 Skill 会被完整移除（链接 + 中央存储
+    + 安装记录），使本地安装集合与发行包对齐；用户自装或技能广场安装的 Skill
+    不受影响。self-update 升级后自动执行本命令，业务电脑升级即完成清理。
+
     加 --yes / -y 可跳过确认，直接安装全部到所有检测到的工具。
     加 --verbose / -v 可输出逐条安装日志（默认静默，仅输出最终汇总）。
     """
@@ -1961,6 +1991,9 @@ def link_skill(
             manager._record_install(
                 name, link_result.link_path, target_runtime,
                 central_dir=central_skill_dir, link_method=link_result.method,
+                # link 只是补链接而非安装：不写 source，保留已有记录的归属
+                # （中央存储内容可能来自技能广场，不能凭 link 改判成内置模板安装）
+                source=None,
             )
             installs.append({
                 "tool": runtime_to_tool_name(target_runtime),
@@ -2033,6 +2066,108 @@ def unlink_skill(
         raise typer.Exit(1)
 
     _emit(payload, pretty)
+
+
+@app.command("uninstall")
+def uninstall_skill(
+    name: str = typer.Argument(..., help="Skill 名称"),
+    skills_dir: str | None = typer.Option(
+        None,
+        "--skills-dir",
+        help="同时清理该自定义目录下的安装副本（--skills-dir 隔离安装场景）",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅预览将清理的内容，不实际删除"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """完整卸载 Skill：移除各工具目录链接、中央存储实体与安装记录。
+
+    与 unlink 的区别：unlink 只移除工具目录中的链接、保留中央存储；
+    uninstall 是完整卸载，链接、中央存储、注册表记录三者全清。
+    """
+    # 人类可读进度走 stderr，stdout 只留 _emit 的纯 JSON（供调用方解析）
+    _progress = Console(stderr=True)
+    manager = SkillsManager()
+    try:
+        result = manager.uninstall(name, skills_dir=skills_dir, dry_run=dry_run)
+
+        action = "将清理（--dry-run）" if dry_run else "已清理"
+        for path in result["removed_links"]:
+            _progress.print(f"  [green]√[/green] {action}链接/副本 [dim]({path})[/dim]")
+        for path in result["skipped_links"]:
+            _progress.print(f"  [dim]- 不存在，跳过 ({path})[/dim]")
+        if result["central_removed"]:
+            _progress.print(f"  [green]√[/green] {action}中央存储 [dim]({result['central_dir']})[/dim]")
+        if result["registry_cleared"]:
+            _progress.print(f"  [green]√[/green] {action}安装记录")
+
+        payload = {
+            "success": True,
+            "command": "skills uninstall",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "command": "skills uninstall",
+            "data": None,
+            "error": error_to_dict(exc),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+
+
+@app.command("prune")
+def prune_skills(
+    dry_run: bool = typer.Option(False, "--dry-run", help="仅预览将清理的下架 Skill，不实际删除"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """清理已下架的内置 Skill（当前发行包不再包含、且确认由 opscli 安装的 Skill）。
+
+    判定依据安装注册表（source=builtin）与发行包 manifest 声明，
+    用户自装或技能广场安装的 Skill 不会被清理。
+    """
+    # 人类可读进度走 stderr，stdout 只留 _emit 的纯 JSON（供调用方解析）
+    _progress = Console(stderr=True)
+    manager = SkillsManager()
+    try:
+        result = manager.prune_delisted_skills(dry_run=dry_run)
+
+        if not result["pruned"] and not result["failed"]:
+            _progress.print("[dim]没有需要清理的下架 Skill（本地安装与当前发行包已对齐）[/dim]")
+        action = "将清理（--dry-run）" if dry_run else "已清理"
+        for item in result["pruned"]:
+            _progress.print(
+                f"  [yellow]↓[/yellow] {action}下架 Skill [bold]{item['name']}[/bold] "
+                f"[dim]（链接 {len(item['removed_links'])} 处，"
+                f"中央存储{'有' if item['central_removed'] else '无'}）[/dim]"
+            )
+        for item in result["failed"]:
+            _progress.print(
+                f"  [red]× 清理失败[/red] [bold]{item['name']}[/bold] [red]{item['error']}[/red]"
+            )
+
+        payload = {
+            "success": not result["failed"],
+            "command": "skills prune",
+            "data": result,
+            "error": None,
+        }
+    except Exception as exc:
+        payload = {
+            "success": False,
+            "command": "skills prune",
+            "data": None,
+            "error": error_to_dict(exc),
+        }
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+
+    _emit(payload, pretty)
+    if not payload["success"]:
+        raise typer.Exit(1)
 
 
 @app.command("report-usage")
