@@ -1,5 +1,15 @@
 # 待归档变更记录
 
+## 2026-09-07 Keepa JSON Lens - 接入 OPS MCP API JavaScript SDK
+
+**变更原因**：Keepa JSON Lens 原型仍要求手动填写 MCP API Key，和已接入 SDK 的 SellerSprite Lens 鉴权方式不一致，也无法完整验证复用 OPS 浏览器登录态的站点接入流程。
+**改动点**：站点通过本地包依赖接入 `@aukeys/ops-mcp-api-sdk`，移除手填 API Key 和旧请求头工具，统一读取 `localStorage.OPERATION_TOKEN` 与同源 Cookie 换取内存凭证并调用 Keepa REST API；本地开发切换为 Vite，增加 OPS 配置接口代理及可选 MCP API 地址覆盖。
+**验证结果**：Node 单元测试 6 项、Playwright 浏览器测试 36 项全部通过，Vite 生产构建和 `git diff --check` 通过；浏览器测试覆盖 OPS Token 与同源 Cookie 换取、MCP API Key 自动注入、地址覆盖和 Key 不落盘。
+**影响范围**：`sites/json-lens-prototype` 的本地开发、浏览器鉴权和 Keepa REST 请求链路。
+**回滚方式**：回退 JSON Lens 的 SDK 依赖、Vite 配置、请求客户端、浏览器测试和本条记录。
+
+---
+
 ## 2026-09-07 SellerSprite REST - 返回格式化 JSON v2 工作簿
 
 **变更原因**：SellerSprite Lens 查询竞品时，REST `/result` 返回接口原始商品对象，包含分页、请求状态及大量非展示字段，导致页面生成 128 列无效表格；任务生成的 JSON 导出本已按官方模板筛选和格式化，但未被 REST 使用。

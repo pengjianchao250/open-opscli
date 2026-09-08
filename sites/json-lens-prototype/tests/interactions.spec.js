@@ -1,7 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { installOpsAuthMocks } from "./ops-auth-fixture.js";
 
 const API_URL = "http://127.0.0.1:8765/api/v1/keepa/run";
 const LOCALHOST_API_URL = "http://localhost:8765/api/v1/keepa/run";
+
+test.beforeEach(async ({ context, page }) => {
+  await installOpsAuthMocks(context, page);
+});
 
 async function fulfillJson(route, status, json) {
   await route.fulfill({ status, contentType: "application/json", json });
@@ -25,14 +30,14 @@ test("缺少 crypto.randomUUID 时仍可提交并记录历史", async ({ page })
   await expect(page.locator("[data-history-panel] .badge")).toHaveText("1");
 });
 
-test("默认 API 地址跟随页面主机名", async ({ page }) => {
+test("连接设置可覆盖 MCP API 地址", async ({ page }) => {
   await page.route(LOCALHOST_API_URL, async (route) => {
     await fulfillJson(route, 200, { success: true, data: [{ asin: "B0LOCALHOST" }], error: null });
   });
-  await page.goto("http://localhost:4173/?variant=a");
+  await page.goto("/?variant=a");
   await page.locator("details.connection-options summary").click();
 
-  await expect(page.getByLabel("接口地址")).toHaveValue(LOCALHOST_API_URL);
+  await page.getByLabel("MCP API 地址").fill(LOCALHOST_API_URL);
   await page.getByRole("button", { name: "运行商品关键词搜索" }).click();
   await expect(page.locator(".status-line")).toContainText("请求成功");
 });
