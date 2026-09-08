@@ -182,6 +182,7 @@ async def ensure_ops_credentials(
     provided_session: str | None = None,
     provided_jwt: str | None = None,
     require_jwt: bool = False,
+    force_relogin: bool = False,
 ) -> OpsCredentialBinding:
     """按当前 MCP 身份确保并返回可信 OPS 凭证。
 
@@ -196,6 +197,12 @@ async def ensure_ops_credentials(
         provided_session: 旧客户端或 stdio 调用方显式传入的 OPS Session。
         provided_jwt: 旧客户端或 stdio 调用方显式传入的 OPS JWT。
         require_jwt: 是否必须在返回前建立可用的 OPS JWT。
+        force_relogin: 远端模式下强制重新登录一次，忽略 ``is_authenticated()``。
+            用于「本地看着没过期、服务端却已判无效」的场景——``is_authenticated()``
+            只比对本地 ``session_expires_at``，而服务端还会校验 ``is_valid``
+            与真实有效期，被登出或吊销的 Session 在本地依然显示未过期，
+            于是自动登录永远不触发、调用方恒拿到 401。仅在调用方确实撞到
+            认证类失败后才允许传 True，避免每次调用都重登。
 
     Returns:
         与当前 MCP 身份一致的凭证作用域、邮箱和 OPS 凭证绑定。
@@ -209,7 +216,12 @@ async def ensure_ops_credentials(
         if credential_dir is None:
             raise OpsCredentialBindingError("无法确定当前 MCP 用户的隔离凭证作用域")
         cache = _get_isolated_credential_cache(credential_dir)
-        if cache.is_authenticated() and (not require_jwt or cache.get_jwt("ops")):
+        stale_session_id = cache.get_session_id() if force_relogin else None
+        if (
+            not force_relogin
+            and cache.is_authenticated()
+            and (not require_jwt or cache.get_jwt("ops"))
+        ):
             session_id, user_email = _read_remote_identity(cache)
             return OpsCredentialBinding(
                 credential_scope=str(credential_dir),
@@ -222,7 +234,17 @@ async def ensure_ops_credentials(
             # 登录和 JWT 换取共用一把作用域锁，保证陈旧 Session 并发自愈只发生一次。
             refreshed = False
             logged_in = False
-            if not cache.is_authenticated():
+            current_session_id = cache.get_session_id() if force_relogin else None
+            already_renewed = bool(
+                force_relogin
+                and current_session_id
+                and current_session_id != stale_session_id
+            )
+            if force_relogin and not already_renewed:
+                await _auto_login(cache)
+                refreshed = True
+                logged_in = True
+            elif not force_relogin and not cache.is_authenticated():
                 await _auto_login(cache)
                 refreshed = True
                 logged_in = True

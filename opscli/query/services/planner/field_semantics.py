@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Iterable
 
@@ -27,12 +28,47 @@ DERIVED_METRIC_COMPONENTS: dict[str, tuple[str, ...]] = {
     "采购成本占比": ("purchase_cost", "price"),
 }
 
+# “销售情况”是业务指标集合，不是元数据中展示名为“销售”的人员维度。
+# 仅映射跨即时销售数据集稳定存在的三项核心指标；字段不存在时由调用方忽略，
+# 不会凭语义映射创造未授权字段。
+BROAD_SALES_METRIC_FIELDS = ("price", "order_qty", "orders")
+_BROAD_SALES_METRIC_RE = re.compile(
+    r"销售\s*(?:情况|表现|业绩|概况|趋势|走势|怎么样|如何|好不好|好吗|数据(?!集))"
+)
+_SALES_PERSON_NOUN = (
+    r"(?:销售负责人|销售人员|销售员|销售)"
+    r"(?!额|金额|量|数据|情况|表现|业绩|概况|趋势|走势|怎么样|如何|好不好|好吗|订单)"
+)
+_SALES_PERSON_CONTEXT_RE = re.compile(
+    rf"(?:按|依|以|各|每(?:个|位)?|所有|全部)\s*{_SALES_PERSON_NOUN}"
+    rf"|{_SALES_PERSON_NOUN}\s*(?:为|是|=|＝|：|:|等于|筛选|过滤|分组|维度)"
+)
+
 
 def normalize(value: object) -> str:
     """对匹配文本执行 NFKC、大小写和首尾空白归一。"""
     if not isinstance(value, str):
         return ""
     return unicodedata.normalize("NFKC", value).casefold().strip()
+
+
+def has_broad_sales_metric_intent(query: str) -> bool:
+    """判断是否明确表达宽泛销售经营指标意图。
+
+    “销售数据集”中的“销售数据”属于数据集名称，负向前瞻会将其排除，
+    避免用户只选表时被静默追加指标。
+    """
+    return bool(_BROAD_SALES_METRIC_RE.search(normalize(query)))
+
+
+def sales_person_dimension_requested(query: str) -> bool:
+    """判断“销售”是否明确指向销售人员维度、分组或筛选。"""
+    text = normalize(query)
+    if "team_username" in text or any(
+        term in text for term in ("销售负责人", "销售人员", "销售员")
+    ):
+        return True
+    return bool(_SALES_PERSON_CONTEXT_RE.search(text))
 
 
 def requested_canonical_fields(query: str) -> dict[str, str]:
@@ -53,6 +89,9 @@ def requested_canonical_fields(query: str) -> dict[str, str]:
             continue
         for field_name in field_names:
             matched.setdefault(field_name, term)
+    if has_broad_sales_metric_intent(text):
+        for field_name in BROAD_SALES_METRIC_FIELDS:
+            matched.setdefault(field_name, "销售情况")
     return matched
 
 

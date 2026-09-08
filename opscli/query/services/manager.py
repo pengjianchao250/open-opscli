@@ -150,6 +150,7 @@ class QueryManager:
         """
         # 远端优先，统一拉取最新数据；过滤参数透传给后端按需收敛
         source = "remote"
+        remote_error: Exception | None = None
         try:
             remote_data = self.client.fetch_query_metadata(
                 dataset_alias=dataset_alias,
@@ -157,9 +158,14 @@ class QueryManager:
             )
             datasets = remote_data.get("datasets") or []
             fields = remote_data.get("fields") or []
-        except Exception:
+        except Exception as exc:
             # 远端失败时回退到本地缓存
-            payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
+            remote_error = exc
+            try:
+                payload = self._load_query_metadata(skills_dir=skills_dir, cwd=cwd)
+            except Exception as local_exc:
+                # 本地缓存也不可用时保留远端根因，避免认证异常被缓存错误覆盖。
+                raise remote_error from local_exc
             datasets = payload.get("datasets") or []
             fields = payload.get("fields") or []
             source = "local"
@@ -181,6 +187,9 @@ class QueryManager:
             matched = next((item for item in datasets if int(item.get("table_id", -1)) == int(table_id)), None)
 
         if matched is None:
+            if remote_error is not None:
+                # 本地缓存加载成功但没有目标数据集，同样属于降级失败，应返回远端根因。
+                raise remote_error
             needle = dataset_alias if dataset_alias else str(table_id)
             hint = ""
             if source == "local":

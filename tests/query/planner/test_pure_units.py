@@ -2,16 +2,13 @@
 
 覆盖 Task 1 的三个纯标准库单元（time_scope / plan_integrity / field_semantics）
 与两个静态资源（intent_rules.json / query_plan.schema.json）迁入内核后的可用性。
-断言字段对照 scripts/ 下原脚本的真实返回结构补齐。
+
+历史说明：Skill 本地规划器移除前，本文件还负责与 Skill 版 data/ 目录下同名静态
+资源逐字节对拍；规划器内核唯一后该对拍已无对象，相关用例删除。
 """
 
 import json
 from importlib.resources import files
-from pathlib import Path
-
-
-REPO_ROOT = Path(__file__).resolve().parents[3]
-SKILL_DATA = REPO_ROOT / "opscli/skills/templates/ops-dataset-query/data"
 
 
 def test_intent_rules_resource_loads():
@@ -32,15 +29,6 @@ def test_query_plan_schema_resource_loads():
     data = json.loads(raw)
     # JSON Schema 顶层应含类型或属性声明，确认非空且结构完整
     assert isinstance(data, dict) and data
-
-
-def test_skill_and_kernel_static_planning_resources_are_identical():
-    """双主线共享的意图规则和合同 Schema 必须逐字段一致，防止再次单边演进。"""
-    kernel_resources = files("opscli.query.services.planner.resources")
-    for name in ("intent_rules.json", "query_plan.schema.json"):
-        skill_data = json.loads((SKILL_DATA / name).read_text("utf-8"))
-        kernel_data = json.loads((kernel_resources / name).read_text("utf-8"))
-        assert kernel_data == skill_data, f"双主线静态资源漂移：{name}"
 
 
 def test_time_scope_relative_parse():
@@ -182,3 +170,39 @@ def test_field_semantics_requested_canonical_fields():
     # 毛利率派生自 gross_profit 与 price 两个基础字段
     assert "gross_profit" in matched
     assert "price" in matched
+
+
+def test_field_semantics_broad_sales_business_terms_select_standard_metrics():
+    """“销售情况”是经营指标意图，必须映射标准销售指标而非销售人员。"""
+    from opscli.query.services.planner import field_semantics
+
+    for query in ("查询销售情况", "查看销售表现", "分析销售业绩"):
+        matched = field_semantics.requested_canonical_fields(query)
+        assert {"price", "order_qty", "orders"}.issubset(matched)
+
+
+def test_field_semantics_broad_sales_conversational_terms_select_standard_metrics():
+    """短口语经营问法也应映射销售指标，而不是销售人员维度。"""
+    from opscli.query.services.planner import field_semantics
+
+    for query in ("这个月销售怎么样", "销售如何", "销售好不好"):
+        assert field_semantics.has_broad_sales_metric_intent(query)
+        matched = field_semantics.requested_canonical_fields(query)
+        assert {"price", "order_qty", "orders"}.issubset(matched)
+        assert not field_semantics.sales_person_dimension_requested(query)
+
+
+def test_field_semantics_sales_dataset_name_is_not_broad_metric_intent():
+    """数据集名称中的“销售数据集”只用于选表，不得凭子串追加销售指标组。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert not field_semantics.has_broad_sales_metric_intent("使用即时销售数据集")
+
+
+def test_field_semantics_distinguishes_sales_person_dimension_context():
+    """只有明确人员/分组/筛选表达时，“销售”才表示销售人员维度。"""
+    from opscli.query.services.planner import field_semantics
+
+    assert not field_semantics.sales_person_dimension_requested("各部门的销售情况")
+    assert field_semantics.sales_person_dimension_requested("按销售人员汇总销售情况")
+    assert field_semantics.sales_person_dimension_requested("销售是张三，查询销售情况")

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Sequence
 
 from opscli.query.services.planner import field_semantics
 from opscli.query.services.planner import scoped_metadata_index
@@ -42,6 +43,28 @@ DEFAULT_DATASET_DISPLAY_NAME = "即时综合数据集"
 TECHNICAL_DATASET_NAME_RE = re.compile(
     r"(?<![a-z0-9_])(?:custom_[a-z0-9_]+|[a-z0-9][a-z0-9_]*_set)(?![a-z0-9_])",
     re.IGNORECASE,
+)
+
+# 专用业务口径提示：元数据的中文说明经常只有“发货数据集/ASIN明细表”等短名，
+# 无法表达 catalog 中更具体的使用场景。这里保留可审计的强短语与语义数据集名
+# 片段，不绑定 table_id；命中后只提升同一语义名称的候选，未命中不改变原排序。
+DATASET_BUSINESS_HINTS: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
+    (re.compile(r"账单销售趋势|长周期账单|财务口径|账单销售"), ("sale_trend_set",)),
+    (re.compile(r"即时销售|短期销售|实时销售监控|今日销售|当天销售"), ("order_sale_trend_set",)),
+    (re.compile(r"广告类型|分平台分广告类型|广告结构|类型ACOS|类型CPC"), ("custom_type_advertising_list",)),
+    (re.compile(r"退款产地|产地退款"), ("custom_refund_place_set",)),
+    (re.compile(r"ASIN流量与转化|流量转化率|ASIN转化"), ("custom_asin_sales_traffic_set",)),
+    (re.compile(r"亚马逊SC设备|SC设备流量|设备流量|设备转化率"), ("custom_type_asin_sales_traffic",)),
+    (re.compile(r"Listing最新快照|最新Listing|Listing价格库存评分排名"), ("custom_crawler_listing_snapshot",)),
+    (re.compile(r"Listing趋势|价格趋势|库存趋势|评分趋势|排名趋势"), ("custom_crawler_listing_trend_set",)),
+    (re.compile(r"Listing变动事件|变动类型|变动状态|变更事件"), ("custom_listing_change_event_set",)),
+    (re.compile(r"Listing字段变更|Listing变化记录|变更前值|变更后值"), ("custom_listing_change_log_set",)),
+    (re.compile(r"运营建议|运营提醒|问题严重程度|恢复进度"), ("custom_operation_suggest_suggestions_set",)),
+    (re.compile(r"物控期初期末|月初库存|月末库存|期初期末库存"), ("custom_inventory_turnover_wk_cw_set",)),
+    (re.compile(r"物控库存|库龄|补货|库存周转"), ("custom_inventory_turnover_wk_set", "custom_inventory_turnover_set")),
+    (re.compile(r"SP关键词|SP搜索词|直接间接转化|直接订单|间接订单"), ("custom_sp_keyword_set",)),
+    (re.compile(r"Amazon ASIN价格|ASIN价格|ASIN明细|跟卖"), ("custom_crawler_amazon_details",)),
+    (re.compile(r"VC Manufacturing|Net PPM|VC售罄率|供应商确认率"), ("custom_vc_ppm_set",)),
 )
 _normalize = schema.normalize
 _term_matches = schema.term_matches
@@ -557,9 +580,26 @@ def _default_dataset_candidate(
     }
 
 
-def _with_default_dataset_recommendation(result: dict, candidate: dict | None) -> dict:
-    """把默认候选标为必须确认的推荐，而不是可直接执行的静默选表。"""
+def _with_default_dataset_recommendation(
+    result: dict, candidate: dict | None, *, override_existing: bool = False
+) -> dict:
+    """把默认候选标为必须确认的推荐，而不是可直接执行的静默选表。
+
+    override_existing=True 时允许默认候选覆盖已选出的其他候选：调用方已判定
+    既有首选候选拿不出请求点名指标的精确中文证据、而默认即时综合数据集拿得出
+    （验收实测「亚马逊SC 近7天销售额」靠平台槽位+说明文本把流量转化率表推成首选，
+    该表根本没有「销售额」，即时综合数据集反而落选）。
+    """
     if candidate is None:
+        return result
+    # 已有专用业务提示选出其他候选时，不能被默认即时综合推荐覆盖。
+    existing = result.get("dataset_candidates") or []
+    if (
+        not override_existing
+        and result.get("planner_status") == "candidate_ready"
+        and existing
+        and existing[0].get("dataset_alias") != candidate.get("dataset_alias")
+    ):
         return result
     recommended = _result(
         "candidate_ready",
@@ -614,16 +654,72 @@ def _unrequested_business_specificity(
     )
 
 
+def _business_hint_targets(query: str) -> list[tuple[re.Pattern[str], tuple[str, ...]]]:
+    """返回当前请求命中的专用业务口径提示。"""
+    normalized = _normalize(query)
+    return [
+        item
+        for item in DATASET_BUSINESS_HINTS
+        if re.search(item[0].pattern, normalized, flags=re.IGNORECASE)
+    ]
+
+
+def _dataset_business_hint(
+    profile: dict, query: str
+) -> tuple[re.Pattern[str], tuple[str, ...]] | None:
+    """返回与候选身份匹配的业务提示，供排序和审计理由共同使用。"""
+    card = profile["card"]
+    identity = " ".join(
+        _normalize(card.get(key))
+        for key in ("dataset_alias", "dataset_name", "description", "remarks")
+    )
+    for pattern, targets in _business_hint_targets(query):
+        if any(_normalize(target) in identity for target in targets):
+            return pattern, targets
+    return None
+
+
+def _covers_requested_metrics(profile: dict, metric_terms: Sequence[str]) -> bool:
+    """卡片是否覆盖请求点名的全部指标词（精确中文标签或规范字段别名）。
+
+    为什么要进排序键：验收实测「亚马逊SC 近7天销售额」被平台槽位与说明文本
+    命中拉到了只有「销售额(分摊)」的流量转化率表，即时综合数据集明明有精确的
+    「销售额」却落选；随后字段指导取不到指标、metrics 为空仍 planned，返回的是
+    人名列表。指标是取数请求最硬的约束，覆盖与否必须先于文本得分决定候选优先层。
+    """
+    card_terms = profile["card"]["metric_terms"]
+    return all(
+        field_semantics.metric_term_is_covered(term, card_terms) for term in metric_terms
+    )
+
+
 def _semantic_rank(
-    profile: dict, domains: set[str], slots: dict[str, set[str]], rules: dict
+    profile: dict,
+    domains: set[str],
+    slots: dict[str, set[str]],
+    rules: dict,
+    query: str = "",
+    metric_terms: Sequence[str] = (),
 ) -> tuple:
-    """语义排序键（越小越优）：偏好口径最贴合、无多余业务特异性的数据集。"""
+    """语义排序键（越小越优）：偏好口径最贴合、无多余业务特异性的数据集。
+
+    首键为点名指标覆盖：请求明确点名指标时，覆盖该指标的候选恒优先于不覆盖的候选；
+    未点名指标时该键恒为 0，不改变既有排序。
+    """
+    metric_penalty = 0 if not metric_terms or _covers_requested_metrics(profile, metric_terms) else 1
+    hint_candidates = _business_hint_targets(query)
+    hint_match = _dataset_business_hint(profile, query) if hint_candidates else None
+    # 请求命中专用场景时，只有身份匹配的候选进入优先层；其他候选保留原有
+    # 维度/粒度排序，避免短语提示改变无关查询的行为。
+    hint_penalty = 0 if hint_match is not None else (1 if hint_candidates else 0)
     filter_penalty = sum(
         len(values)
         for name, values in slots.items()
         if profile["slot_modes"][name] == "filterable"
     )
     return (
+        metric_penalty,
+        hint_penalty,
         _slot_extra_count(profile, slots, rules, {"ad_type", "grain"}),
         _unrequested_specificity(profile, slots),
         _slot_extra_count(profile, slots, rules, {"platform"}),
@@ -652,8 +748,12 @@ def _score_profile(
     residual_terms: list[str],
     rules: dict,
     query: str,
+    metric_terms: Sequence[str] = (),
 ) -> dict:
-    """对单张卡片打分并记录理由（领域命中、槽位支持、残差词文本/字段命中）。"""
+    """对单张卡片打分并记录理由（领域命中、槽位支持、残差词文本/字段命中）。
+
+    metric_terms 为请求点名的指标词，只影响 _semantic_rank 的首键，不改变分数本身。
+    """
     card = profile["card"]
     score = INTENT_PATTERN_SCORE * len(domains & profile["domains"])
     reasons = [f"domain:{name}" for name in sorted(domains & profile["domains"])]
@@ -684,6 +784,10 @@ def _score_profile(
     if _default_ad_report(profile, slots, query):
         score += DEFAULT_AD_REPORT_SCORE
         reasons.append("default_ad_report")
+    hint = _dataset_business_hint(profile, query)
+    if hint is not None:
+        score += EXPLICIT_DESCRIPTION_SCORE
+        reasons.append(f"business_hint:{hint[0].pattern}")
 
     return {
         "dataset_alias": card["dataset_alias"],
@@ -692,7 +796,7 @@ def _score_profile(
         "score": score,
         "reasons": reasons,
         "grain_coverage": _extra_slot_terms(profile, slots, rules),
-        "_semantic_rank": _semantic_rank(profile, domains, slots, rules),
+        "_semantic_rank": _semantic_rank(profile, domains, slots, rules, query, metric_terms),
     }
 
 
@@ -882,8 +986,11 @@ def plan_query(
     semantics = extract_query_semantics(query, validated_rules)
     domains = set(semantics["domains"])
     slots = {name: set(values) for name, values in semantics["slots"].items()}
+    specialized_hint = any(
+        _dataset_business_hint(profile, query) is not None for profile in profiles
+    )
     default_candidate = None
-    if recommend_default_dataset and not default_dataset_rejected:
+    if recommend_default_dataset and not default_dataset_rejected and not specialized_hint:
         default_candidate = _default_dataset_candidate(
             profiles,
             domains,
@@ -913,7 +1020,10 @@ def plan_query(
     residual_terms = _query_tokens(query, matched_terms)
     if not domains and not slots:
         residual_scored = [
-            _score_profile(profile, set(), {}, residual_terms, validated_rules, query)
+            _score_profile(
+                profile, set(), {}, residual_terms, validated_rules, query,
+                metric_terms=list(semantics["metrics"]),
+            )
             for profile in profiles
             if profile["card"]["dataset_category"] == "normal"
         ]
@@ -951,12 +1061,12 @@ def plan_query(
             _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
             default_candidate,
         )
-    if not has_metric and not domains and set(slots) == {"platform"}:
+    if not specialized_hint and not has_metric and not domains and set(slots) == {"platform"}:
         return _with_default_dataset_recommendation(
             _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
             default_candidate,
         )
-    if not has_metric and not slots and len(domains) <= 1:
+    if not specialized_hint and not has_metric and not slots and len(domains) <= 1:
         return _with_default_dataset_recommendation(
             _result("clarify_required", intent, semantics["slots"], [], "business_scope"),
             default_candidate,
@@ -984,7 +1094,8 @@ def plan_query(
 
     scored = [
         _score_profile(
-            profile, domains, slots, residual_terms, validated_rules, query
+            profile, domains, slots, residual_terms, validated_rules, query,
+            metric_terms=list(semantics["metrics"]),
         )
         for profile in eligible
     ]
@@ -992,10 +1103,27 @@ def plan_query(
     contenders = [candidate for candidate in scored if candidate["_semantic_rank"] == best_rank]
     contenders.sort(key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
+    # 点名指标的精确中文证据优先于槽位/文本得分：首选候选拿不出该证据、而默认
+    # 即时综合数据集拿得出时，改由默认数据集承接（专用业务提示场景不会走到这里，
+    # 因为 specialized_hint 时 default_candidate 恒为 None）。
+    profiles_by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
+    top_profile = profiles_by_alias.get(contenders[0]["dataset_alias"])
+    default_profile = (
+        profiles_by_alias.get(default_candidate["dataset_alias"]) if default_candidate else None
+    )
+    prefer_default = bool(
+        has_metric
+        and top_profile is not None
+        and default_profile is not None
+        and not _has_chinese_metric_evidence(query, top_profile)
+        and _has_chinese_metric_evidence(query, default_profile)
+    )
+
     if len(contenders) == 1:
         return _with_default_dataset_recommendation(
             _result("candidate_ready", intent, semantics["slots"], contenders, None),
             default_candidate,
+            override_existing=prefer_default,
         )
     gap = contenders[0]["score"] - contenders[1]["score"]
     status = "candidate_ready" if gap >= CLARIFY_SCORE_GAP else "clarify_required"
@@ -1008,6 +1136,7 @@ def plan_query(
             None if status == "candidate_ready" else "dataset_selection",
         ),
         default_candidate,
+        override_existing=prefer_default,
     )
 
 

@@ -83,3 +83,36 @@ def test_credential_cache_default_base_dir(tmp_path, monkeypatch):
     cache.invalidate()
 
     assert cache.get_session_id() == "default-sess"
+
+
+@pytest.mark.parametrize(
+    "expires_in_seconds, usable",
+    [(3600, True), (301, True), (299, False), (60, False), (-60, False)],
+    ids=["1小时", "刚好超余量", "余量不足", "只剩1分钟", "已过期"],
+)
+def test_get_jwt_requires_safety_margin(tmp_path, expires_in_seconds, usable):
+    """剩余寿命不足安全余量的 JWT 视同不可用，由调用方换新。
+
+    回归防护：原实现只判 `exp > now`，一张只剩 1 秒的票照样被发出去，请求到达服务端时
+    已过期，JwtAuthMiddleware 判 407，表现为"刚拿到票就被登出"。换票只是一次 POST，
+    拿将死的票去赌请求时延不划算。
+    """
+    store = CredentialStore(base_dir=tmp_path)
+    store.save_session("sess", "u@example.com", "2099-01-01T00:00:00+00:00")
+    store.save_token("ops", "jwt-value", expires_in_seconds)
+
+    cache = McpCredentialCache(base_dir=tmp_path)
+
+    assert (cache.get_jwt("ops") == "jwt-value") is usable
+
+
+def test_unusable_jwt_is_dropped_from_cache(tmp_path):
+    """余量不足的票会被移出内存缓存，避免同一进程反复判定同一张废票。"""
+    store = CredentialStore(base_dir=tmp_path)
+    store.save_session("sess", "u@example.com", "2099-01-01T00:00:00+00:00")
+    store.save_token("ops", "jwt-value", 60)
+
+    cache = McpCredentialCache(base_dir=tmp_path)
+
+    assert cache.get_jwt("ops") is None
+    assert "ops" not in cache.list_tokens()

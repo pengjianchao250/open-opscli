@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date as date_type, timedelta
 import unicodedata
 from copy import deepcopy
 from importlib.resources import files
@@ -82,6 +83,97 @@ def _detect_global_currencies(query: str) -> list[str]:
     return currencies
 
 
+# 白名单外币种：识别到即转澄清，禁止静默按默认币种执行后把结果当作该币种。
+# ASCII 代码按整词匹配（避免 try/php 之类命中普通英文），中文词按子串匹配。
+_UNSUPPORTED_CURRENCY_PATTERNS = [
+    ("HKD", ("港币", "港元", "hkd")),
+    ("AUD", ("澳元", "澳币", "澳大利亚元", "aud")),
+    ("SGD", ("新加坡元", "新币", "sgd")),
+    ("KRW", ("韩元", "韩币", "krw")),
+    ("THB", ("泰铢", "thb")),
+    ("CHF", ("瑞士法郎", "chf")),
+    ("SEK", ("瑞典克朗", "sek")),
+    ("NOK", ("挪威克朗", "nok")),
+    ("DKK", ("丹麦克朗", "dkk")),
+    ("PLN", ("波兰兹罗提", "兹罗提", "pln")),
+    ("MXN", ("墨西哥比索", "mxn")),
+    ("BRL", ("巴西雷亚尔", "雷亚尔", "brl")),
+    ("INR", ("印度卢比", "卢比", "inr")),
+    ("TWD", ("新台币", "台币", "twd")),
+    ("VND", ("越南盾", "vnd")),
+    ("MYR", ("马来西亚林吉特", "林吉特", "myr")),
+    ("PHP", ("菲律宾比索", "php")),
+    ("AED", ("阿联酋迪拉姆", "迪拉姆", "aed")),
+    ("RUB", ("卢布", "rub")),
+    ("TRY", ("土耳其里拉", "里拉", "try")),
+    ("NZD", ("新西兰元", "纽元", "nzd")),
+    ("SAR", ("沙特里亚尔", "里亚尔", "sar")),
+]
+
+
+def _currency_keyword_spans(query: str, patterns: list) -> list[tuple[int, int, str, str]]:
+    """按原文顺序找出币种关键词区间（同起点保留更长词，区间不重叠）。
+
+    返回 (start, end, code, keyword)。ASCII 关键词只做整词匹配，中文词做子串匹配，
+    与 _detect_global_currencies 的重叠消解口径一致。
+    """
+    if not query:
+        return []
+    text = str(query).lower()
+    matches: list[tuple[int, int, int, str, str]] = []
+    for code_order, (code, keywords) in enumerate(patterns):
+        for keyword in keywords:
+            if keyword.isascii():
+                for match in re.finditer(rf"(?<![a-z]){re.escape(keyword)}(?![a-z])", text):
+                    matches.append((match.start(), match.end(), code_order, code, keyword))
+                continue
+            start = text.find(keyword)
+            while start >= 0:
+                matches.append((start, start + len(keyword), code_order, code, keyword))
+                start = text.find(keyword, start + 1)
+    matches.sort(key=lambda item: (item[0], -(item[1] - item[0]), item[2]))
+    occupied: list[tuple[int, int]] = []
+    spans: list[tuple[int, int, str, str]] = []
+    for start, end, _order, code, keyword in matches:
+        if any(start < used_end and end > used_start for used_start, used_end in occupied):
+            continue
+        occupied.append((start, end))
+        spans.append((start, end, code, keyword))
+    return spans
+
+
+def _detect_unsupported_currencies(query: str) -> list[str]:
+    """识别请求中白名单外的币种代码（按原文顺序去重）。
+
+    验收实测「用港币查」被静默忽略：模板不带 globalCurrency、按默认币种执行，
+    用户拿到币种未声明的数字且合同无任何提示。这里只做识别，处置在合同投影层转澄清。
+    """
+    supported = {(start, end) for start, end, _c, _k in _currency_keyword_spans(query, _CURRENCY_INTENT_PATTERNS)}
+    codes: list[str] = []
+    for start, end, code, _keyword in _currency_keyword_spans(query, _UNSUPPORTED_CURRENCY_PATTERNS):
+        # 与白名单关键词重叠的区间以白名单为准（如 "加拿大元" 不会被拆成别的币种）
+        if any(start < s_end and end > s_start for s_start, s_end in supported):
+            continue
+        if code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _currency_literals_consumed(query: str) -> set:
+    """把原文里的币种关键词登记为已消费，避免被组件枚举反查二次消费。
+
+    验收实测「分别用人民币和加拿大元」：币种词「加拿大元」里的「加拿大」被国家
+    组件的授权枚举反查抓走，模板被静默注入 country_name=加拿大，范围收窄 86%。
+    币种意图已由 _detect_global_currencies 消费，其关键词（及其子串）不得再当筛选值。
+    """
+    consumed = set()
+    for _start, _end, _code, keyword in _currency_keyword_spans(
+        query, _CURRENCY_INTENT_PATTERNS + _UNSUPPORTED_CURRENCY_PATTERNS
+    ):
+        consumed.add(_normalize_component_value(keyword))
+    return consumed
+
+
 def _detect_global_currency(query: str) -> str | None:
     """兼容单模板路径，返回用户请求中的第一个明确币种。"""
     currencies = _detect_global_currencies(query)
@@ -125,6 +217,20 @@ CLARIFICATION_MESSAGES = {
     "recommended_fields_confirmation": "用户未点名完整字段，需要确认是否采用系统推荐字段。",
     "default_dataset_confirmation": "未明确指定数据集，建议使用已授权且兼容的即时综合数据集，需要确认是否采用。",
     "time_comparison_unsupported": "该数据集没有日期字段，无法按时间筛选，也无法做环比或同比。",
+    # 2026-09-07 验收缺陷修复新增：点名指标不在数据集、白名单外币种、组件筛选澄清三类
+    "metric_not_in_dataset": "当前数据集没有请求的指标，请更换数据集，或改用该数据集已有的指标"
+                             "（见 field_suggestions_zh 的近似字段）。",
+    "dimension_not_in_dataset": "当前数据集没有请求的分组维度，请更换数据集，或改用该数据集已有的维度"
+                             "（见 field_suggestions_zh 的近似字段）。",
+    "unsupported_currency": "请求的币种不在支持范围（仅支持 USD/GBP/CAD/EUR/JPY/CNY），"
+                            "请改用支持的币种，或确认按默认币种查询。",
+    "component_filter_value_unmatched": "筛选值在当前账号授权枚举中没有唯一完整等值成员，"
+                                        "请从 component_candidates_zh 中指定准确取值。",
+    "component_filter_unauthorized": "请求的筛选值均不在当前账号授权范围内，已阻止扩大为全范围查询，"
+                                     "请改用当前账号可见的取值。",
+    "component_filter_field_ambiguous": "同一取值同时属于多个筛选字段，请指明要按哪个字段筛选。",
+    "snapshot_metric_window_conflict": "库存等快照指标只反映某一天的切面，不能与按时间窗累加的流量指标在同一查询里"
+                                       "共用多日窗口：请按日期维度分组查看，或把快照指标与流量指标拆成两次查询。",
 }
 
 # business_dataset 的两种具体成因。只给兜底文案时 Agent 只能看到
@@ -184,6 +290,14 @@ METADATA_UPGRADE_COMMAND = "opscli skills upgrade ops-dataset-query"
 PLATFORM_MEMBER_LABELS = {
     "amazon_sc": "亚马逊SC",
     "amazon_vc": "亚马逊VC",
+    # 非亚马逊平台同样要用展示名：model_view 是用户可见层，不得回显内部小写键（temu）
+    "tiktok": "TikTok",
+    "walmart": "Walmart",
+    "wayfair": "Wayfair",
+    "temu": "Temu",
+    "shopify": "Shopify",
+    "shein": "SHEIN",
+    "sams": "山姆",
 }
 
 # 选表候选 reasons 前缀 → 中文短语（澄清话术展示用）
@@ -227,10 +341,25 @@ FILTER_VALUE_MATCH_POLICY = {
 
 _DEPARTMENT_NUMBER_RE = re.compile(r"(?:项目)?[零〇一二三四五六七八九十百\d]+部")
 _DEPARTMENT_LABEL_RE = re.compile(
-    r"部门\s*(?:为|是|=|：|:)?\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30})"
+    r"部门\s*(?:为|是|=|＝|：|:|等于)\s*"
+    r"([\u4e00-\u9fffA-Za-z0-9_-]{1,30}?)"
+    r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|下|里|中|所有|全部|$)"
 )
 _DEPARTMENT_ANALYSIS_RE = re.compile(
     r"(?:分析|查询|获取|查看)\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,30}?)的(?:数据|情况)"
+)
+_DEPARTMENT_GROUPING_RE = re.compile(
+    r"(?:按|依|以)\s*部门(?:\s*(?:分组|汇总|统计|分析))?"
+    r"|(?:各|所有|全部)\s*部门"
+    r"|全\s*部门"
+    r"|部门\s*(?:分组|汇总|统计|维度)"
+)
+_DEPARTMENT_FILTER_NEGATION_RE = re.compile(
+    r"不\s*(?:按\s*)?部门\s*(?:筛选|过滤)"
+    r"|不\s*(?:筛选|过滤)\s*(?:具体\s*)?部门"
+    r"|部门\s*(?:筛选|过滤)(?:条件)?\s*(?:为|是|=|＝|：|:)?\s*(?:空|无|不设|不限)"
+    r"|不限\s*部门"
+    r"|部门\s*不限"
 )
 _CHINESE_DIGITS = {
     "零": "0",
@@ -383,6 +512,10 @@ def _extract_requested_department_value(query: str) -> str:
     label_match = _DEPARTMENT_LABEL_RE.search(query)
     if label_match:
         return label_match.group(1)
+    # “各部门/按部门”表达的是分组维度，“不限部门/不筛选部门”明确否定筛选。
+    # 二者都不能继续落入分析句式或宽后缀兜底，否则会把后续业务描述当成部门值。
+    if _DEPARTMENT_GROUPING_RE.search(query) or _DEPARTMENT_FILTER_NEGATION_RE.search(query):
+        return ""
     analysis_match = _DEPARTMENT_ANALYSIS_RE.search(query)
     if analysis_match:
         candidate = analysis_match.group(1)
@@ -733,15 +866,9 @@ def _ensure_ready_adapter(
 
 
 # recovery_state → (面向模型的中文恢复指引, 恢复命令)。
-# in_progress/started 场景的恢复命令就是「等待后原样重跑」——用 sleep 前缀把
-# 等待与重跑合并进一条命令，恰好贴着 30 秒窗口用满等待时间
+# 内核只有「同步刷新一次」一种口径（_refresh_contract 只会写 refresh_failed），
+# 旧的 refresh_in_progress 后台等待分支已随 Skill 版规划器一起退役，不再保留死分支
 _REFRESH_RECOVERY = {
-    "refresh_in_progress": (
-        "元数据刷新已在后台进行（无需任何升级动作）：等待约 25 秒后原样重跑本规划命令即可，"
-        "可直接执行 recovery_command 一步完成等待与重跑；连续 3 次仍未就绪才按 "
-        "references/feedback-guide.md 提交反馈并停止。",
-        'sleep 25 && opscli query plan "<原查询原文>"',
-    ),
     "refresh_failed": (
         "自动刷新失败：手动执行 recovery_command 刷新后重跑本规划命令；"
         "仍失败时向用户如实说明元数据异常，并按 references/feedback-guide.md 提交一次反馈。",
@@ -933,6 +1060,23 @@ def _label_is_negated(normalized_query: str, label: str, negated: list) -> bool:
     )
 
 
+def _is_sales_person_dimension(item: dict) -> bool:
+    """判断字段是否为销售人员维度，兼容规范技术名与中文展示名。"""
+    return bool(
+        item.get("field_name") == "team_username"
+        or _normalize(item.get("verbose_name")) in {"销售", "销售人员"}
+    )
+
+
+def _is_broad_sales_dimension_false_positive(item: dict, query: str) -> bool:
+    """宽泛销售指标语义下，识别被中文子串误命中的销售人员维度。"""
+    return bool(
+        _is_sales_person_dimension(item)
+        and dataset_guidance.field_semantics.has_broad_sales_metric_intent(query)
+        and not dataset_guidance.field_semantics.sales_person_dimension_requested(query)
+    )
+
+
 def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]:
     """从字段指导结果中筛出用户真正点名的字段。
 
@@ -950,6 +1094,10 @@ def _requested_fields(guidance: dict, field_type: str, query: str) -> list[dict]
             continue
         source = item.get("selection_source")
         label = _normalize(item.get("verbose_name"))
+        if field_type == "dimensions" and _is_broad_sales_dimension_false_positive(
+            item, normalized_query
+        ):
+            continue
         if source in {"explicit", "semantic_alias"} or (
             label
             and label in normalized_query
@@ -1070,8 +1218,12 @@ def _selected_fields(
     # 「不按日期拆分」仍会从这条兜底路径把「日期」捞回来
     negated = time_scope.negated_spans(normalized_query)
 
-    def _hit(item: dict) -> bool:
+    def _hit(item: dict, field_type: str) -> bool:
         label = _normalize(item.get("verbose_name"))
+        if field_type == "dimensions" and _is_broad_sales_dimension_false_positive(
+            item, normalized_query
+        ):
+            return False
         return bool(
             label
             and label in normalized_query
@@ -1082,13 +1234,13 @@ def _selected_fields(
         dimensions = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("dimensions", [])
-            if _hit(item)
+            if _hit(item, "dimensions")
         ]
     if not metrics:
         metrics = [
             dict(item, selection_source="authorized_query_label")
             for item in authorized_field_labels.get("metrics", [])
-            if _hit(item)
+            if _hit(item, "metrics")
         ]
     # 无点名字段时的推荐兜底（P0-1c）：把指导层已按打分选出的 top 字段
     # 以 recommended 来源标注供模型向用户提议，替代「全空无从下手→扫盘」
@@ -1122,6 +1274,12 @@ def _selected_fields(
         item
         for item in dimensions
         if item.get("selection_source") == "explicit"
+        or (
+            _is_sales_person_dimension(item)
+            and dataset_guidance.field_semantics.sales_person_dimension_requested(
+                normalized_query
+            )
+        )
         or not any(
             _normalize(item.get("verbose_name")) in metric_label
             for metric_label in metric_labels
@@ -1407,10 +1565,14 @@ def _field_suggestions(
 # 注意：本副本的 orderBy 形态是 {field, desc}（布尔），与 Skill 模板的
 # {field, direction} 不同，两处不可直接复制粘贴。
 
-# 行数单位必须显式限定，否则「前7天」这类时间表述会被误读成 limit=7
+# 行数单位显式限定时直接采信；「前3」这类无单位写法也是 TopN（第二轮验收实测
+# 「各渠道订单量前3」既不解析也不披露），但数字后面紧跟时间单位（前7天/前3个月/
+# 前3周）的是时间表述，必须排除，不能误读成 limit
 _ROW_UNIT = r"名|行|条|位|项|个|款|种|款式"
+_TIME_UNIT_AFTER_COUNT = r"月|季|周|星期|礼拜|小时|年|天|日"
 _LIMIT_RE = re.compile(
-    rf"(?:前|头)\s*(?P<head>[0-9]+|[一两二三四五六七八九十百]+)\s*(?:{_ROW_UNIT})"
+    rf"(?:前|头)\s*(?P<head>[0-9]+|[一两二三四五六七八九十百]+)\s*"
+    rf"(?:(?:{_ROW_UNIT})(?!{_TIME_UNIT_AFTER_COUNT})|(?![天日周月年季时分秒个]))"
     rf"|top\s*(?P<top>[0-9]+)"
     rf"|(?:只要|只取|仅要|仅取|只显示|只展示|返回|取)\s*"
     rf"(?P<take>[0-9]+|[一两二三四五六七八九十百]+)\s*(?:{_ROW_UNIT})",
@@ -1650,6 +1812,201 @@ _FILTER_OPERATOR_ZH = {
 }
 
 
+# 趋势/按日粒度表述：命中即要求日期维度（否定语境除外，如「不按日拆分」）
+_DAILY_GRAIN_RE = re.compile(
+    r"按日趋势|日趋势|按日(?!期)|按天|每天|每日|逐日|日度|日粒度|天维度|日维度|按日期|趋势|走势|daily"
+)
+# 已经是时间粒度的维度（日期/月份/周等）：存在时不再追加日期维度，避免双重时间粒度
+_TIME_GRAIN_NAME_RE = re.compile(r"date|time|month|week|year|day", re.IGNORECASE)
+_TIME_GRAIN_LABEL_RE = re.compile(r"日期|时间|月份|周|年份")
+
+
+def _snapshot_scope(scope: dict) -> dict:
+    """把多日窗口收敛为快照指标应取的单个快照日，返回改写后的 scope（不改原对象）。
+
+    为什么必须在模板层做：后端 SimpleQueryBuilder 对不带 aggregation 的指标默认 SUM，
+    仅"不传 aggregation"挡不住跨日累加——本地后端实测「近7天各渠道总库存」返回 7 天
+    库存之和。快照日取「最新完整快照日」：窗口含今天时今天的快照通常尚未完整（实测
+    当日值只有前一日的 1%），故取昨天；窗口全在过去时取窗口末日；窗口只有今天时保留今天。
+    对比周期（环比/同比）同样取该周期末日的快照，保证两期口径一致。
+    """
+    start = date_type.fromisoformat(scope["start"])
+    end = date_type.fromisoformat(scope["end"])
+    reference = date_type.fromisoformat(scope["reference_date"])
+    yesterday = reference - timedelta(days=1)
+    snapshot_day = end if end < yesterday else max(start, yesterday)
+    adjusted = {
+        **scope,
+        "start": snapshot_day.isoformat(),
+        "end": snapshot_day.isoformat(),
+        "label_zh": (
+            f"快照口径：最新完整快照日 {snapshot_day.isoformat()}"
+            f"（请求窗口 {scope['start']} ~ {scope['end']}）"
+        ),
+    }
+    comparison = scope.get("comparison")
+    if isinstance(comparison, dict) and comparison.get("end"):
+        adjusted["comparison"] = {
+            **comparison,
+            "start": comparison["end"],
+            "end": comparison["end"],
+            "label_zh": f"{comparison.get('label_zh', '对比周期')}（取该周期末日 {comparison['end']} 的快照）",
+        }
+    return adjusted
+
+
+def _daily_grain_requested(query: str) -> bool:
+    """原文是否表达了趋势/按日的时间序列诉求（否定语境内的命中不算）。
+
+    验收实测「近30天销售额 按日趋势」「近7天每天的销售额」只返回单行合计：
+    日期维度只在原文字面出现「日期」时才被标签匹配到，用户要日曲线却拿到一个总数，
+    且合同无任何提示。趋势/按日/每天都是明确的时间序列诉求，必须落到日期维度。
+    """
+    normalized = _normalize(query)
+    negated = time_scope.negated_spans(normalized)
+    return any(
+        not any(start <= match.start() and match.end() <= end for start, end in negated)
+        for match in _DAILY_GRAIN_RE.finditer(normalized)
+    )
+
+
+def _is_time_grain_dimension(item: dict) -> bool:
+    """维度是否已经是时间粒度字段（日期/月份/周等）。"""
+    return bool(
+        _TIME_GRAIN_NAME_RE.search(str(item.get("field_name", "")))
+        or _TIME_GRAIN_LABEL_RE.search(str(item.get("verbose_name", "")))
+    )
+
+
+# 「各X/每个X」分组维度表述：X 截止到停用词、时间词或指标类名词之前
+_GROUP_DIMENSION_RE = re.compile(
+    r"(?:各个|各大|每一个|每个|各)(?P<term>[\u4e00-\u9fffA-Za-z0-9]{1,12})"
+)
+_GROUP_TERM_STOP_RE = re.compile(
+    r"的|每|按|和|与|及|、|，|,|。|（|\(|近|本|上|昨|今|前|去年|最近|下"
+    r"|库存|销售|销量|订单|广告|流量|转化|退款|退货|利润|毛利|成本|费用|收入|支出|点击|曝光|访问|评分|评论"
+)
+# 时间粒度分组（各月/各周/每天）由趋势/按日逻辑处理，不按未知维度对待
+_TIME_GRAIN_GROUP_TERMS = {"日", "月", "周", "年", "天", "季度", "月份", "星期", "小时", "日期"}
+
+
+def _unmatched_group_dimension_terms(
+    query: str, authorized_dimensions: Sequence[dict], metric_terms: Sequence[str]
+) -> list[str]:
+    """原文里「各X」点名、但当前数据集没有任何维度能对上的 X。
+
+    第二轮验收实测「各仓库库存量 昨天」：数据集没有仓库维度，规划器只给出数据集确认
+    澄清并推荐了渠道SKU/部门/渠道，用户的核心分组诉求悄悄消失。这里把「各X」当作
+    显式分组点名：X 截止到停用词/时间词/指标名词之前，再与全部授权维度标签
+    （含组件字段的别名标签）做包含比对，对不上即按 dimension_not_in_dataset 澄清。
+    """
+    normalized = _normalize(query)
+    labels = [
+        _normalize(item.get("verbose_name"))
+        for item in authorized_dimensions
+        if isinstance(item, dict) and _normalize(item.get("verbose_name"))
+    ]
+    field_names = {
+        str(item.get("field_name", "")) for item in authorized_dimensions if isinstance(item, dict)
+    }
+    alias_terms = [
+        _normalize(term)
+        for spec in _ENUM_COMPONENT_SPECS
+        if spec["field_name"] in field_names
+        for term in (spec.get("label_terms") or ()) + (spec["label_zh"],)
+    ]
+    cut_terms = [_normalize(term) for term in metric_terms if _normalize(term)]
+    unmatched: list[str] = []
+    for match in _GROUP_DIMENSION_RE.finditer(normalized):
+        term = match.group("term")
+        cut = len(term)
+        stop = _GROUP_TERM_STOP_RE.search(term, 1)
+        if stop:
+            cut = min(cut, stop.start())
+        for cut_term in cut_terms:
+            index = term.find(cut_term, 1)
+            if index > 0:
+                cut = min(cut, index)
+        term = term[:cut]
+        if not term or term in _TIME_GRAIN_GROUP_TERMS:
+            continue
+        known = any(
+            (len(label) >= 2 and label in term) or (len(term) >= 2 and term in label)
+            for label in labels + alias_terms
+        )
+        if not known and term not in unmatched:
+            unmatched.append(term)
+    return unmatched
+
+
+def _field_alias_mappings(fields: Sequence[dict], normalized_query: str) -> list[dict]:
+    """用户用稳定别名（订单量）点名、实际落到数据集口径（销量）的字段映射。
+
+    第二轮验收实测「本月各部门订单量」静默取了「销量」（order_qty）：映射本身正确，
+    但合同不带任何提示，Agent 无从知晓称呼发生了替换。原文直接写了字段标签的不算替换。
+    """
+    mappings: list[dict] = []
+    for item in fields:
+        field_name = str(item.get("field_name", ""))
+        label = _normalize(item.get("verbose_name"))
+        if not field_name or not label or label in normalized_query:
+            continue
+        aliases = dataset_guidance.field_semantics.FIELD_QUERY_TERMS.get(field_name, ())
+        mentioned = [alias for alias in aliases if _normalize(alias) in normalized_query]
+        if not mentioned:
+            continue
+        requested = max(mentioned, key=len)
+        mappings.append(
+            {"requested": requested, "field_zh": str(item.get("verbose_name", "")), "field_name": field_name}
+        )
+    return mappings
+
+
+def _requested_metric_terms(query: str) -> list[str]:
+    """原文里点名的指标词：领域规则 metric_terms + 稳定字段别名 + 宽泛销售指标意图。
+
+    只用于「点名了指标却一个也没选上」的门禁与「指标词吞并短维度标签」的判定，
+    不参与字段选择本身（字段仍只来自当前授权元数据）。
+    """
+    normalized = _normalize(query)
+    terms: list[str] = []
+    for term in _load_rules_resource().get("metric_terms", []):
+        text = _normalize(term)
+        if text and text in normalized and str(term) not in terms:
+            terms.append(str(term))
+    for aliases in dataset_guidance.field_semantics.FIELD_QUERY_TERMS.values():
+        for alias in aliases:
+            if _normalize(alias) in normalized and alias not in terms:
+                terms.append(alias)
+    if dataset_guidance.field_semantics.has_broad_sales_metric_intent(normalized):
+        terms.append("销售情况")
+    return terms
+
+
+def _drop_dimensions_swallowed_by_metric_terms(
+    dimensions: list[dict], metric_terms: Sequence[str], normalized_query: str
+) -> list[dict]:
+    """剔除只是点名指标词一部分的短维度标签（「销售额」里的「销售」不是销售人员维度）。
+
+    既有逻辑只在选中了同名指标时才吞并该短标签；指标不在当前数据集时指标为空，
+    「销售」维度便漏网成为唯一字段，合同以 planned 下发并返回人名列表（验收实测）。
+    这里改为按原文点名的指标词吞并，与指标是否选中无关。
+    """
+    kept = []
+    for item in dimensions:
+        label = _normalize(item.get("verbose_name"))
+        swallowed = item.get("selection_source") != "explicit" and any(
+            label
+            and label != _normalize(term)
+            and label in _normalize(term)
+            and _is_swallowed(label, _normalize(term), normalized_query)
+            for term in metric_terms
+        )
+        if not swallowed:
+            kept.append(item)
+    return kept
+
+
 def _default_filters_ref(guidance: dict) -> list[dict]:
     """把 guidance.default_filters 投影为执行引用形态（模型直接填充查询用）。"""
     refs = []
@@ -1768,6 +2125,97 @@ def build_model_contract(
     ]
     pending_confirmations_zh: list[str] = []
     execution_path_ready = str(internal.get("next_action", "")) == "construct_query"
+    # ── 2026-09-07 验收缺陷修复：趋势/按日诉求、点名指标门禁、白名单外币种 ──
+    normalized_query_text = _normalize(query)
+    # 趋势/按日诉求：没有时间粒度维度时把数据集的主日期字段补为分组维度
+    daily_grain_applied = False
+    if (
+        date_fields
+        and _daily_grain_requested(query)
+        and not any(_is_time_grain_dimension(item) for item in dimensions)
+    ):
+        primary_date_field = date_fields[0]["field_name"]
+        for item in (authorized_field_labels or {}).get("dimensions", []):
+            if item.get("field_name") == primary_date_field:
+                dimensions.append(dict(item, selection_source="semantic_alias"))
+                daily_grain_applied = True
+                break
+    # 点名指标门禁：指标词只蹭中更短的维度标签时剔除该维度；一个指标都没选上不得 planned
+    requested_metric_terms = _requested_metric_terms(query)
+    if requested_metric_terms:
+        dimensions = _drop_dimensions_swallowed_by_metric_terms(
+            dimensions, requested_metric_terms, normalized_query_text
+        )
+        if execution_path_ready and status == "planned" and not metrics and not recommended_mets:
+            status = "clarify_required"
+            clarification_reasons.append("metric_not_in_dataset")
+            unknown_fields.extend(
+                term for term in requested_metric_terms if term not in unknown_fields
+            )
+            pending_confirmations_zh.append(
+                "当前数据集没有请求的指标（"
+                + "、".join(requested_metric_terms)
+                + "），请更换数据集或改用该数据集已有的指标"
+            )
+    # 分组维度门禁：「各X」点名的维度在当前数据集里不存在时必须澄清并给近似字段，
+    # 不能只剩数据集确认澄清而把分组诉求悄悄丢掉（已选定数据集时才有比对对象）
+    if dataset.get("table_id") not in (None, ""):
+        unmatched_group_terms = _unmatched_group_dimension_terms(
+            query, (authorized_field_labels or {}).get("dimensions", []), requested_metric_terms
+        )
+        if unmatched_group_terms:
+            status = "clarify_required"
+            if "dimension_not_in_dataset" not in clarification_reasons:
+                clarification_reasons.append("dimension_not_in_dataset")
+            unknown_fields.extend(
+                term for term in unmatched_group_terms if term not in unknown_fields
+            )
+            pending_confirmations_zh.append(
+                "当前数据集没有请求的分组维度（"
+                + "、".join(unmatched_group_terms)
+                + "），请更换数据集或改用该数据集已有的维度"
+            )
+    # 指标/维度别名映射披露：用户说「订单量」、实取「销量」时不得静默替换称呼
+    field_alias_mappings = _field_alias_mappings(dimensions + metrics, normalized_query_text)
+    # 白名单外币种：识别到即澄清，不静默按默认币种执行
+    unsupported_currencies = _detect_unsupported_currencies(query)
+    if unsupported_currencies and execution_path_ready and status == "planned":
+        status = "clarify_required"
+        clarification_reasons.append("unsupported_currency")
+        pending_confirmations_zh.append(
+            "请求的币种（" + "、".join(unsupported_currencies)
+            + "）不在支持范围，仅支持 USD/GBP/CAD/EUR/JPY/CNY：请改用支持的币种，或确认按默认币种查询"
+        )
+    # 快照指标口径：未按时间粒度分组时，全部为快照指标的多日窗口收敛为最新完整快照日；
+    # 快照与流量指标混查无法同时满足两种口径，转澄清（见 _snapshot_scope 的说明）
+    snapshot_policy: dict | None = None
+    snapshot_metrics = [item for item in metrics if item.get("is_snapshot")]
+    if (
+        snapshot_metrics
+        and scope
+        and scope.get("start")
+        and scope.get("end")
+        and not scope.get("unbounded")
+        and not any(_is_time_grain_dimension(item) for item in dimensions)
+    ):
+        if len(snapshot_metrics) < len(metrics):
+            if execution_path_ready and status == "planned":
+                status = "clarify_required"
+                clarification_reasons.append("snapshot_metric_window_conflict")
+                pending_confirmations_zh.append(
+                    "请求同时包含快照指标（"
+                    + "、".join(str(item.get("verbose_name", "")) for item in snapshot_metrics)
+                    + "）与流量指标：快照指标只能取某一天的切面，请按日期维度分组查看，或拆成两次查询"
+                )
+        elif scope["start"] != scope["end"]:
+            requested_window = {"start": scope["start"], "end": scope["end"]}
+            scope = _snapshot_scope(scope)
+            snapshot_policy = {
+                "policy": "latest_complete_snapshot_day",
+                "snapshot_day": scope["end"],
+                "requested_window": requested_window,
+                "metrics": [str(item.get("field_name", "")) for item in snapshot_metrics],
+            }
     default_dataset_recommendation = selection.get("default_dataset_recommendation") or {}
     # 即时综合数据集已经通过当前账号授权、业务语义和字段指导三层校验，且原文确实
     # 命中了至少一个查询字段时，默认选表本身已无歧义，不能再制造一次人工确认。
@@ -1933,6 +2381,8 @@ def build_model_contract(
             f"用户未明确年份时以 {scope['reference_year']} 年为相对时间基准，"
             "跨年窗口按真实日历处理，禁止自行推算或改写。"
         )
+    if unsupported_currencies:
+        model_view["unsupported_currencies"] = unsupported_currencies
     # 推荐字段（无点名字段时）：供向用户提议，采用前须在确认摘要中说明来源
     if recommended_dims:
         model_view["recommended_dimensions"] = _field_names(recommended_dims)
@@ -2012,9 +2462,13 @@ def build_model_contract(
         enum_command = _platform_enum_command(component.get("component_table_id"))
         if enum_command:
             execution_ref["platform_enum_command"] = enum_command
+            # 内核化后平台授权值由规划器内部 enum_fn 自动枚举并回灌，CLI/MCP 没有
+            # 手工回传参数；仍停留在待枚举状态说明实时枚举与本地缓存都不可用，
+            # 提示只能是"恢复环境后原样重跑"，不能再指向已不存在的 CLI 参数
             execution_ref["platform_enum_return_hint_zh"] = (
-                "执行上述命令后，把返回的每个 platform_name 值用重复的 "
-                "--authorized-platform-value 参数传回本规划命令，取得终版规划器"
+                "该命令仅供排错核对当前账号平台授权值；正式规划由内核自动枚举并回灌，"
+                "无需也不能手工回传平台值。仍为待枚举时先恢复登录态或等待组件服务可用，"
+                "再原样重跑本规划命令。"
             )
     # 查询模板骨架（P1-4）：status=planned 时给出可直接填充的 payload
     order_unresolved = ""
@@ -2034,6 +2488,20 @@ def build_model_contract(
             order_by, row_limit, order_unresolved = _resolve_order_and_limit(
                 query, execution_dimensions, execution_metrics
             )
+            if not order_by and not order_unresolved:
+                # 时间粒度维度（趋势/按日/各月）默认按时间升序：第二轮验收实测服务端
+                # 返回的日期序列完全乱序，而合同又要求「按日期序列表述」，二者必须自洽
+                time_dimension = next(
+                    (
+                        item
+                        for item in execution_dimensions
+                        if _TIME_GRAIN_NAME_RE.search(str(item.get("field_name", "")))
+                        or _TIME_GRAIN_LABEL_RE.search(str(item.get("label_zh", "")))
+                    ),
+                    None,
+                )
+                if time_dimension:
+                    order_by = [{"field": time_dimension["field_name"], "desc": False}]
             if order_by:
                 template["orderBy"] = order_by
             if row_limit:
@@ -2045,6 +2513,7 @@ def build_model_contract(
                 "普通指标默认 SUM 按用户口径调整；公式/快照指标不带 aggregation。"
                 "排序与行数已由规划器按用户原文解析写入 orderBy（形态 [{\"field\":\"<结果alias>\","
                 "\"desc\":true/false}]，desc 布尔、true 降序）与 limit，Agent 不得改写；"
+                "含时间粒度维度且用户未点名排序时默认按该时间维度升序。"
                 "未下发时以 answer_contract 的披露为准。不需要的键（null 值）必须删除后再执行。"
                 "selection_source=recommended 的字段须先向用户说明再采用。"
                 "数据集默认条件（若有）由服务端查询时自动应用，请勿手动加入 filters；"
@@ -2069,6 +2538,27 @@ def build_model_contract(
         )
     if grain_extra:
         answer_contract["required_disclosures_zh"].extend(model_view["grain_disclosure_zh"])
+    if daily_grain_applied:
+        answer_contract["required_disclosures_zh"].append(
+            "已按趋势/按日诉求加入日期维度（日粒度）：结论须按日期序列表述，不得只报合计。"
+        )
+    if field_alias_mappings:
+        model_view["field_alias_mappings_zh"] = field_alias_mappings
+        answer_contract["required_disclosures_zh"].append(
+            "字段称呼已按数据集口径对应："
+            + "；".join(
+                f"「{item['requested']}」对应「{item['field_zh']}」" for item in field_alias_mappings
+            )
+            + "。结论以数据集口径命名并说明该对应关系。"
+        )
+    if snapshot_policy:
+        execution_ref["snapshot_policy"] = snapshot_policy
+        answer_contract["required_disclosures_zh"].append(
+            f"快照指标已按最新完整快照日 {snapshot_policy['snapshot_day']} 取值"
+            f"（请求窗口 {snapshot_policy['requested_window']['start']} ~ "
+            f"{snapshot_policy['requested_window']['end']}），未跨日累加；"
+            "结论须说明这是该快照日的库存切面，如需逐日变化请按日期维度查询。"
+        )
     # 时间窗被收敛为全时段时必须显式告知：用户原文里说了时间，结论却不能按那个时间讲。
     # 少了这条，Agent 只会看到一个语气平静的「全部时间」标签，不会意识到需要向用户交代差异。
     if date_scope_unavailable:
@@ -2259,6 +2749,32 @@ def _auto_enum_platform_values(enum_fn, component_table_id: object) -> list[str]
     except Exception:  # noqa: BLE001 枚举失败不阻塞，回落手动枚举命令路径
         return []
     return _deduplicate(str(value).strip() for value in values or [] if str(value).strip())
+
+
+def _auth_error_type_names() -> frozenset[str]:
+    """返回「认证/登录态」类异常的类名集合（惰性导入，避免规划器强依赖 auth 子模块）。
+
+    从类对象取 __name__ 而不是写死字符串：auth 模块将来重命名异常类时这里自动跟随，
+    不会悄悄退化成"永远判不出认证错误"。
+    """
+    from opscli.auth.exceptions import NotAuthenticatedError, TokenFetchError
+
+    return frozenset({TokenFetchError.__name__, NotAuthenticatedError.__name__})
+
+
+def _is_auth_enum_error(error_summary: str) -> bool:
+    """判断枚举失败摘要是否属于「登录态失效」，而非组件元数据配置异常。
+
+    摘要形如 "TokenFetchError: 获取 ops JWT 失败: 401"，由
+    _auto_enum_component_values 用 `f"{type(exc).__name__}: {exc}"` 就地生成，
+    因此冒号前一定是异常类名——这里解析的是本文件自己产出的格式，不是外部文本。
+
+    为什么必须区分：认证类失败重新登录即可恢复，而 enum_failed 分支原本一律
+    按「元数据配置异常 / 重试无效 / 请提交反馈」归因，把一个用户自己能解决的问题
+    误导成平台缺陷。生产实测 2026-08-04 起 59 个会话 / 17 个用户被这条文案误导。
+    """
+    head = str(error_summary or "").split(":", 1)[0].strip()
+    return head in _auth_error_type_names()
 
 
 def _auto_enum_component_values(
@@ -2524,6 +3040,33 @@ def _shared_prefix(values: list) -> str:
 #   无后缀或特殊名部门的裸值提及；SKU/产品名这类几百上千的
 #   字段开反查既慢又不可能枚举完整，改用形态抽取。
 # - value_pattern：编码型字段的裸值形态，抽到候选后仍要枚举校验权限。
+# 跨境电商常见站点/国家名：只用于识别「未授权国家」的点名，不参与任何筛选值注入
+_KNOWN_COUNTRY_VALUES = (
+    "美国", "加拿大", "墨西哥", "英国", "德国", "法国", "意大利", "西班牙", "荷兰", "比利时",
+    "瑞典", "波兰", "爱尔兰", "奥地利", "瑞士", "土耳其", "日本", "韩国", "澳大利亚", "新西兰",
+    "新加坡", "马来西亚", "泰国", "越南", "菲律宾", "印度", "印尼", "阿联酋", "沙特", "巴西",
+    "埃及", "以色列", "中国",
+)
+
+
+def _mentioned_known_value(spec: dict, query: str, values: Sequence[str], normalize, consumed) -> str:
+    """授权枚举反查零命中后，从字段的常见值词表里找原文点名、但不在授权枚举里的值。
+
+    返回首个这样的值（用于澄清文案）；词表里的值若已在授权枚举中，反查早已命中，
+    这里不会再看到它；已被其他字段消费的值（如渠道「傲彼瑞-加拿大」里的加拿大）也跳过。
+    """
+    normalized_query = normalize(query)
+    authorized = {normalize(value) for value in values}
+    for known in spec.get("known_values") or ():
+        norm = normalize(known)
+        if not norm or norm in authorized or norm not in normalized_query:
+            continue
+        if _value_already_consumed(norm, consumed):
+            continue
+        return str(known)
+    return ""
+
+
 _ENUM_COMPONENT_SPECS = (
     {
         "field_name": "dept_name",
@@ -2543,6 +3086,9 @@ _ENUM_COMPONENT_SPECS = (
         "label_zh": "国家",
         "label_terms": ("国家", "站点", "country", "country_name"),
         "reverse_lookup": True,
+        # 常见国家词表：授权枚举反查零命中时，用它判断原文是否点名了未授权国家
+        # （「只看德国」没有字段标签，仅靠授权枚举反查永远看不见「德国」）
+        "known_values": _KNOWN_COUNTRY_VALUES,
     },
     {
         "field_name": "brand_name",
@@ -2706,19 +3252,84 @@ def _dataset_has_field(
     )
 
 
+def _has_text_level_detector(spec: dict) -> bool:
+    """该字段能否**只看原文**就判断用户有没有提到它。
+
+    只有配了自定义 `extract` 的字段才具备这个能力（当前仅部门：`_extract_requested_department_value`
+    能从「查九部销售额」里抠出「九部」，不依赖授权枚举值）。其余 reverse_lookup 字段
+    靠标签形态 + 枚举反查识别裸值——枚举一挂就无从判断原文里的「傲彼瑞」是不是渠道，
+    此时**必须**保持 fail-closed 阻断，否则「查傲彼瑞的销售额」会被静默放行成查全部渠道。
+    """
+    return spec.get("extract") is not None
+
+
+def _disclose_component_unavailable(
+    contract: dict, label_zh: str, error_summary: str
+) -> None:
+    """登记「某组件枚举不可用、本次未使用该筛选」的必披露事项。
+
+    为什么是披露而不是静默跳过：跳过等于把查询范围放宽到该字段全集，
+    虽然原文没提到它、放宽符合用户意图，但用户有权知道这一轮没有该维度的筛选保障。
+    披露过的放宽不是静默错数——本文件反复强调的危险是"悄悄"，不是"放宽"。
+    """
+    answer_contract = contract.get("answer_contract")
+    if not isinstance(answer_contract, dict):
+        return
+    disclosures = answer_contract.setdefault("required_disclosures_zh", [])
+    if not isinstance(disclosures, list):
+        return
+    message = (
+        f"{label_zh}筛选组件本次不可用（{error_summary}），原文未识别到{label_zh}值，"
+        f"因此本次查询未施加{label_zh}筛选。"
+    )
+    if message not in disclosures:
+        disclosures.append(message)
+
+
+# 组件澄清下发的候选值上限：足够让用户从可见成员里挑，又不把大枚举整表塞进合同
+MAX_COMPONENT_CANDIDATES = 30
+
+
 def _block_component_filter(
-    contract: dict, execution: dict, *, status: str, state: str, next_action: str, message_zh: str
+    contract: dict,
+    execution: dict,
+    *,
+    status: str,
+    state: str,
+    next_action: str,
+    message_zh: str,
+    reason_code: str | None = None,
+    candidates: Sequence[str] | None = None,
+    label_zh: str = "",
 ) -> dict:
     """筛选值无法锁定时统一收口：撤下可执行模板并给出中文恢复指引。
 
     为什么必须撤模板：run_flow 在 status=planned 时会原样执行 query_template，
     而模板里没有用户要的筛选条件——放行等于把「查某渠道」悄悄变成「查全部渠道」，
     静默错数比查不到数据危险得多。这里一律 fail-closed。
+
+    reason_code / candidates（2026-09-07 验收补齐）：组件类澄清此前不带原因码，
+    也不下发当前账号可见的枚举值，Agent 只能让用户"猜"准确名称。这里把原因码
+    追加进 clarification_reason_codes，把候选值写入 model_view.component_candidates_zh。
     """
     contract["status"] = status
-    contract["model_view"]["component_filter_state"] = state
-    contract["model_view"]["next_action"] = next_action
-    contract["model_view"].setdefault("clarification_messages_zh", []).append(message_zh)
+    model_view = contract["model_view"]
+    model_view["component_filter_state"] = state
+    model_view["next_action"] = next_action
+    model_view.setdefault("clarification_messages_zh", []).append(message_zh)
+    if reason_code:
+        codes = model_view.setdefault("clarification_reason_codes", [])
+        if reason_code not in codes:
+            codes.append(reason_code)
+    if candidates:
+        values = [str(item) for item in candidates if str(item).strip()]
+        model_view.setdefault("component_candidates_zh", []).append(
+            {
+                "field_zh": label_zh,
+                "values_zh": values[:MAX_COMPONENT_CANDIDATES],
+                "total": len(values),
+            }
+        )
     execution.pop("query_template", None)
     # 模板已撤下，填充说明再留着会让 Agent 去找一个不存在的模板
     execution.pop("query_template_fill_rules_zh", None)
@@ -2887,7 +3498,31 @@ def _resolve_enum_component_filter(
         return contract
     if not values:
         shown = f"“{requested}”" if requested else ""
+        if enum_errors and not requested and _has_text_level_detector(spec):
+            # 该字段有文本级检测器、且原文里根本没检测到它的值 ⇒ 与本次查询无关，
+            # 不该因为它自己的枚举故障连累整条查询。实测形态：部门组件元数据异常时，
+            # 连「查昨天总销售额」这种压根不涉及部门的请求也被一起 blocked
+            # （dept_name 是 _ENUM_COMPONENT_SPECS 首项，且首个失败即 break）。
+            # 仅限有文本级检测器的字段——没有的字段无从判断原文是否提到，必须继续阻断。
+            _disclose_component_unavailable(contract, label_zh, enum_errors[0])
+            return contract
         if enum_errors:
+            if _is_auth_enum_error(enum_errors[0]):
+                # 登录态失效（换 JWT 被后端拒），不是数据集/字段权限问题，更不是组件
+                # 元数据配置异常——重新登录即可恢复。归因写错的代价是实打实的：
+                # 生产上这类 401 被当成平台缺陷，用户只能提反馈干等。
+                return _block_component_filter(
+                    contract,
+                    execution,
+                    status="blocked",
+                    state="auth_required",
+                    next_action="reauthenticate",
+                    message_zh=(
+                        f"{label_zh}{shown}的授权枚举因登录态失效未能完成（{enum_errors[0]}）；"
+                        "这不是数据集或数据权限问题，重新登录后重试即可恢复。"
+                        "已阻止扩大为全范围查询。"
+                    ),
+                )
             # 枚举调用自身报错（实测形态：组件表元数据未暴露该字段，后端报「字段不存在」）。
             # 属配置类故障，重试多少次都不会成功，必须如实告知并透出原始错误。
             return _block_component_filter(
@@ -2942,7 +3577,11 @@ def _resolve_enum_component_filter(
             # run_flow 会原样执行，等同于把「只查德国」放行成「查全部国家」
             # （QA 实测另一形态：值本身在授权枚举里，被执行器 precheck 拒绝；
             # 无论哪种，客户端都必须先与权限枚举求交集，零交集时不注入且披露）。
-            # requested 为空则是原文确实没提这个字段，继续保持原有静默放行。
+            # requested 为空时再看常见值词表：「只看德国」没有字段标签，反查也看不见
+            # 「德国」，若就此放行等同于把它扩成全部国家（第二轮验收 P0）。
+            # 词表也对不上才是原文确实没提这个字段，保持静默放行。
+            if not requested:
+                requested = _mentioned_known_value(spec, query, values, normalize, consumed)
             if requested:
                 return _block_component_filter(
                     contract,
@@ -2950,6 +3589,9 @@ def _resolve_enum_component_filter(
                     status="clarify_required",
                     state="clarify_required",
                     next_action="ask_user_for_component_filter",
+                    reason_code="component_filter_unauthorized",
+                    candidates=values,
+                    label_zh=label_zh,
                     message_zh=(
                         f"识别到{label_zh}“{requested}”等表述，但均不在当前账号"
                         f"授权范围内，已阻止扩大为全范围查询；请改用当前账号可见的"
@@ -2977,6 +3619,10 @@ def _resolve_enum_component_filter(
             status="clarify_required",
             state="clarify_required",
             next_action="ask_user_for_component_filter",
+            reason_code="component_filter_value_unmatched",
+            # 近似成员排在前面，其余授权成员随后，方便用户直接从可见值里挑
+            candidates=list(approx) + [value for value in values if value not in approx],
+            label_zh=label_zh,
             message_zh=(
                 f"{label_zh}“{requested}”没有唯一完整等值的授权成员，"
                 + (f"当前账号可见的近似成员：{hint}；" if hint else "")
@@ -2998,6 +3644,8 @@ def _resolve_enum_component_filter(
                 status="clarify_required",
                 state="clarify_required",
                 next_action="ask_user_for_component_filter",
+                reason_code="component_filter_field_ambiguous",
+                label_zh=label_zh,
                 message_zh=(
                     f"“{matched[0]}”同时是{listed}的授权值，无法确定你要按哪个字段筛选；"
                     f"请指明字段，例如「{candidates[0]}是{matched[0]}」。"
@@ -3145,7 +3793,8 @@ def _resolve_component_filters(
         return contract
     contract = _resolve_asin_filter(contract, query, adapter)
     enum_cache: dict = {}
-    consumed: set = _time_literals_consumed(contract)
+    # 时间字面量与币种关键词都已被各自的解析消费，不得再被组件形态抽取/反查二次消费
+    consumed: set = _time_literals_consumed(contract) | _currency_literals_consumed(query)
     # 两趟：先落实用户显式点名的字段并登记已消费的值，再做形态抽取与枚举反查
     for labeled_only in (True, False):
         for spec in _ENUM_COMPONENT_SPECS:

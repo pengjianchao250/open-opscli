@@ -34,6 +34,50 @@ from opscli.query.services.planner import run_flow, run_plan
 from .helpers import _err, _ok, _parse_json_arg, _query_manager
 
 
+_NULL_LIKE_OPTIONAL_TEXT_VALUES = frozenset({"null", "none", "undefined"})
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    """归一化模型传入的可选文本，过滤字符串化空值。"""
+    normalized = str(value or "").strip()
+    if not normalized or normalized.lower() in _NULL_LIKE_OPTIONAL_TEXT_VALUES:
+        return None
+    return normalized
+
+
+def _contract_needs_reauth(contract: object) -> bool:
+    """判断规划合同是否因「登录态失效」被阻断（对应 query_plan 的 auth_required）。
+
+    只认这一种状态：其余 blocked/clarify_required 都不是重登能解决的，
+    盲目重登既救不了也白白多打一次登录请求。
+    """
+    if not isinstance(contract, dict):
+        return False
+    model_view = contract.get("model_view")
+    if not isinstance(model_view, dict):
+        return False
+    return model_view.get("component_filter_state") == "auth_required"
+
+
+async def _reauth_credentials_for_retry() -> tuple[str | None, str | None]:
+    """撞到认证类阻断后强制重新登录一次，返回可用于重试的 (session_id, jwt)。
+
+    为什么需要强制：ensure_ops_credentials 平时只在 `is_authenticated()` 为假时
+    自动登录，而它只比对本地 `session_expires_at`；被服务端登出/吊销的 Session
+    在本地依然显示未过期，自动登录因此永远不触发，调用方恒拿 401。
+
+    任何失败都返回 (None, None) 由调用方保留原合同——自愈是增强项，
+    不能让重登本身的异常盖掉原本要告诉用户的阻断原因。
+    """
+    try:
+        from opscli.mcp.ops_credentials import ensure_ops_credentials
+
+        binding = await ensure_ops_credentials(force_relogin=True)
+    except Exception:  # noqa: BLE001 自愈失败保留原合同，不改变对外语义
+        return None, None
+    return binding.session_id, binding.jwt
+
+
 async def query_spec_must_read() -> dict:
     """读取 MCP 取数规范（QUERY_SPEC.md）——未安装 Skill 时的完整取数指南。
 
@@ -52,7 +96,7 @@ async def query_spec_must_read() -> dict:
     - 未传 limit 时沿用后端默认 20 行，把截断结果当成全量
 
     规范内容包括：
-    - 14 条核心铁律（鉴权、规划器优先、元数据唯一来源、字段标识、公式字段、对比周期、
+    - 15 条核心铁律（鉴权、规划器优先、元数据唯一来源、字段标识、公式字段、对比周期、
       快照指标、默认筛选、权限枚举、歧义澄清、输出与证据、反馈边界等）
     - 两条取数路线：query_plan / query_flow 规划器路线，query_metadata + query_simple 手工路线
     - 各查询工具的参数规范与调用示例（普通聚合 / 环比对比 / MOY 趋势 / 公式字段）
@@ -136,6 +180,8 @@ async def query_metadata(
     )
 
     sid, jw = _get_auth_pair("ops", session_id, jwt)
+    # 模型传 dataset="null" 且同时给出 table_id 时，必须让有效的 table_id 生效。
+    dataset = _normalize_optional_text(dataset)
     try:
         if include_all_fields:
             # 全量元数据需已验证账号（缓存隔离维度）与隔离目录，同 query_plan 身份解析
@@ -266,6 +312,7 @@ async def query_build(
     data_comparison: str | None = None,
     output_path: str | None = None,
     skills_dir: str | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """基于简化参数构造标准 query payload（不执行查询）。不需要认证。
 
@@ -288,6 +335,9 @@ async def query_build(
         data_comparison:   数据对比，格式 field,start_date,end_date，如 "date_id,2026-03-01,2026-03-22"
         output_path:       可选，将 payload 写入指定文件路径
         skills_dir:        可选，自定义 Skills 目录
+        global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），写入 payload 顶层
+                           globalCurrency 由服务端换算金额指标；币种不是维度或筛选字段，
+                           未识别到币种意图时不传
     """
     # 容错：AI 有时将 list 参数以 JSON 字符串形式传入，统一解析
     try:
@@ -315,6 +365,7 @@ async def query_build(
             data_comparison=data_comparison,
             output_path=output_path,
             skills_dir=skills_dir,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:
@@ -367,6 +418,7 @@ async def query_simple(
     skills_dir: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """基于简化参数直接执行查询。服务端自动处理 innerWhere、translate、MOY 展开等技术细节。
 
@@ -413,6 +465,13 @@ async def query_simple(
         skills_dir:      可选，自定义 Skills 目录
         session_id:      可选，OAuth 授权后的 Session ID（为空则自动加载本地保存的）
         jwt:             可选，已有 JWT（为空则自动加载本地缓存的）
+        global_currency: 可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），见下方【币种】
+
+    【币种】币种是服务端换算参数，**不是维度或筛选字段**：用户要求“用美元/按 EUR 口径”时传
+    global_currency="USD"，由服务端换算金额类指标。数据集元数据里没有 currency 字段属正常，
+    不要去找该字段，更不得因此判定“不支持币种”，也不得改用 _cny / 原币字段代替该参数。
+    多币种（如“分别用美元和欧元”）需每个币种各调用一次本工具，除 global_currency 外其余参数
+    完全一致；禁止查一次后用汇率换算。结论中的币种以返回的 meta.currency 为准。
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -452,6 +511,7 @@ async def query_simple(
             dry_run=dry_run,
             validate_fields=True,
             skills_dir=skills_dir,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:
@@ -526,6 +586,7 @@ async def query_build_and_run(
     intent_code: str | None = None,
     selection_source: str | None = None,
     match_record_id: int | None = None,
+    global_currency: str | None = None,
 ) -> dict:
     """构造 query payload 并立即执行，一步返回数据结果（CLI 风格字符串参数）。
 
@@ -561,6 +622,8 @@ async def query_build_and_run(
         intent_code:       可选，意图归因编码，以请求头形式透传（意图路由选表时填写）
         selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
         match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
+        global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），由服务端换算金额指标；
+                           币种不是维度或筛选字段，多币种须逐币种各执行一次
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、
@@ -600,6 +663,7 @@ async def query_build_and_run(
             intent_code=intent_code,
             selection_source=selection_source,
             match_record_id=match_record_id,
+            global_currency=global_currency,
         )
         return _ok(result)
     except Exception as exc:
@@ -636,8 +700,12 @@ async def query_chart(
     manager = _query_manager(jwt=jw, session_id=sid)
     try:
         if run or dry_run:
-            # 执行所有子查询并返回完整结果
+            # 执行所有子查询并返回完整结果（非 dry_run 时自带证据合同，与 CLI 同口径）
             result = manager.run_chart_queries(chart_uuid=chart_uuid, dry_run=dry_run)
+            if not dry_run:
+                from opscli.query.services.planner.evidence_contract import attach_chart_evidence
+
+                attach_chart_evidence(result)
             return _ok(result)
         else:
             # 仅获取图表查询结构，不执行
@@ -737,6 +805,18 @@ async def query_plan(
             top_n=top_n,
             query_manager=_query_manager(jwt=jw, session_id=sid),
         )
+        # 登录态失效导致的阻断：强制重登一次并原样重跑一次规划（最多一次，防 401 风暴）
+        if _contract_needs_reauth(contract):
+            retry_sid, retry_jw = await _reauth_credentials_for_retry()
+            if retry_sid:
+                contract = run_plan(
+                    request,
+                    user_email=email,
+                    base_dir=base_dir,
+                    requested_fields=fields,
+                    top_n=top_n,
+                    query_manager=_query_manager(jwt=retry_jw, session_id=retry_sid),
+                )
         return _ok(contract)
     except Exception as exc:
         return _err(exc)
@@ -771,9 +851,10 @@ async def query_flow(
     【前置条件】同 query_plan：身份只来自传输层已验证账号，不读显式传入的 session_id / jwt。
 
     【非 planned 时的处置】status=clarify_required 按 model_view.clarification_messages_zh 提问，
-    确认后把明确口径写回 request 原文重新调用；status=blocked 且 recovery_state=refresh_in_progress
-    时等待约 25 秒后用相同参数原样重调（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
-    不要执行该命令，也不要自行升级），连续 3 次仍未就绪才提交反馈并停止。
+    确认后把明确口径写回 request 原文重新调用；status=blocked 且 recovery_state=refresh_failed
+    表示内核同步刷新元数据后仍未就绪（合同里的 recovery_command 是 CLI 形态，MCP 场景取其语义即可，
+    不要执行该命令）：等待约 1 分钟后用相同参数原样重调一次，仍未就绪才提交反馈并停止；
+    next_action=report_component_enum_defect 表示组件枚举调用失败，原样重调一次，仍失败提交反馈并停止。
 
     【结果被截断时】先看 result_disclosures：truncated=false 才可按全量陈述；
     truncated=true 表示总数超过自动补齐上限或服务端仍未返回完整结果，此时显式传更大
@@ -819,6 +900,22 @@ async def query_flow(
             offset=offset,
             query_manager=_query_manager(jwt=jw, session_id=sid),
         )
+        # 登录态失效导致的阻断：强制重登一次并原样重跑一次（最多一次，防 401 风暴）。
+        # 放在这一层而不是规划器内部的 enum_fn：规划器是同步的，而重登是 async；
+        # 且整轮重跑能一并覆盖同一轮里其它同因失败，语义比只补一次枚举更干净。
+        if _contract_needs_reauth(result):
+            retry_sid, retry_jw = await _reauth_credentials_for_retry()
+            if retry_sid:
+                result = run_flow(
+                    request,
+                    user_email=email,
+                    base_dir=base_dir,
+                    requested_fields=fields,
+                    limit=limit,
+                    order_by=norm_order_by,
+                    offset=offset,
+                    query_manager=_query_manager(jwt=retry_jw, session_id=retry_sid),
+                )
         return _ok(result)
     except Exception as exc:
         return _err(exc)

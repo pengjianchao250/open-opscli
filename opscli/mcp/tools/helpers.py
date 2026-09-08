@@ -252,8 +252,11 @@ def _get_session_id(system: str = "ops", provided: str | None = None) -> str | N
     Returns:
         可用的 session_id，或 None（均未找到）
     """
-    if provided:
-        return provided
+    from opscli.auth.context import normalize_optional_credential
+
+    normalized = normalize_optional_credential(provided)
+    if normalized:
+        return normalized
 
     cred_dir = _get_credential_dir()
     cache = _get_isolated_credential_cache(cred_dir)
@@ -272,8 +275,11 @@ def _get_jwt(system: str = "ops", provided: str | None = None) -> str | None:
     Returns:
         有效的 JWT 字符串，或 None（不存在或已过期）
     """
-    if provided:
-        return provided
+    from opscli.auth.context import normalize_optional_credential
+
+    normalized = normalize_optional_credential(provided)
+    if normalized:
+        return normalized
 
     cred_dir = _get_credential_dir()
     cache = _get_isolated_credential_cache(cred_dir)
@@ -322,8 +328,9 @@ def _get_auth_pair(
     Returns:
         (session_id, jwt) 元组，任一可能为 None
     """
-    session_id = provided_session or _get_session_id(system)
-    jwt = provided_jwt or _get_jwt(system)
+    # 统一走单凭证入口，使字符串 "null" 等哨兵也能回退到隔离凭证缓存。
+    session_id = _get_session_id(system, provided_session)
+    jwt = _get_jwt(system, provided_jwt)
     return session_id, jwt
 
 

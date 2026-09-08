@@ -454,6 +454,11 @@ def chart(
     try:
         if run or dry_run:
             result = manager.run_chart_queries(chart_uuid=uuid, dry_run=dry_run)
+            if not dry_run:
+                # 图表结果自带证据合同，Agent 不必再补跑随包脚本
+                from opscli.query.services.planner.evidence_contract import attach_chart_evidence
+
+                attach_chart_evidence(result)
             payload = {
                 "success": True,
                 "command": "query chart-run",
