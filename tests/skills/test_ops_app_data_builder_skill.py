@@ -42,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.6"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.6"}
+    assert frontmatter["metadata"]["version"] == "0.1.7"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.7"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -80,6 +80,8 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
         ".opscli/app.json",
         "binding 必须包含有效 `app_id/slug`",
         ".opscli/app.json.slug == app.yaml.name",
+        "当前本地分支是 `master`",
+        "远端存在 `origin/master`",
         "只有 binding 而没有模板代码",
         "backend/clients/ops_query_client.py",
         "backend/core/auth.py",
@@ -210,7 +212,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.6"
+    assert templates[SKILL_NAME]["version"] == "v0.1.7"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

@@ -13,7 +13,7 @@ from typing import Callable, Sequence
 
 
 DEFAULT_TEMPLATE_REPO = 'http://10.1.13.143:3000/aukeys-admin/template'
-DEFAULT_TEMPLATE_BRANCH = 'main'
+DEFAULT_TEMPLATE_BRANCH = 'master'
 
 
 class TemplateCloneError(RuntimeError):

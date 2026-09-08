@@ -64,7 +64,7 @@ def test_app_template_defaults(tmp_path, monkeypatch):
         config.get_app_template_repo()
         == "http://10.1.13.143:3000/aukeys-admin/template.git"
     )
-    assert config.get_app_template_branch() == "main"
+    assert config.get_app_template_branch() == "master"
 
 
 def test_app_template_can_be_configured_from_dotenv(tmp_path, monkeypatch):

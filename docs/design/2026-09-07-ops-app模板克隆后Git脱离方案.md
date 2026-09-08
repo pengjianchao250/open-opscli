@@ -2,6 +2,7 @@
 
 > 日期：2026-09-07  
 > 范围：`opscli app` 新项目模板获取流程、`ops-app-build-spec` Skill 与源码交付前 Git 安全边界。
+> 分支约定：统一使用 `master`，详见 `docs/design/2026-09-07-opscli-app与建站Skill-master分支统一方案.md`。
 
 ## 1. 背景
 

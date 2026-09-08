@@ -20,7 +20,7 @@ DEFAULTS = {
     "ops_token_endpoint": "/api/v1/auth/cli-token",
     "apphub_url": "https://apphub.qa.aukeyit.com",
     "app_template_repo": "http://10.1.13.143:3000/aukeys-admin/template.git",
-    "app_template_branch": "main",
+    "app_template_branch": "master",
     "polaris_system_url": "https://biapi.qa.aukeyit.com",
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",

@@ -5,7 +5,7 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 
 # OPS 应用模板开发
 
-统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`main`。
+统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`master`。
 
 新项目通过统一模板仓库 clone 获取完整模板，但不得继承模板仓库的 Git 元数据。Skill 提供安全 clone 脚本，在 clone 成功后立即删除并验证项目根目录 `.git`；Skill 不再生成项目脚手架，只负责维护会随 opscli 发版更新的项目级规范和平台限制。
 

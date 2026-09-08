@@ -107,6 +107,7 @@ class SiteBinding:
             app_name=str(payload.get("title") or payload.get("site_name") or app_name),
             slug=slug,
             repo_url=repo_url,
+            default_branch=str(payload.get("default_branch") or GIT_DEFAULT_BRANCH),
             git_username=_optional_text(
                 payload.get("git_username")
                 or _nested_value(payload, "git_credential", "username")
