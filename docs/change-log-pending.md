@@ -9516,3 +9516,35 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：回滚本条涉及的规划器、Skill 文档、版本文件和回归测试改动。
 ---
+
+## 2026-09-08 query planner - 编号部门中文数字与阿拉伯数字通用归一
+
+**变更原因**：上一轮只用“十一部/一部”验证部门优先级，没有证明“十二部、项目十一部、22部、项目二十二部”等多位编号和前缀形态都能正确解析，修复范围过窄。
+
+**改动点**：将“编号部门解析必须泛化”写入项目 `CLAUDE.md`；`query_plan.py` 新增通用部门编号数词归一，支持个位、十位、百位及连续中文数字写法，并保留“项目”前缀；筛选合同、`SKILL.md`、`QUERY_SPEC.md`、`references/rules.md` 同步改为通用规则，Skill 升至 1.4.3。新增多位中文数字、阿拉伯数字、“项目”前缀、跨写法等价匹配以及销售小组子串隔离的参数化回归测试。
+
+**验证结果**：RED 阶段业务回归为 `3 failed, 69 passed`，稳定复现多位中文数字、
+阿拉伯数字与“项目”前缀跨写法匹配失败；实现后定向回归 `90 passed`，规划器、MCP
+规划器与 Skill 模板组合回归 `442 passed`；`py_compile` 与 `git diff --check` 均通过。
+
+**影响范围**：规划器部门筛选值归一化、部门与销售小组组件的文本归属判定，以及 ops-dataset-query Skill 筛选规则。
+
+**回滚方式**：回滚本条涉及的 `CLAUDE.md`、规划器、Skill 文档、版本文件和回归测试改动。
+---
+
+## 2026-09-08 ops-dataset-query / 规划器内核 - 组件排除极性与多指标完整性
+
+**变更原因**：真实请求“获取8月份各部门的收入及毛利情况，并环比7月数据，排除部门：范泰克-体系外”暴露两类静默错数：规划器把排除值写成正向等值筛选，结果只查询本应排除的部门；首次规划还只保留毛利，漏掉“收入”对应的销售额。改写请求后又因短枚举值是长值前缀，同时命中“范泰克”和“范泰克-体系外”。
+
+**改动点**：`query_plan.py` 新增通用组件筛选极性识别，覆盖排除、剔除、去除、不含、不等于、除外/之外/以外以及 `!=`/`<>`/`not in`，排除单值生成 `!=`、多值生成 `not_in`，取消排除不生成筛选，正负冲突转 `component_filter_polarity_conflict` 澄清；枚举反查增加按命中区间的长值优先，禁止长值连带扩展短前缀；已消费值主段不得从完整部门编号中截取。指标投影新增稳定别名集合完整性门禁，按规范字段身份或唯一中文口径判断覆盖，部分缺失转 `metric_not_in_dataset`。`SKILL.md`、`QUERY_SPEC.md`、`references/rules.md` 和项目级约束同步，Skill 升至 1.4.4。
+
+**验证结果**：新增真实事故句式与部门/国家/渠道/品牌的正向、单值排除、多值排除、取消排除、正负冲突、长短枚举前缀、指标部分缺失回归；定向规划器测试 `127 passed`，规划器全套、操作符归一与 Skill 模板契约组合测试 `459 passed`，`git diff --check` 通过。当前虚拟环境未安装 `ruff`，改用 `py_compile` 与既有测试矩阵完成代码验证。补充按用户指定执行 `SKIP_CYTHON=1 uv pip install --python /opt/anaconda3/bin/python -e ".[dev]"` 后真实复验：修复前 `query flow` 将“十一部”误命中“一部-B组”等销售小组主段并错误澄清，同时普通文本打分选成发货数据集；生产形态回归先稳定 RED `5 failed`，选表竞争回归先稳定 RED `1 failed`。修复后定向 `27 passed`，当前账号缓存元数据离线规划确认自动选择即时综合数据集且 `auto_selected=true`，规划器、MCP 规划入口与 Skill 模板组合回归 `456 passed`，两个修改 Python 模块均通过 `py_compile`。正式远端取数在修复后进入执行阶段，但被 `REMOTE_BUSINESS_ERROR 407: 令牌无效` 阻断；按铁律尝试提交反馈亦被同一 407 阻断，未取得 `feedback_uuid`。
+
+**本轮 `.venv` 安装复验**：本机原无 `uv`，先安装 `uv` 后以 `SKIP_CYTHON=1 python3 -m uv pip install --python .venv/bin/python -e ".[dev]"` 成功安装 `aukeys-opscli 0.0.132`。导入路径确认指向当前源码树，安装后规划器全套、操作符归一与 Skill 模板契约共 `460 passed`。真实 `query flow` 同样在规划前被 `REMOTE_BUSINESS_ERROR 407：令牌无效` 阻断；按铁律提交反馈时反馈接口读取超时，未取得 `feedback_uuid`。
+
+**执行协议复验与修复**：令牌恢复后，真实查询确认规划合同已正确生成销售额、毛利、部门维度、8 月对 7 月及单值排除 `!=`，但 simple-query 服务把它转成后端拒绝的 `neq`，返回 `INVALID_COMPARISON_OPERATOR`。按查询服务权威契约将执行边界统一为原生 `ne`：`!=`、`<>`、历史 `neq` / `notEquals` 均归一为 `ne`，数组排除继续使用 `not_in`；`run_query_template` 在深拷贝规划模板后复用同一校验归一逻辑，既不污染规划合同，也不再绕过执行门禁。新增执行级回归，Skill 操作符文档同步更正。重新 editable 安装后，`tests/query` 以 importlib 模式 `617 passed`，Skill 模板与打包定向测试 `13 passed`，真实查询成功返回 22 个部门且不含“范泰克-体系外”，两项指标及环比字段完整。失败反馈 UUID：`32fb8087-234b-4401-a198-682273c18ad6`。
+
+**影响范围**：所有通过查询组件解析的自然语言筛选、稳定指标别名的多指标请求，以及 ops-dataset-query Skill 合同与版本。
+
+**回滚方式**：回滚本条涉及的 `CLAUDE.md`、`query_plan.py`、ops-dataset-query 模板文档/版本和新增回归测试。
+---

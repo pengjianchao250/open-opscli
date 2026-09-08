@@ -151,7 +151,7 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
   - `field_alias_mappings_zh`（形态 `[{requested, field_zh, field_name}]`）：用户用稳定别名点名（订单量/单量 → 销量，销售金额/收入 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实取数据集口径字段时下发；结论须以 `field_zh` 命名并说明该对应关系
   - `component_candidates_zh`（组件当前账号可见取值，形态 `[{field_zh, values_zh[], total}]`）：只在 `component_filter_value_unmatched` / `component_filter_unauthorized` 时下发；`component_filter_field_ambiguous` **不下发**该键，候选字段名写在 `clarification_messages_zh` 文案内
   - `unsupported_currencies`（识别到的白名单外币种代码）：`unsupported_currency` 时下发
-  - `default_dataset_recommendation_zh`：未指定数据集且推荐表通过业务与字段指导校验时固定为 `auto_selected=true`、`confirmation_required=false`，直接继续；请求仍缺查询字段时只澄清推荐字段，不再确认数据集
+  - `default_dataset_recommendation_zh`：未指定数据集且推荐表通过业务与字段指导校验时固定为 `auto_selected=true`、`confirmation_required=false`，并优先于其他普通数据集的文本打分候选直接继续；显式数据集、明确拒绝推荐表或专用业务提示除外。请求仍缺查询字段时只澄清推荐字段，不再确认数据集
   - `platform_semantic_members`（**一律是展示名**：亚马逊SC / 亚马逊VC / TikTok / Walmart / Wayfair / Temu / Shopify / SHEIN / 山姆，不是内部键；内部枚举名在 `execution_ref.platform_semantic_keys`）/ `platform_effective_members` / `platform_scope_disclosures_zh` / `platform_filter_state`
   - `default_filters_zh`（服务端默认条件，必须披露）、`component_filter_disclosures_zh`
   - `fallback_level`（降级起点，只有 `L1_contract_catalog` / `L3_metadata_refresh` 两个取值）、`no_guess_policy_zh`（降级态禁止猜字段的口径原文）、`recovery_state`（如 `refresh_failed`）与 `recovery_command` / `recovery_hint_zh`
@@ -477,7 +477,9 @@ query_simple(
    不在返回值中           → 无权限：展示合法值列表请用户重选，禁止执行原查询
 ```
 
-**值匹配策略**：先做规范化（NFKC、去首尾空白、大小写归一）后的**完整等值**比较；部门名称额外允许阿拉伯数字与中文数字等价（"9部" = "九部"）。唯一等值命中时直接使用该枚举原值执行，不再询问；**禁止用子串模糊扩展**——"9部"只匹配"九部"，不匹配"项目九部"；"范泰克"只匹配"范泰克"，不匹配"范泰克体系外"。无唯一等值命中时停止并让用户重选。
+**值匹配策略**：先做规范化（NFKC、去首尾空白、大小写归一）后的**完整等值**比较；部门编号中的多位阿拉伯数字与中文数字统一归一（"22部" = "二十二部"），并保留"项目"前缀作为组织身份的一部分。"十二部"、"项目十一部"、"22部"、"项目二十二部"等完整部门词必须整体识别，禁止截取其中的"一部"或"二部"作为销售小组，也不得用这些子串命中"一部-B组"等销售小组枚举的主段。唯一等值命中时直接使用该枚举原值执行，不再询问；**禁止用子串模糊扩展**——"9部"只匹配"九部"，不匹配"项目九部"；"范泰克"只匹配"范泰克"，不匹配"范泰克体系外"。命中值处于排除语境（排除、剔除、去除、不含、不等于、除外、之外、以外、`!=`、`<>`、`not in`）时，模板必须保留排除极性：单值使用 `!=`，多值使用 `not_in`，不得生成 `=` 或 `in`；同一值同时出现包含和排除语义时转澄清。无唯一等值命中时停止并让用户重选。
+
+**指标集合完整性**：用户点名的每个指标都必须逐项绑定到当前数据集授权字段。稳定别名按正式字段披露并执行（如“收入”对应“销售额”）；多指标请求只命中其中一部分时不得 `planned`，缺失项必须进入 `metric_not_in_dataset` 澄清。
 
 组件 alias 缺失或组件枚举失败时**只阻断该筛选**，不得改为不加筛选的全范围查询。
 

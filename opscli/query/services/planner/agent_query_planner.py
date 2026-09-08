@@ -585,10 +585,8 @@ def _with_default_dataset_recommendation(
 ) -> dict:
     """把唯一且覆盖请求语义的默认候选标为自动选用。
 
-    override_existing=True 时允许默认候选覆盖已选出的其他候选：调用方已判定
-    既有首选候选拿不出请求点名指标的精确中文证据、而默认即时综合数据集拿得出
-    （验收实测「亚马逊SC 近7天销售额」靠平台槽位+说明文本把流量转化率表推成首选，
-    该表根本没有「销售额」，即时综合数据集反而落选）。
+    override_existing=True 只用于没有显式数据集或专用业务提示的阶段 3：默认候选已通过
+    当前账号授权、领域、槽位和点名指标覆盖校验，应覆盖普通文本打分得到的其他候选。
     """
     if candidate is None:
         return result
@@ -1047,6 +1045,7 @@ def plan_query(
                         None,
                     ),
                     default_candidate,
+                    override_existing=True,
                 )
             return _with_default_dataset_recommendation(
                 _result(
@@ -1104,21 +1103,9 @@ def plan_query(
     contenders = [candidate for candidate in scored if candidate["_semantic_rank"] == best_rank]
     contenders.sort(key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
-    # 点名指标的精确中文证据优先于槽位/文本得分：首选候选拿不出该证据、而默认
-    # 即时综合数据集拿得出时，改由默认数据集承接（专用业务提示场景不会走到这里，
-    # 因为 specialized_hint 时 default_candidate 恒为 None）。
-    profiles_by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
-    top_profile = profiles_by_alias.get(contenders[0]["dataset_alias"])
-    default_profile = (
-        profiles_by_alias.get(default_candidate["dataset_alias"]) if default_candidate else None
-    )
-    prefer_default = bool(
-        has_metric
-        and top_profile is not None
-        and default_profile is not None
-        and not _has_chinese_metric_evidence(query, top_profile)
-        and _has_chinese_metric_evidence(query, default_profile)
-    )
+    # 阶段 3 表示用户没有显式指定数据集；推荐表通过完整覆盖校验后直接承接普通请求。
+    # 专用业务提示、明确拒绝推荐表和显式数据集均已在更早分支处理，此处不会覆盖。
+    prefer_default = default_candidate is not None
 
     if len(contenders) == 1:
         return _with_default_dataset_recommendation(

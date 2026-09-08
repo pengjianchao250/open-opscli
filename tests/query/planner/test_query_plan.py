@@ -413,6 +413,35 @@ def test_component_enum_success_still_resolves_filter():
     assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in filters
 
 
+@pytest.mark.parametrize(
+    ("query_value", "authorized_value", "canonical"),
+    [
+        ("十二部", "12部", "12部"),
+        ("项目十一部", "项目11部", "项目11部"),
+        ("22部", "二十二部", "22部"),
+        ("项目二十二部", "项目22部", "项目22部"),
+        ("二百零二部", "202部", "202部"),
+    ],
+)
+def test_numbered_departments_support_general_chinese_arabic_equivalence(
+    query_value, authorized_value, canonical
+):
+    """编号部门按通用数词规则归一；不得只覆盖十一部或单字符数字。"""
+    assert query_plan._normalize_department_value(query_value) == canonical
+    assert query_plan._normalize_department_value(authorized_value) == canonical
+
+    contract = query_plan._resolve_component_filters(
+        _dept_contract(),
+        f"查询{query_value}的销量",
+        lambda *_a, **_k: [authorized_value],
+        auto_enum=True,
+    )
+
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": authorized_value} in filters
+
+
 # ── 部门筛选的枚举驱动识别（反查兜裸值 + 宽后缀候选转澄清）────────────────────
 #
 # 真实部门名形态任意（宁波/泛泰克/孵化部/经营管理团队），原有三条窄正则

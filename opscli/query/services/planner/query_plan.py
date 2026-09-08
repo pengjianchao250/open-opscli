@@ -228,6 +228,8 @@ CLARIFICATION_MESSAGES = {
     "component_filter_unauthorized": "请求的筛选值均不在当前账号授权范围内，已阻止扩大为全范围查询，"
                                      "请改用当前账号可见的取值。",
     "component_filter_field_ambiguous": "同一取值同时属于多个筛选字段，请指明要按哪个字段筛选。",
+    "component_filter_polarity_conflict": "同一筛选值同时出现在包含与排除语境中，无法确定最终筛选方向；"
+                                          "请明确该值是保留还是排除。",
     "snapshot_metric_window_conflict": "库存等快照指标只反映某一天的切面，不能与按时间窗累加的流量指标在同一查询里"
                                        "共用多日窗口：请按日期维度分组查看，或把快照指标与流量指标拆成两次查询。",
 }
@@ -326,17 +328,24 @@ FILTER_VALUE_MATCH_POLICY = {
         "department_arabic_chinese_numeral_equivalence",
         "department_token_precedence_over_component_substrings",
     ],
+    "supported_polarities": ["include", "exclude"],
+    "exclude_single_operator": "!=",
+    "exclude_multi_operator": "not_in",
     "exact_match_is_exclusive": True,
     "exact_match_confirmation_required": False,
     "substring_match_allowed": False,
     "no_exact_match_action": "clarify_required",
     "rule_zh": (
         "先对用户筛选值与当前账号组件枚举原值做规范化完整等值比较；"
-        "部门名称额外允许阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值并直接执行，"
+        "部门名称额外允许多位阿拉伯数字与中文数字等价。唯一等值命中时只使用该枚举原值并直接执行，"
         "不得再次向用户确认，也不得加入仅包含请求文本的其他成员；无唯一等值命中时必须让用户澄清。"
-        "完整部门词优先于其他组件的子串匹配，“十一部”不得被拆成销售小组“一部”；"
+        "完整编号部门词优先于其他组件的子串匹配，“十二部”“项目十一部”“22部”"
+        "“项目二十二部”等表达均须整体识别，不得截取其中的“一部”或“二部”作为销售小组，"
+        "也不得用这些子串命中“一部-B组”等销售小组枚举的主段；"
         "例如“9部”只匹配“九部”，不匹配“项目九部”；"
-        "“范泰克”不匹配“范泰克体系外”。"
+        "“范泰克”不匹配“范泰克体系外”。筛选值处于排除、剔除、去除、不含、"
+        "不等于、除外等否定语境时必须保留排除极性，单值使用 !=、多值使用 not_in，"
+        "禁止反转成 = 或 in；同一值的正负极性冲突时必须澄清。"
     ),
 }
 
@@ -375,12 +384,31 @@ _CHINESE_DIGITS = {
     "八": "8",
     "九": "9",
 }
+_CHINESE_DEPARTMENT_UNITS = {"十": 10, "百": 100}
 
 # 宽后缀兜底正则：任意 1-6 个汉字/字母/数字紧跟「部」即视为部门名候选。
 # 上限 6 取自内部真实部门名长度分布（最长如「经营管理团队」为 6 字，
 # 带「部」后缀的更短）；放宽会把整句吞进候选。候选仍要走授权枚举完整
 # 等值校验，零命中转澄清，因此宽进严出是安全的。
 _DEPARTMENT_WIDE_SUFFIX_RE = re.compile(r"[一-鿿A-Za-z0-9]{1,6}部")
+
+# 普通组件筛选的排除语义。这里只判断已经通过授权枚举锁定的值处于何种语境，
+# 不负责从原文猜筛选值，因此可以覆盖部门、国家、渠道、品牌等所有组件字段。
+# 范围止于最近标点，避免“排除 A，但保留 B”把 B 一并标成排除。
+_COMPONENT_EXCLUSION_PREFIX_RE = re.compile(
+    r"(?:排除|剔除|去除|去掉|移除|忽略|过滤掉|不包含|不包括|不含|不选|不看|不查|"
+    r"不等于|!=|<>|not\s+in|except)\s*[^，。；！？,;!?]{0,64}",
+    re.IGNORECASE,
+)
+_COMPONENT_EXCLUSION_AROUND_RE = re.compile(
+    r"除(?:了)?\s*[^，。；！？,;!?]{1,64}?(?:之外|以外)"
+    r"|[^，。；！？,;!?]{1,64}?(?:除外)",
+    re.IGNORECASE,
+)
+_COMPONENT_EXCLUSION_CANCEL_RE = re.compile(
+    r"(?:不|无需|无须|不要|不用)\s*(?:再)?\s*(?:排除|剔除|去除|去掉|移除|忽略|过滤掉)"
+    r"\s*[^，。；！？,;!?]{0,64}"
+)
 
 # 宽后缀候选头部的噪声前缀：正则按「最左 + 贪婪」匹配，会把紧邻的时间词、
 # 祈使动词、连接助词一并吞进候选（「近7天魔法部」「查询销售部」），这里循环剥掉。
@@ -462,22 +490,90 @@ def _normalize_enum(value: str) -> str:
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+def _component_filter_polarity(query: str, values: Sequence[str]) -> str:
+    """判断已锁定组件值是包含还是排除；正负冲突返回 ``conflict``。
+
+    极性必须按“值的命中区间”判断，不能只看整句是否出现否定词。这样
+    ``排除美国，但保留加拿大`` 不会把两个国家都反转；同一个值既被保留又被
+    排除时则 fail-closed，交由上层澄清。
+    """
+    text = unicodedata.normalize("NFKC", query).casefold()
+    # “不要排除 X”表示取消排除。用等长空格遮蔽，保留后续区间坐标。
+    cancellation_spans = [match.span() for match in _COMPONENT_EXCLUSION_CANCEL_RE.finditer(text)]
+    polarity_text = _COMPONENT_EXCLUSION_CANCEL_RE.sub(
+        lambda match: " " * (match.end() - match.start()), text
+    )
+    exclusion_spans = [
+        match.span()
+        for pattern in (_COMPONENT_EXCLUSION_PREFIX_RE, _COMPONENT_EXCLUSION_AROUND_RE)
+        for match in pattern.finditer(polarity_text)
+    ]
+    seen: set[str] = set()
+    found = False
+    for value in values:
+        target = unicodedata.normalize("NFKC", str(value)).casefold().strip()
+        if not target:
+            continue
+        for match in re.finditer(re.escape(target), text):
+            found = True
+            if any(
+                start <= match.start() and match.end() <= end
+                for start, end in cancellation_spans
+            ):
+                continue
+            excluded = any(
+                start <= match.start() and match.end() <= end
+                for start, end in exclusion_spans
+            )
+            seen.add("exclude" if excluded else "include")
+    if len(seen) > 1:
+        return "conflict"
+    if seen:
+        return next(iter(seen))
+    return "none" if found else "include"
+
+
+def _canonical_department_number(number: str) -> str | None:
+    """把部门编号中的阿拉伯数字或中文数词归一为十进制字符串。"""
+    if number.isdigit():
+        return str(int(number))
+    if not number:
+        return None
+
+    # 不含单位的中文数字按逐位写法处理，例如“二二部”与“22部”等价。
+    if not any(char in _CHINESE_DEPARTMENT_UNITS for char in number):
+        if not all(char in _CHINESE_DIGITS for char in number):
+            return None
+        return str(int("".join(_CHINESE_DIGITS[char] for char in number)))
+
+    total = 0
+    pending_digit: int | None = None
+    previous_unit = 1000
+    for char in number:
+        if char in _CHINESE_DIGITS:
+            pending_digit = int(_CHINESE_DIGITS[char])
+            continue
+        unit = _CHINESE_DEPARTMENT_UNITS.get(char)
+        # 单位必须按百、十递减；异常数词保持原文，避免错误归一后误命中权限枚举。
+        if unit is None or unit >= previous_unit:
+            return None
+        total += (1 if pending_digit is None else pending_digit) * unit
+        pending_digit = None
+        previous_unit = unit
+    return str(total + (pending_digit or 0))
+
+
 def _normalize_department_value(value: str) -> str:
-    """部门值规范化：只做空白/NFKC/大小写与部门数字等价，不做子串扩展。"""
+    """部门值规范化：统一多位中英文数字并保留组织前缀，不做子串扩展。"""
     normalized = _normalize_enum(value)
     match = re.fullmatch(r"(项目)?([零〇一二三四五六七八九十百\d]+)部", normalized)
     if not match:
         return normalized
     prefix, number = match.groups()
-    if number in _CHINESE_DIGITS:
-        number = _CHINESE_DIGITS[number]
-    elif number == "十":
-        number = "10"
-    elif len(number) == 2 and number.startswith("十") and number[1] in _CHINESE_DIGITS:
-        number = "1" + _CHINESE_DIGITS[number[1]]
-    elif len(number) == 2 and number.endswith("十") and number[0] in _CHINESE_DIGITS:
-        number = _CHINESE_DIGITS[number[0]] + "0"
-    return f"{prefix or ''}{number}部"
+    canonical = _canonical_department_number(number)
+    if canonical is None:
+        return normalized
+    return f"{prefix or ''}{canonical}部"
 
 
 def _extract_wide_suffix_department_value(query: str) -> str:
@@ -2138,6 +2234,77 @@ def build_model_contract(
                 dimensions.append(dict(item, selection_source="semantic_alias"))
                 daily_grain_applied = True
                 break
+    # 稳定指标别名完整性：不能因为字段指导截断或选表打分只保留了部分指标，
+    # 就把“收入及毛利”静默缩成只有毛利。当前数据集授权字段中存在的规范字段
+    # 必须全部补齐；不存在的别名字段必须转澄清。宽泛“销售情况”仍按推荐集合处理，
+    # 不把某张表没有 orders 之类的差异误判为硬缺字段。
+    negated_spans = time_scope.negated_spans(normalized_query_text)
+    canonical_metric_requests = {
+        field_name: term
+        for field_name, term in dataset_guidance.field_semantics.requested_canonical_fields(
+            normalized_query_text
+        ).items()
+        if term != "销售情况"
+        and not _label_is_negated(
+            normalized_query_text, _normalize(term), negated_spans
+        )
+    }
+    authorized_metrics_by_name = {
+        str(item.get("field_name", "")): item
+        for item in (authorized_field_labels or {}).get("metrics", [])
+        if isinstance(item, dict) and item.get("field_name")
+    }
+    selected_metric_names = {
+        str(item.get("field_name", "")) for item in metrics if isinstance(item, dict)
+    }
+    selected_metric_labels = {
+        _normalize(item.get("verbose_name")) for item in metrics if isinstance(item, dict)
+    }
+    missing_canonical_metric_terms: list[str] = []
+    for field_name, term in canonical_metric_requests.items():
+        authorized = authorized_metrics_by_name.get(field_name)
+        accepted_labels = {
+            _normalize(alias)
+            for alias in dataset_guidance.field_semantics.FIELD_QUERY_TERMS.get(
+                field_name, ()
+            )
+        }
+        # 不同数据集可能使用不同物理字段名但共享同一正式中文口径，例如
+        # sales_amount 与 price 都展示为“销售额”。中文标签已唯一绑定时视为覆盖，
+        # 不能反过来因技术字段名不同误报缺失。
+        if selected_metric_labels & accepted_labels:
+            continue
+        if authorized is None:
+            if term not in missing_canonical_metric_terms:
+                missing_canonical_metric_terms.append(term)
+            continue
+        if field_name not in selected_metric_names:
+            metrics.append(dict(authorized, selection_source="semantic_alias"))
+            selected_metric_names.add(field_name)
+            selected_metric_labels.add(_normalize(authorized.get("verbose_name")))
+    if canonical_metric_requests:
+        metrics.sort(
+            key=lambda item: normalized_query_text.find(
+                _normalize(
+                    canonical_metric_requests.get(
+                        str(item.get("field_name", "")), item.get("verbose_name", "")
+                    )
+                )
+            )
+        )
+    if missing_canonical_metric_terms and execution_path_ready and status == "planned":
+        status = "clarify_required"
+        if "metric_not_in_dataset" not in clarification_reasons:
+            clarification_reasons.append("metric_not_in_dataset")
+        unknown_fields.extend(
+            term for term in missing_canonical_metric_terms if term not in unknown_fields
+        )
+        pending_confirmations_zh.append(
+            "当前数据集没有请求的部分指标（"
+            + "、".join(missing_canonical_metric_terms)
+            + "），请更换数据集或改用该数据集已有的指标"
+        )
+
     # 点名指标门禁：指标词只蹭中更短的维度标签时剔除该维度；一个指标都没选上不得 planned
     requested_metric_terms = _requested_metric_terms(query)
     if requested_metric_terms:
@@ -2146,7 +2313,8 @@ def build_model_contract(
         )
         if execution_path_ready and status == "planned" and not metrics and not recommended_mets:
             status = "clarify_required"
-            clarification_reasons.append("metric_not_in_dataset")
+            if "metric_not_in_dataset" not in clarification_reasons:
+                clarification_reasons.append("metric_not_in_dataset")
             unknown_fields.extend(
                 term for term in requested_metric_terms if term not in unknown_fields
             )
@@ -2917,12 +3085,17 @@ def _spec_extract(spec: dict, query: str, *, labeled_only: bool = False, consume
 
 
 def _value_already_consumed(normalized_value: str, consumed) -> bool:
-    """判断某个枚举值是否已被其他字段消费（整值相同或是已消费值的一部分）。"""
+    """判断枚举整值或其主段是否已被其他字段消费。"""
     if not normalized_value:
         return True
     base = normalized_value.split("-")[0]
     return any(
-        normalized_value == used or normalized_value in used or base == used
+        normalized_value == used
+        or normalized_value in used
+        or base == used
+        # 完整部门词已预留时，销售小组主段不得从中截取短编号：
+        # “一部-B组”的主段“一部”不能命中“十一部”，“2部-A组”不能命中“22部”。
+        or (len(base) >= 2 and base in used)
         for used in consumed
     )
 
@@ -2991,6 +3164,35 @@ def _reverse_lookup_component_matches(
         # 用户说「亚马逊」指的是平台，不是主段恰好叫「亚马逊」的销售小组
         if len(base) >= 2 and base not in generic and base in normalized_query:
             base_hits.append(value)
+    # 较短枚举值只出现在较长枚举值内部时不是独立点名：原文写
+    # 「范泰克-体系外」不能同时锁定「范泰克」。只有短值在长值区间之外另有一次
+    # 出现时才保留，语义与字段标签的最长区间吞并一致。
+    if len(exact_hits) > 1:
+        hit_spans = {
+            str(value): [
+                match.span()
+                for match in re.finditer(re.escape(normalize(value)), normalized_query)
+            ]
+            for value in exact_hits
+        }
+        exact_hits = [
+            value
+            for value in exact_hits
+            if not any(
+                normalize(value) != normalize(other)
+                and normalize(value) in normalize(other)
+                and hit_spans[str(value)]
+                and all(
+                    any(
+                        long_start <= short_start and short_end <= long_end
+                        for long_start, long_end in hit_spans[str(other)]
+                    )
+                    for short_start, short_end in hit_spans[str(value)]
+                )
+                for other in exact_hits
+            )
+        ]
+
     # 整值命中优先：原文写了「傲彼瑞-加拿大」就该锁定它，而不是因为主段
     # 「傲彼瑞」同时命中三个地区渠道而退化成澄清
     if exact_hits:
@@ -3380,22 +3582,26 @@ def _write_component_filter(
     label_zh: str,
     requested: str,
     resolved: str | list,
+    polarity: str = "include",
 ) -> None:
     """把已锁定的授权原值写入查询模板，并登记披露信息。
 
-    resolved 传列表表示用户点名了多个准确值，按 IN 语义下发
-    （服务端支持 {"operator": "in", "value": [...]}），单值仍用 `=`，
-    避免为单值场景改变既有 payload 形状。
+    resolved 传列表表示用户点名了多个准确值。包含语义下单值用 `=`、多值用
+    `in`；排除语义下单值用 `!=`、多值用 `not_in`。极性由值在原文中的语段
+    决定，不得把“排除 X”反转成“只查询 X”。
     """
     template = execution.get("query_template")
     if not isinstance(template, dict):
         return
     multi = isinstance(resolved, list)
     values = list(resolved) if multi else [resolved]
+    operator = (
+        ("not_in" if multi else "!=")
+        if polarity == "exclude"
+        else ("in" if multi else "=")
+    )
     template.setdefault("filters", []).append(
-        {"field": field_name, "operator": "in", "value": values}
-        if multi
-        else {"field": field_name, "operator": "=", "value": resolved}
+        {"field": field_name, "operator": operator, "value": values if multi else resolved}
     )
     execution.setdefault("resolved_component_filters", []).append(
         {
@@ -3404,13 +3610,23 @@ def _write_component_filter(
             "requested_value": requested,
             "resolved_value": values if multi else resolved,
             "match_strategy": "exact_normalized",
+            "polarity": polarity,
+            "operator": operator,
         }
     )
     contract["model_view"]["component_filter_state"] = "resolved"
     shown = "、".join(f"“{value}”" for value in values) if multi else f"“{resolved}”"
     contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
-        f"{label_zh}按当前账号授权枚举完整等值匹配为{shown}"
-        + ("（任一命中）。" if multi else "。")
+        f"{label_zh}按当前账号授权枚举完整等值匹配为{shown}，"
+        + (
+            "按排除条件处理（多值均排除）。"
+            if polarity == "exclude" and multi
+            else "按排除条件处理。"
+            if polarity == "exclude"
+            else "按任一命中条件处理。"
+            if multi
+            else "按包含条件处理。"
+        )
     )
 
 
@@ -3640,6 +3856,31 @@ def _resolve_enum_component_filter(
                 ),
             )
 
+    polarity = _component_filter_polarity(
+        query,
+        [requested] + [str(value) for value in matched],
+    )
+    if polarity == "conflict":
+        return _block_component_filter(
+            contract,
+            execution,
+            status="clarify_required",
+            state="clarify_required",
+            next_action="ask_user_for_component_filter_polarity",
+            reason_code="component_filter_polarity_conflict",
+            candidates=matched,
+            label_zh=label_zh,
+            message_zh=(
+                f"{label_zh}“{requested}”同时出现在包含与排除语境中，"
+                "无法确定最终筛选方向；请明确该值是保留还是排除。"
+            ),
+        )
+    if polarity == "none":
+        contract["model_view"].setdefault("component_filter_disclosures_zh", []).append(
+            f"识别到不排除{label_zh}“{requested}”的明确表述，本次不应用该{label_zh}筛选。"
+        )
+        return contract
+
     _write_component_filter(
         contract,
         execution,
@@ -3647,6 +3888,7 @@ def _resolve_enum_component_filter(
         label_zh=label_zh,
         requested=requested,
         resolved=matched if exact_multi else matched[0],
+        polarity=polarity,
     )
     consumed.add(_normalize_component_value(requested))
     # 多值时每个已锁定的值都要登记，避免其中某个值的子串被后续字段反查抓走

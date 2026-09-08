@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from opscli.query.services.planner import query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
@@ -153,6 +155,17 @@ def test_unspecified_dataset_auto_selects_recommendation_for_income_query():
     ]
 
 
+def test_multi_metric_alias_request_clarifies_when_only_part_is_available():
+    """“收入及毛利”不能因收入已命中就静默丢掉当前表缺失的毛利。"""
+    contract = _plan(_adapter(_instant_dataset), "查询8月的收入及毛利情况")
+
+    assert contract["status"] == "clarify_required"
+    assert contract["model_view"]["metrics"] == ["销售额"]
+    assert "metric_not_in_dataset" in contract["model_view"]["clarification_reason_codes"]
+    assert "毛利" in contract["model_view"]["unknown_requested_fields"]
+    assert "query_template" not in contract["execution_ref"]
+
+
 def test_vague_query_only_clarifies_fields_after_default_dataset_auto_selection():
     """请求没有查询字段时可以追问字段，但不得再次要求确认推荐数据集。"""
     contract = _plan(_adapter(_instant_dataset), "查询8月的数据")
@@ -274,8 +287,18 @@ def test_component_filter_clarify_carries_candidates_and_reason_code():
     assert "query_template" not in contract["execution_ref"]
 
 
-def test_department_token_is_not_reused_as_sales_team_substring():
-    """“十一部”完整表示部门；即使部门组件缺失，也不能把其中“一部”识别为销售小组。"""
+@pytest.mark.parametrize(
+    ("department", "sales_teams"),
+    [
+        ("十一部", ["一部-B组", "一部-Temu组"]),
+        ("十二部", ["二部-A组"]),
+        ("项目十一部", ["一部-Ohwill"]),
+        ("22部", ["2部-A组"]),
+        ("项目二十二部", ["二部-C组"]),
+    ],
+)
+def test_department_token_is_not_reused_as_sales_team_substring(department, sales_teams):
+    """完整编号部门优先；销售小组枚举也不能拿其中短编号作主段匹配。"""
     contract = {
         "status": "planned",
         "query_mode": "dataset_query",
@@ -301,8 +324,11 @@ def test_department_token_is_not_reused_as_sales_team_substring():
 
     result = query_plan._resolve_component_filters(
         contract,
-        "查询十一部8月的销售额",
-        lambda *_args, **_kwargs: ["一部", "二部"],
+        (
+            f"查询部门等于{department}在2026年8月1日至2026年8月31日的收入情况；"
+            "仅按部门筛选，不筛选销售小组；收入按销售额口径。"
+        ),
+        lambda *_args, **_kwargs: sales_teams,
         auto_enum=True,
     )
 

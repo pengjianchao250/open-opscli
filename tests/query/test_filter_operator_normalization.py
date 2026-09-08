@@ -35,7 +35,8 @@ def _build(filters):
 @pytest.mark.parametrize(
     "symbol,expected",
     [(">=", "gte"), ("<=", "lte"), (">", "gt"), ("<", "lt"),
-     ("=", "eq"), ("==", "eq"), ("!=", "neq"), ("<>", "neq")],
+     ("=", "eq"), ("==", "eq"), ("!=", "ne"), ("<>", "ne"),
+     ("neq", "ne"), ("notEquals", "ne")],
 )
 def test_symbol_operators_are_normalized(symbol: str, expected: str):
     """八种符号写法都要归一为服务端语义操作符。"""
@@ -60,7 +61,7 @@ def test_nested_conditions_are_normalized():
         ]}
     ])
     inner = filters[0]["conditions"]
-    assert inner[0]["operator"] == "neq"
+    assert inner[0]["operator"] == "ne"
     assert inner[1]["conditions"][0]["operator"] == "gte"
     assert filters[0]["operator"] == "AND", "逻辑操作符不得被当成比较符处理"
 

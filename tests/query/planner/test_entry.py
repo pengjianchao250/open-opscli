@@ -701,6 +701,32 @@ def test_run_query_template_drops_null_keys():
     assert captured["payload"]["tableId"] == 1
 
 
+def test_run_query_template_normalizes_single_exclusion_for_backend():
+    """规划合同保留 != 语义，执行边界必须发后端支持的 ne 且不污染合同。"""
+    captured: dict = {}
+
+    def _fake_post(payload):
+        captured["payload"] = payload
+        return {"success": True, "data": []}
+
+    qm = QueryManager()
+    qm.client.cli_simple_query = _fake_post  # type: ignore[method-assign]
+    ref = {
+        "query_template": {
+            "tableId": 1,
+            "metrics": [{"field": "price", "alias": "price", "aggregation": "SUM"}],
+            "filters": [
+                {"field": "dept_name", "operator": "!=", "value": "范泰克-体系外"}
+            ],
+        }
+    }
+
+    qm.run_query_template(ref)
+
+    assert captured["payload"]["filters"][0]["operator"] == "ne"
+    assert ref["query_template"]["filters"][0]["operator"] == "!="
+
+
 def test_extract_enum_values_dedup():
     """枚举值提取：多版本嵌套形状兜底 + 去重 + 去空。"""
     result = {

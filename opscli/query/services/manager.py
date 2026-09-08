@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -556,8 +557,11 @@ class QueryManager:
         template = (execution_ref or {}).get("query_template")
         if not isinstance(template, dict):
             raise InvalidPayloadError("execution_ref 缺少 query_template，无法执行")
-        # 删除 None 占位键（orderBy/limit 未填时不下发），其余键原样转发
-        payload = {key: value for key, value in template.items() if value is not None}
+        # 深拷贝后删除 None 占位键，避免执行期的操作符归一污染规划合同。
+        payload = deepcopy({key: value for key, value in template.items() if value is not None})
+        filters = payload.get("filters")
+        if isinstance(filters, list) and filters:
+            self._validate_simple_filter_operators(filters)
         return self.client.cli_simple_query(payload)
 
     def _validate_simple_fields(
@@ -1952,7 +1956,8 @@ class QueryManager:
             raise InvalidPayloadError("where 必须是 JSON 对象")
         return payload
 
-    # 操作符标准化映射：将 Python/SQL 风格符号转换为服务端语义操作符
+    # 操作符标准化映射：将符号和历史别名转换为查询服务原生操作符。
+    # 单值不等于的权威契约是 ne；neq 会被 querySpec.where 拒绝。
     _WHERE_OP_MAP: dict[str, str] = {
         ">=": "gte",
         "<=": "lte",
@@ -1960,12 +1965,14 @@ class QueryManager:
         "<": "lt",
         "=": "eq",
         "==": "eq",
-        "!=": "neq",
-        "<>": "neq",
+        "!=": "ne",
+        "<>": "ne",
+        "neq": "ne",
+        "notEquals": "ne",
     }
 
     _VALID_FILTER_OPERATORS: set[str] = {
-        "eq", "neq", "lt", "lte", "gt", "gte",
+        "eq", "ne", "lt", "lte", "gt", "gte",
         "in", "not_in", "between", "like", "not_like",
         "is_null", "is_not_null",
     }
@@ -1976,7 +1983,7 @@ class QueryManager:
         """解析 where 简写条件：field|operator|value_json。
 
         操作符支持两种写法：
-        - 语义操作符（服务端原生）：between, eq, neq, gt, gte, lt, lte, in
+        - 语义操作符（服务端原生）：between, eq, ne, gt, gte, lt, lte, in
         - 符号操作符（自动转换）：>=, <=, >, <, =, ==, !=, <>
         """
         parts = raw.split("|", 2)

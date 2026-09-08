@@ -178,7 +178,8 @@ opscli query simple --table-id "$TABLE_ID" --payload payload.json --run --pretty
 `Out-File -Encoding utf8` 会写 BOM 头，CLI 已自动兼容，无需额外处理。
 
 **过滤操作符**：`filters[].operator` 可以写 `=`、`>=`、`<=`、`!=` 等符号形态，
-CLI 会自动归一为服务端要求的 `eq` / `gte` / `lte` / `neq`；
+CLI 会自动归一为服务端要求的 `eq` / `gte` / `lte` / `ne`；历史写法
+`neq` / `notEquals` 也会兼容归一为 `ne`。单值排除使用 `ne`，数组排除使用 `not_in`；
 写了服务端不支持且无法归一的符号时，CLI 会在本地直接报错并列出完整支持清单，
 不会浪费一次网络往返。
 

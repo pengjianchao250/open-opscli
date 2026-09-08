@@ -10,7 +10,7 @@ description: >
   即可，合同未给出 recovery_command 时不得自行升级）；只有规划器客观不可用（澄清/阻断、命令报错重跑仍失败、
   命令窗口连续超时、opscli 命令无法启动）时才转 SKILL.md 的降级路径；
   任何路径都禁止凭记忆手拼查询参数或使用未经元数据核对的字段。
-version: 1.4.2
+version: 1.4.4
 ---
 
 # ops-dataset-query
@@ -50,7 +50,7 @@ opscli query flow "$USER_REQUEST" --result-dir "$RESULT_DIR"
 
 1. `data_state` 不是 `ready`（规划合同里只有 `ready` / `missing` / `not_required` 三种取值）：规划器已内置一次同步刷新兜底；若仍返回 `status=blocked, recovery_state=refresh_failed`，按规划结果中 `model_view.recovery_command`（即 `opscli skills upgrade ops-dataset-query`）执行后从头开始，刷新仍失败则向用户说明元数据异常并停止，不反复重试。登录或账号变更、元数据所有权不明或数据状态不匹配时也必须刷新或升级；客户端不推断账号身份。
 2. `status=clarify_required`：按 `clarification_reason_codes` + `clarification_messages_zh` 提问；规划结果给出 `dataset_candidates_zh`（候选卡片）、`field_suggestions_zh`（近似字段建议，形态 `[{requested, candidates_zh[]}]`；`metric_not_in_dataset` 时指出当前数据集没有点名的指标，`dimension_not_in_dataset` 时指出「各X/每个X」点名的分组维度不在当前数据集，两类被点名却找不到的字段同时列在 `model_view.unknown_requested_fields`）、`component_candidates_zh`（筛选组件当前账号可见取值，`component_filter_*` 类澄清时下发）、`unsupported_currencies`（白名单外币种，`unsupported_currency` 时下发）或 `pending_confirmations_zh` 时，必须把它们作为选项/口径呈现；确认后把明确口径写回用户请求并重新规划。`blocked` 则按 `recovery_command`/阻断原因处置；`next_action=report_component_enum_defect` 表示组件枚举调用失败（网络/代理抖动或组件元数据异常）——原样重跑一次，仍失败按 `references/feedback-guide.md` 提交一次反馈并停止，不得放大为全范围查询。
-   - 未明确指定数据集时，规划器优先检查当前账号已授权的“即时综合数据集”。该推荐表通过业务与字段指导校验后，`default_dataset_recommendation_zh.auto_selected=true` 且 `confirmation_required=false`，直接按该数据集继续，不调用提问工具。请求没有命中任何具体查询字段、仍无法确定要查什么时，只询问采用哪些推荐字段，不再二次确认数据集；推荐表本身不满足业务或字段要求时仍按候选歧义正常澄清，不得强行使用。
+   - 未明确指定数据集时，规划器优先检查当前账号已授权的“即时综合数据集”。该推荐表通过业务与字段指导校验后，`default_dataset_recommendation_zh.auto_selected=true` 且 `confirmation_required=false`，直接按该数据集继续，不调用提问工具，也不得因其他普通数据集的文本打分更高而改选。用户显式指定数据集、明确拒绝推荐表，或请求命中账单销售、流量转化等专用业务提示时，仍按对应数据集处理。请求没有命中任何具体查询字段、仍无法确定要查什么时，只询问采用哪些推荐字段，不再二次确认数据集；推荐表本身不满足业务或字段要求时仍按候选歧义正常澄清，不得强行使用。
 3. `model_view` 只含用户可见中文结论；最终回答必须覆盖 `answer_contract.required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。
 4. **趋势/按日/每天类表述**（「按日趋势」「每天的」「趋势」等）规划器会自动把数据集主日期字段加为分组维度，并在 `answer_contract.required_disclosures_zh` 说明「按日期序列表述」；结论必须按日期序列讲，不得只报合计。原文含「不按日拆分」等否定语境时不加。**排序由规划器负责**：模板含时间粒度维度（日期/月份等）且用户未点名排序时，规划器已把 `orderBy: [{"field": <日期字段>, "desc": false}]`（按日期升序）写进模板；执行器若发现服务端未按此排序会本地重排，并在 `result_disclosures.order_fallback` / `order_disclosure_zh` 披露。Agent 不需要、也不得自行对趋势结果重新排序或改写模板排序。
 5. **时间口径以规划结果为准**：`model_view.time_scope_zh`、`model_view.time_resolution_zh` 与 `execution_ref.time_scope` 是唯一日期窗口来源。`本月/上月/近7天/近30天/近30tian` 等未显式年份的相对描述，由规划器直接调用 Python `datetime`，按 Asia/Shanghai 当前日期和当前年份确定绝对日期（`本月` 为整自然月：1 日至月末，月末未到只作数据更新进度披露）；跨年边界以 Python 日历结果为准。禁止自行心算、猜测年份、使用模型知识截止时间或改写规划结果。相对时间一旦被规划器唯一解析，展示绝对日期后直接执行，不再要求用户确认；只有 `is_default=true`（原文未给任何时间）才必须询问是否采用默认近 30 天。复杂任务拆成子步骤时，每次调用规划器都必须带上原请求或已锁定的绝对起止日期，禁止只传丢失时间范围的步骤摘要。
@@ -105,8 +105,9 @@ Excel 的格式、明细、口径页与校验按 `references/chart-excel-guide.m
 ## 构造与执行
 
 1. CLI 查询参数由规划器生成并由一体化入口原样执行；Agent 不再参与拼参。降级态下参数只能取自 `execution_ref.fallback_catalog`、`opscli query intent` 候选或 `opscli query metadata --dataset` 返回的字段清单，仍禁止凭记忆手拼。MCP 字段只采用当前数据集 metadata。**TopN/排序由规划器解析**：「前3」「前十」「top5」这类**无行数单位**的写法现在也会被解析为 `limit`（唯一例外是数字后紧跟时间单位的时间表述，如「前7天」「前3个月」，那是时间范围不是行数）；本次只选了一个指标时按该指标降序，用户显式写了「按X降序/升序」时按 X 排。解析结果由规划器直接写入 `query_template` 的 `orderBy`/`limit`，Agent 不得改写。**多指标且用户未点名排序字段时规划器不下发排序**，改为强制披露（`order_unresolved` 口径：本次返回的是完整结果集、按服务端自然序排列，不得当作 Top N 汇报）——此时把该披露如实转述，或让用户点明排序字段后写回原文重跑。仅当用户确有该意图而合同确实未下发排序/行数时，才可在命令上追加 `--limit <N>` / `--order-by <结果字段>[:asc|desc]`（形态见 `references/cli.md`），显式参数会覆盖模板同名值；未识别到该类明确意图时不得凭空追加这两个参数。
-2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门名称额外允许阿拉伯数字与中文数字等价；完整部门词优先于其他组件的子串匹配，`十一部` 不得被拆成销售小组 `一部`。唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
+2. 不发明默认筛选。未指定筛选时只说明 `current_authenticated_account` 可见范围；明确筛选必须先经组件枚举——平台走规划结果的自动枚举/`platform_enum_command`，部门/国家等其他筛选用 `execution_ref.filter_components` 中对应组件的 `component_table_id` 查枚举，并严格遵守 `execution_ref.filter_value_match_policy`：先做规范化完整等值比较，部门编号中的多位阿拉伯数字与中文数字统一归一，并保留 `项目` 前缀作为组织身份的一部分；`十二部`、`项目十一部`、`22部`、`项目二十二部` 等完整编号部门词优先于其他组件的子串匹配，不得截取其中的 `一部` 或 `二部` 作为销售小组，也不得用这些子串命中 `一部-B组` 等销售小组枚举的主段。唯一等值命中时只使用该枚举原值并直接执行，禁止再次询问用户是否采用，也禁止把仅包含请求文本的其他成员一并加入（`9部` 只匹配 `九部`，不匹配 `项目九部`；`范泰克` 只匹配 `范泰克`，不匹配 `范泰克体系外`）。筛选值处于“排除/剔除/去除/不含/不等于/除外/之外/以外/`!=`/`<>`/`not in`”语境时必须保留排除极性：单值用 `!=`，多值用 `not_in`，禁止反转成 `=`/`in`；同一值的正负极性冲突时停止并澄清。无唯一等值命中时停止并让用户重选，不得用子串模糊扩展；组件不可用时只阻断该筛选，不扩大范围。
 3. 环比、同比和上期对比必须同时传主周期日期 `filters` 与 `dataComparison`（模板已按 `time_scope` 预填，执行器也会硬校验）。
+   用户点名多个指标或使用稳定别名时，`model_view.metrics` 与 `query_template.metrics` 必须完整覆盖全部指标；例如“收入及毛利”必须同时落到数据集口径“销售额、毛利”，不得因已命中其中一个就静默忽略另一个。任一点名指标缺失时按 `metric_not_in_dataset` 澄清，不得执行残缺模板。
 4. **执行确认分级**：数据集、字段、时间、筛选、排序、行数全部无歧义时，用一段中文陈述式披露口径后**直接执行，不等待用户回复**；只有 `clarify_required`、默认时间口径未确认、或含 `recommended` 字段未说明时才通过提问等待确认。
 5. `query_mode=dataset_query` 的 CLI 正常路径只用一体化流程（内含规划、完整性校验、执行前校验、排序生效校验与兜底、截断披露和证据合同）：
 
