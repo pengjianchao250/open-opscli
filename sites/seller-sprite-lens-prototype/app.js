@@ -1,15 +1,10 @@
-import { configureOpsMcpApi, opsMcpApi } from "@aukeys/ops-mcp-api-sdk";
-
-const LOCAL_API_BASE_URL = ["127.0.0.1", "localhost"].includes(location.hostname)
-  ? "http://127.0.0.1:8765"
-  : undefined;
 import { formatMatrixValue, matrixCsv, resultSheets, visibleMatrixRows } from "./result-utils.js";
 import { buildScenarioParams, periodOptionsForScenario, scenarioDefaults, scenarioPeriod, SCENARIO_GROUPS, SCENARIOS, SITE_OPTIONS } from "./scenarios.js";
 
 const JOB_STORAGE_KEY = "seller-sprite-lens-jobs";
 const PREFERENCE_STORAGE_KEY = "seller-sprite-lens-preferences";
 const JOB_LIMIT = 30;
-const SELLER_SPRITE_API_PATH = "/api/v1/seller-sprite";
+const SELLER_SPRITE_API_PATH = "./api/v1/seller-sprite";
 
 function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -22,13 +17,6 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function normalizeApiBaseUrl(value) {
-  return String(value || "")
-    .trim()
-    .replace(/\/api\/v1\/seller-sprite\/?$/, "")
-    .replace(/\/$/, "");
 }
 
 function createJobId(scenario, cryptoValue = globalThis.crypto) {
@@ -124,10 +112,7 @@ class SellerSpriteLens extends HTMLElement {
     super();
     const preferences = loadJson(PREFERENCE_STORAGE_KEY, {});
     const scenario = SCENARIOS[preferences.scenario] ? preferences.scenario : "keyword-reverse";
-    const apiBaseUrl = normalizeApiBaseUrl(preferences.apiBaseUrl ?? preferences.apiBase);
-    configureOpsMcpApi({ apiBaseUrl: apiBaseUrl || LOCAL_API_BASE_URL });
     this.state = {
-      apiBaseUrl,
       theme: ["dark", "business"].includes(preferences.theme) ? "business" : "corporate",
       scenario,
       site: preferences.site || "US",
@@ -168,7 +153,6 @@ class SellerSpriteLens extends HTMLElement {
 
   savePreferences() {
     localStorage.setItem(PREFERENCE_STORAGE_KEY, JSON.stringify({
-      apiBaseUrl: this.state.apiBaseUrl,
       theme: this.state.theme,
       scenario: this.state.scenario,
       site: this.state.site,
@@ -177,9 +161,10 @@ class SellerSpriteLens extends HTMLElement {
   }
 
   async request(path, options = {}) {
-    const response = await opsMcpApi.request(`${SELLER_SPRITE_API_PATH}${path}`, {
+    const response = await fetch(`${SELLER_SPRITE_API_PATH}${path}`, {
       ...options,
       headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      credentials: "same-origin",
     });
     const text = await response.text();
     let payload;
@@ -187,7 +172,7 @@ class SellerSpriteLens extends HTMLElement {
       payload = text ? JSON.parse(text) : null;
     } catch {
       throw new Error(response.headers.get("content-type")?.includes("text/html")
-        ? "接口返回了网页，请检查 API 地址。"
+        ? "站点 API 返回了网页，请检查 AppHub 路由配置。"
         : "接口返回内容不是有效 JSON。");
     }
     if (!response.ok || payload?.success === false) throw new Error(responseError(payload, response.status));
@@ -216,12 +201,7 @@ class SellerSpriteLens extends HTMLElement {
       return;
     }
     this.state[field] = target.type === "checkbox" ? target.checked : target.value;
-    if (field === "apiBaseUrl") {
-      configureOpsMcpApi({
-        apiBaseUrl: this.state.apiBaseUrl.trim() || LOCAL_API_BASE_URL,
-      });
-    }
-    if (["apiBaseUrl", "site", "period"].includes(field)) this.savePreferences();
+    if (["site", "period"].includes(field)) this.savePreferences();
     if (field === "filter") {
       this.state.page = 1;
       queueMicrotask(() => this.render());
@@ -489,10 +469,6 @@ class SellerSpriteLens extends HTMLElement {
     return `<header class="topbar navbar bg-base-100"><div class="topbar-left"><button type="button" class="icon-button mobile-menu btn btn-square btn-ghost btn-sm" data-sidebar aria-label="打开场景导航">菜单</button><div><span class="eyebrow">SELLERSPRITE DATA WORKSPACE</span><h1>${escapeHtml(SCENARIOS[this.state.scenario].title)}</h1></div></div><div class="topbar-actions">${this.renderQuota()}<label class="theme-toggle"><span>暗色</span><input class="toggle toggle-primary toggle-sm" type="checkbox" data-field="theme" ${this.state.theme === "business" ? "checked" : ""}></label></div></header>`;
   }
 
-  renderConnection() {
-    return `<details class="connection bg-base-100"><summary>连接设置</summary><div class="connection-grid"><label class="form-field"><span>MCP API 地址（可选）</span><input class="input input-bordered input-sm w-full" data-field="apiBaseUrl" value="${escapeHtml(this.state.apiBaseUrl)}" aria-label="MCP API 地址" placeholder="留空使用当前站点地址"></label><button type="button" class="secondary-button btn btn-outline btn-sm" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button></div><p>连接时直接复用当前浏览器的 AppHub Token、Session 和用户身份。</p></details>`;
-  }
-
   renderRequestPanel() {
     const definition = SCENARIOS[this.state.scenario];
     const periodOptions = periodOptionsForScenario(this.state.scenario);
@@ -502,8 +478,7 @@ class SellerSpriteLens extends HTMLElement {
         <div class="common-grid bg-base-200"><label class="form-field"><span>站点<span class="required">必填</span></span><select class="select select-bordered select-sm w-full" data-field="site">${SITE_OPTIONS.map(([code, label]) => `<option value="${code}" ${this.state.site === code ? "selected" : ""}>${code} · ${label}</option>`).join("")}</select></label>${periodField}<label class="form-field"><span>返回数量</span><select class="select select-bordered select-sm w-full" data-field="pageSize"><option value="100" selected>100 条</option></select></label></div>
         <div class="form-groups">${definition.groups.map((group) => `<details class="form-group bg-base-100" ${group.open ? "open" : ""}><summary><span>${escapeHtml(group.label)}</span><small>${group.fields.length} 项</small></summary><div class="field-grid">${group.fields.map((item) => this.renderField(item)).join("")}</div></details>`).join("")}</div>
         <details class="form-group advanced bg-base-100"><summary><span>高级参数 JSON</span><small>覆盖或补充表单</small></summary><label class="form-field"><textarea class="textarea textarea-bordered textarea-sm w-full" rows="5" data-field="advancedJson" placeholder='例如 {"orderField":"searches"}'>${escapeHtml(this.state.advancedJson)}</textarea></label></details>
-        ${this.renderConnection()}
-        <div class="form-actions"><button class="primary-button btn btn-primary btn-sm" type="submit" ${this.state.busy ? "disabled" : ""}>${this.state.busy ? "处理中..." : "提交 JSON 任务"}</button><button class="secondary-button btn btn-outline btn-sm" type="button" data-sample>载入样例</button></div>
+        <div class="form-actions"><button class="primary-button btn btn-primary btn-sm" type="submit" ${this.state.busy ? "disabled" : ""}>${this.state.busy ? "处理中..." : "提交 JSON 任务"}</button><button class="secondary-button btn btn-outline btn-sm" type="button" data-connect ${this.state.busy ? "disabled" : ""}>验证连接</button><button class="secondary-button btn btn-outline btn-sm" type="button" data-sample>载入样例</button></div>
         <div class="status-message alert alert-soft alert-${daisyTone(this.state.tone)}" role="status">${escapeHtml(this.state.status)}</div>
       </form></section>`;
   }

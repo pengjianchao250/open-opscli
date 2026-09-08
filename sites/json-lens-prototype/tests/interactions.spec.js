@@ -1,12 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { installOpsAuthMocks } from "./ops-auth-fixture.js";
 
-const API_URL = "http://127.0.0.1:8765/api/v1/keepa/run";
-const LOCALHOST_API_URL = "http://localhost:8765/api/v1/keepa/run";
-
-test.beforeEach(async ({ context, page }) => {
-  await installOpsAuthMocks(context, page);
-});
+const API_URL = "http://127.0.0.1:4173/api/v1/keepa/run";
 
 async function fulfillJson(route, status, json) {
   await route.fulfill({ status, contentType: "application/json", json });
@@ -30,16 +24,18 @@ test("缺少 crypto.randomUUID 时仍可提交并记录历史", async ({ page })
   await expect(page.locator("[data-history-panel] .badge")).toHaveText("1");
 });
 
-test("连接设置可覆盖 MCP API 地址", async ({ page }) => {
-  await page.route(LOCALHOST_API_URL, async (route) => {
-    await fulfillJson(route, 200, { success: true, data: [{ asin: "B0LOCALHOST" }], error: null });
+test("固定使用 AppHub 应用前缀内的相对 API", async ({ page }) => {
+  let requestUrl;
+  await page.route(API_URL, async (route) => {
+    requestUrl = route.request().url();
+    await fulfillJson(route, 200, { success: true, data: [{ asin: "B0APPHUB" }], error: null });
   });
   await page.goto("/?variant=a");
-  await page.locator("details.connection-options summary").click();
 
-  await page.getByLabel("MCP API 地址").fill(LOCALHOST_API_URL);
   await page.getByRole("button", { name: "运行商品关键词搜索" }).click();
   await expect(page.locator(".status-line")).toContainText("请求成功");
+  expect(new URL(requestUrl).pathname).toBe("/api/v1/keepa/run");
+  await expect(page.getByLabel("MCP API 地址")).toHaveCount(0);
 });
 
 test("Product Finder 会转换并合并复杂筛选参数", async ({ page }) => {
@@ -121,7 +117,7 @@ for (const responseCase of [
   {
     name: "意外 HTML 响应",
     response: async (route) => route.fulfill({ status: 502, contentType: "text/html", body: "<h1>Bad gateway</h1>" }),
-    message: "接口地址返回了网页而不是 JSON",
+    message: "站点 API 返回了网页而不是 JSON",
   },
 ]) {
   test(`${responseCase.name}会显示可操作的失败提示`, async ({ page }) => {

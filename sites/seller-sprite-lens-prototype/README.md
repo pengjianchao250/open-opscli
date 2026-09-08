@@ -17,16 +17,9 @@ npm install
 npm run dev
 ```
 
-打开 `http://127.0.0.1:4174/`，在连接设置中填写本地 opscli REST API 地址。
+打开 `http://127.0.0.1:4174/`。开发服务器会把 `/api` 代理到本地 `http://127.0.0.1:8765`。本地 FastAPI 需要显式启用 `LOCAL_AUTH_FALLBACK_ENABLED=true`，或在 `127.0.0.1` 域下设置 `polarisUserToken` Cookie；页面不读取 localStorage 登录信息。
 
-在浏览器开发者工具中为 `http://127.0.0.1:4174` 设置 OPS 登录态：
-
-- `localStorage.OPERATION_TOKEN`：OPS Token，可带或不带 `Bearer` 前缀。
-- `localStorage.OPERATION_USER_TOKEN`：可选 OPS Session；也可只设置 Cookie。
-- `localStorage.OPERATION_USER_INFO`：可选用户 JSON，viewer 模式至少包含 `email`。
-- Cookie `polarisUserToken`：当前 OPS Session；如登录态包含 `opscliDeviceCode`，一并设置。
-
-页面通过 `@aukeys/ops-mcp-api-sdk` 直接携带 AppHub Token、Session、用户身份和 Cookie。查询参数、任务编号和任务状态仍保存在 `localStorage`。
+页面只调用应用前缀内的相对 `./api/v1/seller-sprite/*` 地址。部署到 AppHub 后，浏览器 Cookie 由同源网关验证，网关注入 Viewer 身份头并将请求转发给 FastAPI；前端不读取或保存认证凭证。查询参数、任务编号和任务状态仍保存在 `localStorage`。
 
 ## 测试
 
@@ -35,4 +28,4 @@ npm install
 npm test
 ```
 
-单元测试覆盖场景参数转换、JSON v2 工作表、筛选排序和 CSV。Playwright 覆盖 AppHub 登录态注入、任务提交、异步续查、连接额度、任务恢复、DaisyUI 组件合同、主题切换和桌面/移动侧边栏。
+单元测试覆盖场景参数转换、JSON v2 工作表、筛选排序和 CSV。Playwright 覆盖 AppHub 相对 API 路径、任务提交、异步续查、服务与额度检查、任务恢复、DaisyUI 组件合同、主题切换和桌面/移动侧边栏。

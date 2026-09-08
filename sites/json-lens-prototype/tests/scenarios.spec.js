@@ -1,11 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { installOpsAuthMocks } from "./ops-auth-fixture.js";
 
-const API_URL = "http://127.0.0.1:8765/api/v1/keepa/run";
-
-test.beforeEach(async ({ context, page }) => {
-  await installOpsAuthMocks(context, page);
-});
+const API_URL = "http://127.0.0.1:4173/api/v1/keepa/run";
 
 const scenarioCases = [
   {

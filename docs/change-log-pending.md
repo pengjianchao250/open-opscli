@@ -1,3 +1,12 @@
+## 2026-09-08 AppHub 站点 - 删除浏览器认证 SDK 并使用相对 API
+
+**变更原因**：AppHub 应用以 `/ops-app/{appId}/{slug}/` 同源前缀运行，浏览器 Cookie 由平台网关验证，网关注入 Viewer 身份头并在转发到应用前清除原始 Cookie。站点前端继续读取 localStorage、拼装认证头和使用根级 `/api/v1` 会重复平台职责，并绕过应用部署前缀。
+**改动点**：删除 `sites/ops-mcp-api-sdk`；JSON Lens 与 SellerSprite Lens 改为请求 `./api/v1/*` 相对地址，不再读取、保存或发送 AppHub Token、Session 和用户头；删除自定义 API 地址输入；SellerSprite 保留服务及额度检查按钮；两个 Vite 开发服务器增加 `/api` 到本地 `127.0.0.1:8765` 的代理；同步清理依赖、测试和使用说明。
+**验证结果**：JSON Lens 单元测试 `6 passed`、Playwright `36 passed`，SellerSprite Lens 单元测试 `11 passed`、Playwright `8 passed`；两个 Vite 生产构建通过，产物脚本和样式均使用 `./assets/*` 相对地址；浏览器回归确认同源 Cookie 自动随相对 API 请求发送，前端不再生成 `X-Ops-Token`、`X-Session-Id` 或 `X-User-*`；SDK 与旧认证配置引用扫描零残留，`git diff --check` 通过。
+**影响范围**：两个 `sites/*-lens-prototype` 的浏览器请求与本地联调方式；FastAPI 的 AppHub viewer/session/local 鉴权、SellerSprite Collector 内部网关 Key，以及 `/mcp`、`/sse` MCP API Key 鉴权均不变。
+**回滚方式**：恢复 `sites/ops-mcp-api-sdk`、两个站点的包依赖和认证头注入，并把相对 API 请求恢复为可配置的独立 REST 地址。
+---
+
 ## 2026-09-08 REST API - Keepa 与 SellerSprite 统一 AppHub 认证
 
 **变更原因**：Keepa、SellerSprite 的浏览器 REST 接口仍通过 OPS 配置接口换取 MCP API Key，和 AppHub 标准的 viewer/session/local 认证重复；SellerSprite 又由通用 MCP 代理到 Collector，不能直接把浏览器凭证当 Collector MCP Key 使用。

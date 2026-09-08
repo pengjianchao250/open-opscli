@@ -81,10 +81,10 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; ma
 .scenario-code { flex: 0 0 auto; color: var(--text-muted); font-family: ui-monospace, monospace; font-size: 10px; }
 .common-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-field); }
 .form-groups { display: grid; gap: 10px; margin-top: 12px; }
-.form-group, .connection { border: 1px solid var(--border); border-radius: var(--radius-field); }
-.form-group > summary, .connection > summary { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 13px; font-size: 12px; font-weight: 650; }
+.form-group { border: 1px solid var(--border); border-radius: var(--radius-field); }
+.form-group > summary { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 0 13px; font-size: 12px; font-weight: 650; }
 .form-group > summary small { color: var(--text-muted); font-weight: 500; }
-.form-group[open] > summary, .connection[open] > summary { border-bottom: 1px solid var(--border); }
+.form-group[open] > summary { border-bottom: 1px solid var(--border); }
 .field-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px; }
 .form-field { display: grid; min-width: 0; gap: 5px; color: var(--text-muted); font-size: 11px; font-weight: 600; }
 .form-field > span { min-height: 16px; }
@@ -98,9 +98,6 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; ma
 .check-field input { flex: 0 0 auto; }
 .advanced { margin-top: 10px; }
 .advanced .form-field { padding: 14px; }
-.connection { margin-top: 10px; }
-.connection-grid { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(260px, 1.3fr) auto; align-items: end; gap: 12px; padding: 14px; }
-.connection p { margin: -4px 14px 14px; color: var(--text-muted); font-size: 10px; }
 .form-actions { gap: 8px; margin-top: 14px; }
 .primary-button, .secondary-button, .icon-button { letter-spacing: 0; font-size: 12px; font-weight: 650; }
 .status-message { min-height: 34px; margin-top: 10px; padding: 8px 10px; font-size: 11px; }
@@ -191,7 +188,6 @@ td pre { max-width: 480px; overflow: auto; white-space: pre-wrap; }
   .quota { display: none; }
   .request-panel { padding: 14px; }
   .common-grid, .field-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .connection-grid { grid-template-columns: 1fr; }
   .result-header { align-items: flex-start; flex-direction: column; }
   .result-tools { width: 100%; flex-wrap: wrap; justify-content: flex-start; }
   .result-tools > input { flex: 1 1 180px; }

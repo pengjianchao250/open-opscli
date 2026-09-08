@@ -1,12 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
-import { OPERATION_TOKEN, SESSION_ID, installOpsAuthMocks } from "./ops-auth-fixture.js";
 
-const API_URL = "http://127.0.0.1:8765/api/v1/keepa/run";
-
-test.beforeEach(async ({ context, page }) => {
-  await installOpsAuthMocks(context, page);
-});
+const API_URL = "http://127.0.0.1:4173/api/v1/keepa/run";
 
 async function mockKeepaApi(page, onPost = () => {}) {
   await page.route(API_URL, async (route) => {
@@ -34,8 +29,13 @@ async function mockKeepaApi(page, onPost = () => {}) {
   });
 }
 
-test("商品查询发送正确的 AppHub 认证与请求体", async ({ page }) => {
+test("商品查询通过 AppHub 相对路径发送请求体", async ({ context, page }) => {
   let capturedRequest;
+  await context.addCookies([{
+    name: "polarisUserToken",
+    value: "browser-session",
+    url: "http://127.0.0.1:4173",
+  }]);
   await mockKeepaApi(page, (request) => { capturedRequest = request; });
   await page.goto("/?variant=a");
 
@@ -47,9 +47,11 @@ test("商品查询发送正确的 AppHub 认证与请求体", async ({ page }) =
 
   await expect(page.locator(".status-line")).toContainText("请求成功");
   expect(capturedRequest).toBeTruthy();
-  expect(capturedRequest.headers()["x-ops-token"]).toBe(OPERATION_TOKEN);
-  expect(capturedRequest.headers()["x-session-id"]).toBe(SESSION_ID);
-  expect(capturedRequest.headers()["x-user-email"]).toBe("user@example.com");
+  expect(new URL(capturedRequest.url()).pathname).toBe("/api/v1/keepa/run");
+  expect(capturedRequest.headers()["x-ops-token"]).toBeUndefined();
+  expect(capturedRequest.headers()["x-session-id"]).toBeUndefined();
+  expect(capturedRequest.headers()["x-user-email"]).toBeUndefined();
+  expect(capturedRequest.headers().cookie).toContain("polarisUserToken=browser-session");
   expect(capturedRequest.postDataJSON()).toEqual({
     scenario: "product",
     site: "US",
@@ -210,7 +212,7 @@ test("历史查询只保存查询条件并可重新载入", async ({ page }) => 
   expect(serialized).not.toContain("Integration fixture");
   expect(serialized).not.toContain(API_URL);
   const storage = await page.evaluate(() => JSON.stringify(localStorage));
-  expect(storage).toContain(OPERATION_TOKEN);
+  expect(storage).not.toContain("OPERATION_TOKEN");
 
   const historyPanel = page.locator("[data-history-panel]");
   const historyContent = page.locator("[data-history-content]");
@@ -227,8 +229,7 @@ test("历史查询只保存查询条件并可重新载入", async ({ page }) => 
   await page.getByRole("button", { name: "清空历史" }).click();
   expect(await page.evaluate(() => localStorage.getItem("json-lens-query-history"))).toBeNull();
   await expect(page.locator("[data-history-panel] .badge")).toHaveText("0");
-  await page.locator("details.connection-options summary").click();
-  await expect(page.getByLabel("MCP API 地址")).toHaveValue("");
+  await expect(page.getByLabel("MCP API 地址")).toHaveCount(0);
   await expect(page.getByLabel("API Key")).toHaveCount(0);
 });
 

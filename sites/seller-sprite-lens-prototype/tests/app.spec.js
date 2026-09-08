@@ -1,25 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-const API_BASE = "http://127.0.0.1:8765/api/v1/seller-sprite";
-const OPERATION_TOKEN = "browser-operation-token";
-const SESSION_ID = "browser-session";
+const API_BASE = "http://127.0.0.1:4174/api/v1/seller-sprite";
 
 async function fulfill(route, status, json) {
   await route.fulfill({ status, contentType: "application/json", json });
 }
-
-test.beforeEach(async ({ context, page }) => {
-  await context.addCookies([{
-    name: "polarisUserToken",
-    value: "browser-session",
-    url: "http://127.0.0.1:4174",
-  }]);
-  await page.addInitScript(({ token, sessionId }) => {
-    localStorage.setItem("OPERATION_TOKEN", token);
-    localStorage.setItem("OPERATION_USER_TOKEN", sessionId);
-    localStorage.setItem("OPERATION_USER_INFO", JSON.stringify({ email: "user@example.com" }));
-  }, { token: OPERATION_TOKEN, sessionId: SESSION_ID });
-});
 
 function completedResult(jobId = "web-keyword-reverse-test") {
   return {
@@ -50,9 +35,14 @@ function completedResult(jobId = "web-keyword-reverse-test") {
   };
 }
 
-test("关键词反查提交 JSON 任务并显示 JSON v2 工作表", async ({ page }) => {
+test("关键词反查通过 AppHub 相对路径提交任务并显示 JSON v2 工作表", async ({ context, page }) => {
   let requestBody;
   let authHeaders;
+  await context.addCookies([{
+    name: "polarisUserToken",
+    value: "browser-session",
+    url: "http://127.0.0.1:4174",
+  }]);
   await page.route(`${API_BASE}/jobs`, async (route) => {
     requestBody = route.request().postDataJSON();
     authHeaders = route.request().headers();
@@ -74,9 +64,10 @@ test("关键词反查提交 JSON 任务并显示 JSON v2 工作表", async ({ pa
   await expect(page.locator(".status-message")).toContainText("任务完成");
   await expect(page.getByRole("cell", { name: "usb c charger" })).toBeVisible();
   await expect(page.getByRole("button", { name: /Unique Words/ })).toBeVisible();
-  expect(authHeaders["x-ops-token"]).toBe(OPERATION_TOKEN);
-  expect(authHeaders["x-session-id"]).toBe(SESSION_ID);
-  expect(authHeaders["x-user-email"]).toBe("user@example.com");
+  expect(authHeaders["x-ops-token"]).toBeUndefined();
+  expect(authHeaders["x-session-id"]).toBeUndefined();
+  expect(authHeaders["x-user-email"]).toBeUndefined();
+  expect(authHeaders.cookie).toContain("polarisUserToken=browser-session");
   expect(requestBody).toMatchObject({
     scenario: "keyword-reverse",
     params: { asin: "B012345678", includeHighFrequency: true },
@@ -158,7 +149,6 @@ test("连接检查读取服务端场景和额度", async ({ page }) => {
   await page.route(`${API_BASE}/scenarios`, (route) => fulfill(route, 200, { success: true, data: [{ scenario_id: "keyword-reverse" }, { scenario_id: "product-research" }], error: null }));
   await page.route(`${API_BASE}/quota`, (route) => fulfill(route, 200, { success: true, data: { limit: 5, remaining: 3 }, error: null }));
   await page.goto("/");
-  await page.locator("details.connection summary").click();
 
   await page.getByRole("button", { name: "验证连接" }).click();
 
@@ -166,7 +156,7 @@ test("连接检查读取服务端场景和额度", async ({ page }) => {
   await expect(page.locator(".quota")).toContainText("3 / 5");
 });
 
-test("AppHub 登录态复用且任务编号可在刷新后恢复", async ({ page }) => {
+test("AppHub 不在前端存凭证且任务编号可在刷新后恢复", async ({ page }) => {
   await page.route(`${API_BASE}/jobs`, async (route) => {
     const body = route.request().postDataJSON();
     await fulfill(route, 202, { success: true, data: { job_id: body.job_id, state: "queued" }, error: null });
@@ -177,14 +167,14 @@ test("AppHub 登录态复用且任务编号可在刷新后恢复", async ({ page
   await page.getByRole("button", { name: "提交 JSON 任务" }).click();
   await expect(page.locator(".job-item")).toHaveCount(1);
   const stored = await page.evaluate(() => JSON.stringify(localStorage));
-  expect(stored).toContain(OPERATION_TOKEN);
+  expect(stored).toContain("seller-sprite-lens-jobs");
+  expect(stored).not.toContain("OPERATION_TOKEN");
 
   await page.reload();
 
   await expect(page.locator(".job-item")).toHaveCount(1);
   await expect(page.locator(".job-item")).toContainText("关键词反查");
-  await page.locator("details.connection summary").click();
-  await expect(page.getByLabel("MCP API 地址")).toHaveValue("");
+  await expect(page.getByLabel("MCP API 地址")).toHaveCount(0);
   await expect(page.getByLabel("API Key")).toHaveCount(0);
 });
 

@@ -13,9 +13,6 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:report": "playwright show-report"
   },
-  "dependencies": {
-    "@aukeys/ops-mcp-api-sdk": "file:../ops-mcp-api-sdk"
-  },
   "devDependencies": {
     "@playwright/test": "1.62.1",
     "vite": "8.2.2"
