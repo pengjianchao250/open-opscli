@@ -31,6 +31,14 @@
       "tier": "ops",
       "reason": "现阶段发版仅保留 ops-auth 和 ops-dataset-query，暂不打包该 Skill"
     },
+    "ops-amazon-reviews": {
+      "source": true,
+      "wheel": true,
+      "binary": false,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "依赖宿主页面工具执行评论读取，MCP 仅提供静态规范入口"
+    },
     "ops-amazon-product-data": {
       "source": true,
       "wheel": true,
@@ -94,6 +102,14 @@
       "binary_full": true,
       "tier": "core",
       "reason": "认证基础能力，所有发行形态都需要"
+    },
+    "ops-app-data-builder": {
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "Codex 中基于标准模板 QueryGateway 为 opscli app 站点验证 OPS 用户隔离、Keepa 同步和 SellerSprite 异步数据合同，并生成前后端数据层、SQLite 迁移、测试和 data-spec"
     },
     "ops-dataset-query": {
       "source": true,
@@ -246,6 +262,14 @@
       "binary_full": true,
       "tier": "experimental",
       "reason": "运营问题导向的轻量 Agent 案例 Skill，复用卖家精灵、StyleSnap、Keepa 与 Google Trends 现有能力"
+    },
+    "ops-app-build-spec": {
+      "source": true,
+      "wheel": true,
+      "binary": false,
+      "binary_full": true,
+      "tier": "internal",
+      "reason": "内部 AppHub 模板克隆、项目级开发规范、真实数据访问、迁移和源码交付检查流程"
     },
     "ops-skills-sync": {
       "source": true,

@@ -38,6 +38,7 @@ def test_query_flow_requires_authenticated_user(monkeypatch):
 def test_query_flow_returns_shared_service_result(monkeypatch):
     """API 应把请求转换为共享查询服务调用，而不是重新实现规划逻辑。"""
     from opscli.api import app as api_module
+    from opscli.api.routers import query as query_router
 
     captured = {}
 
@@ -46,12 +47,12 @@ def test_query_flow_returns_shared_service_result(monkeypatch):
         lambda: "user@example.com",
     )
 
-    def fake_run(payload, *, user_email):
+    def fake_flow(payload, *, user_email):
         captured["payload"] = payload
         captured["user_email"] = user_email
         return {"status": "planned", "result": {"rows": 1}}
 
-    monkeypatch.setattr(api_module, "_run_query_flow", fake_run)
+    monkeypatch.setattr(query_router, "_query_flow", fake_flow)
     app = api_module.create_api_app()
 
     response = TestClient(app).post(
@@ -179,6 +180,7 @@ def test_keepa_scenarios_returns_public_definitions(monkeypatch):
 def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
     """Keepa REST 请求只做合同转换，执行结果沿用 MCP 的统一响应。"""
     from opscli.api import app as api_module
+    from opscli.api.routers import keepa as keepa_router
 
     monkeypatch.setattr(
         "opscli.mcp.tools.helpers._get_authenticated_user_email",
@@ -195,7 +197,7 @@ def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
             "quota": {"remaining": 4},
         }
 
-    monkeypatch.setattr(api_module, "_run_keepa_scenario", fake_run)
+    monkeypatch.setattr(keepa_router, "_run_keepa_scenario", fake_run)
     response = TestClient(api_module.create_api_app()).post(
         "/api/v1/keepa/run",
         json={
@@ -217,7 +219,8 @@ def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
 
 def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
     """API mode must be visible only during the delegated Keepa tool call."""
-    from opscli.api import app as api_module
+    from opscli.api.routers import keepa as keepa_router
+    from opscli.api.schemas.keepa import KeepaRunRequest
     from opscli.mcp.tools import keepa as keepa_module
 
     observed = {}
@@ -228,7 +231,7 @@ def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
         return {"success": True, "data": {"request_source": "api"}, "error": None}
 
     monkeypatch.setattr(keepa_module, "keepa_run", fake_keepa_run)
-    monkeypatch.setattr(api_module, "_trace_keepa_api", lambda message: None)
+    monkeypatch.setattr(keepa_router, "_trace_keepa_api", lambda message: None)
     monkeypatch.setattr(
         "opscli.mcp.instrumentation.quota_wrap",
         lambda fn, **kwargs: fn,
@@ -238,12 +241,12 @@ def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
         lambda fn, **kwargs: fn,
     )
 
-    payload = api_module.KeepaRunRequest(
+    payload = KeepaRunRequest(
         scenario="product-search",
         site="US",
         params={"keyword": "flashlight"},
     )
-    result = asyncio.run(api_module._run_keepa_scenario(payload))
+    result = asyncio.run(keepa_router._run_keepa_scenario(payload))
 
     assert result["data"]["request_source"] == "api"
     assert observed["during"] is True

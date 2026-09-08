@@ -134,7 +134,29 @@ class AnswerReportFormatter:
         if not isinstance(answers, list) or not answers:
             return ""
         questions = self._extract_questions(data)
-        return self._format_official_report(data, answers, questions)
+        if self._is_diagnosis_report(answers, questions):
+            return self._format_official_report(data, answers, questions)
+        # 普通问题复用逐题渲染，避免按答案位置误套标题、五点等诊断模板。
+        return "\n\n---\n\n".join(
+            self._format_section(index, answer, self._question_at(questions, index))
+            for index, answer in enumerate(answers, start=1)
+        )
+
+    def _is_diagnosis_report(self, answers: list[Any], questions: list[str]) -> bool:
+        """按题目要求的固定章节识别诊断报告，保留采集器的无题目精简结果。"""
+        if not questions:
+            return all(isinstance(answer, dict) and "answer" in answer for answer in answers)
+        if len(questions) != len(answers):
+            return False
+        for index, question in enumerate(questions, start=1):
+            titles = DIAGNOSIS_SUBSECTIONS.get(index)
+            compact_question = re.sub(r"\s+", "", question)
+            if not titles or not all(
+                f"{section_index}、{title}" in compact_question
+                for section_index, title in titles.items()
+            ):
+                return False
+        return True
 
     def _format_structured_diagnosis_report(self, data: dict, report: dict[str, Any]) -> str:
         """按结构化 JSON 渲染 Listing 优化诊断报告。"""
@@ -416,15 +438,16 @@ class AnswerReportFormatter:
         explicit_answer = str(answer_data.get("answer") or "").strip()
         if explicit_answer:
             return self._normalize_answer_markdown(explicit_answer)
-        product_links = self._format_product_links(answer_data.get("productLinks"))
-        if product_links:
-            return self._normalize_answer_markdown("\n".join(product_links))
+        # 商品链接是附加信息，不能抢在实际正文或总结之前返回。
         body_lines = self._format_answer_body(index, answer_data)
         if body_lines:
             return self._normalize_answer_markdown("\n".join(body_lines))
         summary_text = str(answer_data.get("summary") or answer_data.get("summaryText") or "").strip()
         if summary_text:
             return self._normalize_answer_markdown(summary_text)
+        product_links = self._format_product_links(answer_data.get("productLinks"))
+        if product_links:
+            return self._normalize_answer_markdown("\n".join(product_links))
         return ""
 
     def _normalize_answer_markdown(self, text: str) -> str:

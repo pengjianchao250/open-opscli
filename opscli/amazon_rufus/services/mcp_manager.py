@@ -11,11 +11,12 @@ from opscli.amazon_rufus.domain.mcp_models import (
     RufusRemoteConsentRequest,
     RufusWatchLoginRequest,
 )
-from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
+from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 from opscli.amazon_rufus.transport.client import RufusTransportClient
 from opscli.auth import AuthClient
+from opscli.shared.file_uploads import FileUploadClient
 
 
 class RufusMcpManager:
@@ -45,18 +46,27 @@ class RufusMcpManager:
         *,
         rufus_manager: RufusManager,
         remote_consent_store: RemoteConsentStore,
-        report_writer: AnswerReportWriter | None = None,
+        report_publisher: AnswerReportPublisher | None = None,
     ) -> None:
         """初始化 MCP-facing manager。"""
         self.rufus_manager = rufus_manager
         self.remote_consent_store = remote_consent_store
-        self.report_writer = report_writer or AnswerReportWriter()
+        self.report_publisher = report_publisher or AnswerReportPublisher()
 
     @classmethod
-    def for_current_request(cls, credential_dir: Path | None = None) -> "RufusMcpManager":
+    def for_current_request(
+        cls,
+        credential_dir: Path | None = None,
+        *,
+        jwt: str | None = None,
+        session_id: str | None = None,
+    ) -> "RufusMcpManager":
         """按当前 MCP 请求隔离目录创建 Rufus MCP manager。"""
         auth_client = AuthClient(base_dir=credential_dir) if credential_dir else AuthClient()
         transport = RufusTransportClient(auth_client=auth_client)
+        report_publisher = AnswerReportPublisher(
+            file_upload_client=FileUploadClient(auth_client=auth_client, jwt=jwt, session_id=session_id),
+        )
         consent_store = (
             RemoteConsentStore(base_dir=credential_dir / "amazon-rufus")
             if credential_dir
@@ -65,6 +75,7 @@ class RufusMcpManager:
         return cls(
             rufus_manager=RufusManager(transport_client=transport),
             remote_consent_store=consent_store,
+            report_publisher=report_publisher,
         )
 
     def remote_consent_status(self, country: str) -> dict[str, Any]:
@@ -217,17 +228,18 @@ class RufusMcpManager:
         ))
 
     def get(self, request: RufusGetRequest) -> dict[str, Any]:
-        """获取 Rufus 回答、写入报告，并返回 MCP-safe 报告摘要。"""
+        """获取 Rufus 回答、发布报告，并返回 MCP-safe 报告摘要。"""
         data = self.rufus_manager.get_backend(**request.to_backend_kwargs())
-        report_path = self.report_writer.write(data)
+        published_report = self.report_publisher.publish(data)
         answers = data.get("answers")
         return self._result({
-            "report_path": report_path.as_posix(),
+            "report_path": published_report.path.as_posix(),
+            "report_url": published_report.url,
             "asin": str(data.get("asin") or "").strip().upper(),
             "country": str(data.get("country") or "").strip().upper(),
             "question_count": int(data.get("question_count") or len(data.get("questions") or [])),
             "answer_count": len(answers) if isinstance(answers, list) else 0,
-            "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+            "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
         })
 
     def _result(

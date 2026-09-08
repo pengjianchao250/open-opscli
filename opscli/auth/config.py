@@ -18,6 +18,9 @@ DEFAULTS = {
     "ops_url": "https://ops.api.xenkee.com/api",
     "ops_system_url": "https://ops.api.xenkee.com",
     "ops_token_endpoint": "/api/v1/auth/cli-token",
+    "apphub_url": "https://apphub.qa.aukeyit.com",
+    "app_template_repo": "http://10.1.13.143:3000/aukeys-admin/template.git",
+    "app_template_branch": "master",
     "polaris_system_url": "https://bi.api.xenkee.com",
     "polaris_token_endpoint": "/api/auth/cli-token",
     "amazon_submit_endpoint": "",
@@ -33,6 +36,9 @@ _ENV_VAR_MAP: dict[str, str] = {
     "OPSCLI_OPS_URL": "ops_url",
     "OPSCLI_OPS_SYSTEM_URL": "ops_system_url",
     "OPSCLI_OPS_TOKEN_ENDPOINT": "ops_token_endpoint",
+    "OPSCLI_APPHUB_URL": "apphub_url",
+    "OPSCLI_APP_TEMPLATE_REPO": "app_template_repo",
+    "OPSCLI_APP_TEMPLATE_BRANCH": "app_template_branch",
     "OPSCLI_POLARIS_SYSTEM_URL": "polaris_system_url",
     "OPSCLI_POLARIS_TOKEN_ENDPOINT": "polaris_token_endpoint",
     "OPSCLI_AMAZON_SUBMIT_ENDPOINT": "amazon_submit_endpoint",
@@ -133,6 +139,21 @@ def get_ops_system_url() -> str:
     用于拼接 MCP API Key 校验地址等非 /api 路径的端点。
     """
     return load_config()["ops_system_url"]
+
+
+def get_apphub_url() -> str:
+    """获取与当前 opscli 环境配套的 AppHub 控制面基础 URL。"""
+    return load_config()["apphub_url"]
+
+
+def get_app_template_repo() -> str:
+    """获取与当前 opscli 环境配套的站点模板仓库 clone URL。"""
+    return load_config()["app_template_repo"]
+
+
+def get_app_template_branch() -> str:
+    """获取当前站点模板使用的分支。"""
+    return load_config()["app_template_branch"]
 
 
 def get_builtin_systems() -> list[dict]:

@@ -1,0 +1,9 @@
+"""`opscli app` 使用的稳定常量。"""
+
+APPHUB_API_PREFIX = "/api/v1"
+
+BINDING_SCHEMA_VERSION = 3
+BINDING_RELATIVE_PATH = ".opscli/app.json"
+GIT_DEFAULT_BRANCH = "master"
+GIT_MIN_VERSION = (2, 30, 0)
+MESSAGE_MAX_LENGTH = 512

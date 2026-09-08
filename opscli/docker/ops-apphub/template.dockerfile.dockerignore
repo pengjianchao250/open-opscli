@@ -1,0 +1,16 @@
+# 只发送构建 opscli 所需文件，避免本地配置和缓存进入构建上下文。
+*
+!pyproject.toml
+!setup.py
+!README.md
+!MANIFEST.in
+!uv.lock
+!opscli/
+!opscli/**
+opscli/docker/
+opscli/**/__pycache__/
+opscli/**/*.c
+opscli/**/*.so
+opscli/**/*.pyd
+opscli/**/*.pyc
+opscli/**/*.pyo

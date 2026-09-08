@@ -1,6 +1,6 @@
 [project]
 name = "aukeys-opscli"
-version = "0.0.132"
+version = "0.0.161"
 description = "Aukeys 运营 CLI 工具集"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -19,6 +19,8 @@ dependencies = [
     "starlette>=0.37",
     "uvicorn>=0.30",
     "PyMySQL>=1.1",
+    "PyYAML>=6.0",
+    "jsonschema>=4.23",
 ]
 
 [project.optional-dependencies]

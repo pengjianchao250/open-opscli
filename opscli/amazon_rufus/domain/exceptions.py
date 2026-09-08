@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 
 class RufusError(Exception):
     """Rufus 模块基础异常。"""
@@ -77,6 +79,25 @@ class HeadlessRufusRequestError(RufusError):
     """Rufus headless 请求失败。"""
 
     code = "RUFUS_HEADLESS_REQUEST_ERROR"
+
+
+class RufusReportUploadError(RufusError):
+    """Rufus 报告上传失败，本地文件仍然保留。"""
+
+    code = "RUFUS_REPORT_UPLOAD_ERROR"
+
+    def __init__(self, report_path: str | Path, *, upload_error: dict | None = None) -> None:
+        super().__init__("Rufus 报告上传失败，已保留本地文件")
+        self.report_path = Path(report_path)
+        self.upload_error = upload_error
+
+    def to_dict(self) -> dict:
+        """返回包含本地报告路径的稳定错误结构。"""
+        payload = super().to_dict()
+        payload["report_path"] = self.report_path.as_posix()
+        if self.upload_error is not None:
+            payload["upload_error"] = self.upload_error
+        return payload
 
 
 class RufusAnswerValidationError(RufusError):

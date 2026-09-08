@@ -267,6 +267,26 @@ class QueryManager:
         except Exception as exc:
             raise InvalidPayloadError(f"payload 不是合法 JSON: {payload_file}") from exc
 
+        return self.run_payload(
+            payload,
+            intent_code=intent_code,
+            selection_source=selection_source,
+            match_record_id=match_record_id,
+        )
+
+    def run_payload(
+        self,
+        payload: dict,
+        *,
+        intent_code: str | None = None,
+        selection_source: str | None = None,
+        match_record_id: int | None = None,
+    ) -> dict:
+        """直接执行已构造完整的 query payload（REST API 场景：调用方在远端，无本地文件）。
+
+        与 run() 共用校验与归因逻辑，仅省去本地文件读取；手写 payload 的禁写字段
+        （userEmail、query.from.* 等）由 _validate_payload 拦截。
+        """
         self._validate_payload(payload)
         extra_headers = _attribution_headers(intent_code, selection_source, match_record_id)
         return self.client.cli_query(payload, extra_headers=extra_headers)

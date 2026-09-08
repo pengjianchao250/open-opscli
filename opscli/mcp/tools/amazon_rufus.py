@@ -18,7 +18,7 @@ from opscli.amazon_rufus.domain.mcp_models import (
 )
 from opscli.amazon_rufus.services.mcp_manager import RufusMcpManager
 
-from .helpers import _err, _get_credential_dir, _ok
+from .helpers import _err, _get_auth_pair, _get_credential_dir, _ok
 
 
 async def amazon_rufus_remote_consent_status(country: str) -> dict:
@@ -155,7 +155,7 @@ async def amazon_rufus_get(
     skills_dir: str | None = None,
     timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
 ) -> dict:
-    """获取指定 ASIN 的 Rufus 回答并写入本地报告。
+    """获取指定 ASIN 的 Rufus 回答，发布报告并返回本地路径与远端地址。
 
     Args:
         asin: 目标 ASIN
@@ -294,16 +294,23 @@ async def _run_mcp_manager(method_name: str, **kwargs: Any) -> dict:
     """在线程中执行同步 Rufus MCP manager 方法，避免阻塞事件循环。"""
 
     def call() -> dict:
-        manager = _rufus_mcp_manager_for_current_request()
+        manager = _rufus_mcp_manager_for_current_request(resolve_upload_auth=method_name == "get")
         method = getattr(manager, method_name)
         return method(**kwargs)
 
     return await asyncio.to_thread(call)
 
 
-def _rufus_mcp_manager_for_current_request() -> RufusMcpManager:
+def _rufus_mcp_manager_for_current_request(*, resolve_upload_auth: bool = False) -> RufusMcpManager:
     """创建绑定当前 MCP 请求凭证目录的 Rufus MCP manager。"""
-    return RufusMcpManager.for_current_request(credential_dir=_get_credential_dir())
+    credential_dir = _get_credential_dir()
+    if resolve_upload_auth:
+        # 与 ASIN Data 共用凭证对解析；只在获取并上传报告时读取，避免影响本地偏好操作。
+        session_id, jwt = _get_auth_pair("ops")
+        return RufusMcpManager.for_current_request(
+            credential_dir=credential_dir, jwt=jwt, session_id=session_id,
+        )
+    return RufusMcpManager.for_current_request(credential_dir=credential_dir)
 
 
 def _rufus_error(tool: str, exc: Exception, call_params: dict) -> dict:

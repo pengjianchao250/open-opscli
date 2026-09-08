@@ -98,7 +98,10 @@ def test_missing_payload_file_reports_path(tmp_path: Path):
 # 调用方看到「命令成功」却拿不到数据。实测：limit 超上限返回
 # {"field":"body.query.limit","message":"Input should be less than or equal to 500000"}
 
-from opscli.query.commands.cli import _field_level_reasons, _inner_result_error  # noqa: E402
+from opscli.query.services.result_errors import (  # noqa: E402
+    extract_inner_result_error as _inner_result_error,
+    field_level_reasons as _field_level_reasons,
+)
 
 _ENGINE_FAILURE = {
     "payload": {"tableId": 2},
