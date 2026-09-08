@@ -99,10 +99,25 @@ PERMISSION_ENUM_PATTERNS = (
         r"(?:可选|可用|允许|可见)的?[^，。；;！？!?]{0,24}"
         r"(?:有哪些|有什么|是什么|列表)"
     ),
+    re.compile(
+        r"\b(?:show|list|display)\s+(?:the\s+)?available\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwhat\s+(?:values?\s+)?(?:are\s+)?available\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwhat\s+[^,.;!?]{1,32}\s+values?\s+(?:are\s+)?available\b",
+        re.IGNORECASE,
+    ),
 )
 COMPONENT_BUSINESS_ANALYSIS_RE = re.compile(
     r"业绩|销售额|销量|销售量|订单|利润|毛利|收入|成本|转化率|点击率|"
-    r"退款率|退货率|趋势|表现|同比|环比"
+    r"退款率|退货率|趋势|表现|同比|环比|"
+    r"\b(?:sales|revenue|profit|orders?|inventory|performance|trends?|"
+    r"conversion|clicks?|refunds?|returns?)\b",
+    re.IGNORECASE,
 )
 DEFAULT_DATASET_REJECTION_TERMS = (
     "不使用即时综合数据集",

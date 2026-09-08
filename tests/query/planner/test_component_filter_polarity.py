@@ -186,6 +186,24 @@ def test_same_value_with_both_polarities_fails_closed():
     assert "query_template" not in result["execution_ref"]
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        "国家是加拿大同时排除加拿大看销量",
+        "品牌是OHWILL同时排除OHWILL看销量",
+        "渠道是傲彼瑞-美国同时排除傲彼瑞-美国看销量",
+    ],
+)
+def test_simultaneous_clause_conflict_uses_polarity_reason(query):
+    result = _resolve(query)
+
+    assert result["status"] == "clarify_required"
+    assert result["model_view"]["clarification_reason_codes"] == [
+        "component_filter_polarity_conflict"
+    ]
+    assert "query_template" not in result["execution_ref"]
+
+
 def test_same_department_value_conflict_with_suffix_exclusion_fails_closed():
     result = _resolve("部门=九部且九部除外看销售额")
 
@@ -193,6 +211,16 @@ def test_same_department_value_conflict_with_suffix_exclusion_fails_closed():
     assert "component_filter_polarity_conflict" in result["model_view"][
         "clarification_reason_codes"
     ]
+
+
+def test_same_brand_value_with_postfixed_label_conflict_fails_closed():
+    result = _resolve("只看OHWILL但OHWILL品牌除外看销量")
+
+    assert result["status"] == "clarify_required"
+    assert result["model_view"]["clarification_reason_codes"] == [
+        "component_filter_polarity_conflict"
+    ]
+    assert "query_template" not in result["execution_ref"]
 
 
 def test_complete_sales_team_value_is_not_split_into_department():

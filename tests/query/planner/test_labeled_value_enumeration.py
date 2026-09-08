@@ -64,6 +64,21 @@ def test_copula_less_compound_list_is_enumerated():
     assert enumerated is True
 
 
+def test_explicit_prefix_label_wins_over_label_suffix_inside_a_value():
+    first, enumerated = query_plan._labeled_value_match(
+        "部门是范泰克、火星事业部的销量", ("部门", "事业部")
+    )
+
+    assert first == "范泰克"
+    assert enumerated is True
+
+
+def test_single_postfixed_exclusion_value_is_owned_by_its_label():
+    assert query_plan._labeled_value_match(
+        "只看HOMFA但HOMFA品牌除外看销量", ("品牌", "brand")
+    ) == ("HOMFA", False)
+
+
 def test_unlabeled_dimension_list_is_not_a_filter():
     first, enumerated = query_plan._labeled_value_match(
         "按渠道和ASIN看销量", CHANNEL_TERMS
@@ -71,6 +86,32 @@ def test_unlabeled_dimension_list_is_not_a_filter():
 
     assert first == ""
     assert enumerated is False
+
+
+@pytest.mark.parametrize(
+    ("query", "terms", "expected"),
+    [
+        (
+            "2026年8月傲创-美国和傲创-加拿大渠道的销量",
+            ("渠道", "channel"),
+            ["傲创-美国", "傲创-加拿大"],
+        ),
+        ("美国、加拿大国家的销量", ("国家", "country"), ["美国", "加拿大"]),
+        (
+            "一部-C组与美国-A组销售小组的销量",
+            ("销售小组", "小组"),
+            ["一部-C组", "美国-A组"],
+        ),
+        (
+            "傲创-美国,傲创-加拿大渠道除外看销量",
+            ("渠道", "channel"),
+            ["傲创-美国", "傲创-加拿大"],
+        ),
+    ],
+)
+def test_postfixed_component_list_values(query, terms, expected):
+    assert query_plan._postfixed_labeled_list_values(query, terms) == expected
+    assert query_plan._labeled_value_match(query, terms) == (expected[0], True)
 
 
 def test_single_value_helper_unchanged():

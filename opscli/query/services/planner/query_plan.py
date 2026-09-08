@@ -1972,7 +1972,9 @@ def _resolve_order_and_limit(
         )
     if ordered_field is None and len(metrics) == 1:
         ordered_field = metrics[0]
-    if ordered_field is None and allow_unsorted_limit and limit and not has_direction:
+    if ordered_field is None and allow_unsorted_limit and limit:
+        # 权限枚举表没有指标可排序；其中的 Top N 只表达返回条数，不能因为
+        # “top”同时被方向词识别而丢掉 limit。业务数据集仍要求明确排序字段。
         return None, limit, ""
     if ordered_field is None:
         target = "排序指标" if metrics else "排序字段"
@@ -3316,6 +3318,84 @@ def _labeled_list_values(query: str, first_value: str) -> list[str]:
     return values
 
 
+_COMPONENT_LIST_SEPARATOR_TEXT = r"(?:、|,|，|/|或|和|与)"
+_COMPONENT_LIST_TOKEN_TEXT = r"[\u4e00-\u9fffA-Za-z0-9_\-\.]{2,40}?"
+
+
+def _strip_component_scope_prefix(value: str) -> str:
+    """去掉紧邻首个后置筛选值的日期前缀，不改动实际枚举值。"""
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    for pattern in (
+        r"^.*(?:20\d{2}年)?\d{1,2}月(?:份)?",
+        r"^.*20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}",
+    ):
+        cleaned = re.sub(pattern, "", normalized)
+        if cleaned != normalized and cleaned:
+            return cleaned
+    return normalized
+
+
+def _postfixed_labeled_list_values(
+    query: str, label_terms: Sequence[str]
+) -> list[str]:
+    """提取“值1和值2+字段标签”的后置标签列表。"""
+    normalized = unicodedata.normalize("NFKC", query)
+    # 后置字段必须直接连接结果描述或排除后缀。收紧后不会把“授权渠道中”的
+    # 说明性标签，或跨标点后恰好出现的字段词误认为列表所有者。
+    label_boundary = r"(?=\s*(?:的|除外|之外|以外))"
+    candidates: list[tuple[tuple[int, int], list[str]]] = []
+    for term in sorted(label_terms, key=len, reverse=True):
+        pattern = re.compile(
+            rf"(?P<values>{_COMPONENT_LIST_TOKEN_TEXT}"
+            rf"(?:\s*{_COMPONENT_LIST_SEPARATOR_TEXT}\s*"
+            rf"{_COMPONENT_LIST_TOKEN_TEXT})+)\s*"
+            rf"{re.escape(term)}{label_boundary}",
+            re.IGNORECASE,
+        )
+        match = pattern.search(normalized)
+        if match is None:
+            continue
+        values = [
+            item.strip()
+            for item in re.split(
+                rf"\s*{_COMPONENT_LIST_SEPARATOR_TEXT}\s*",
+                match.group("values"),
+            )
+            if item.strip()
+        ]
+        if values:
+            values[0] = _strip_component_scope_prefix(values[0])
+        if len(values) > 1 and all(values):
+            candidates.append(((match.end(), len(term)), values))
+    # A value can itself end with another label term, such as
+    # ``火星事业部部门``. The rightmost label owns the complete list.
+    return max(candidates, key=lambda item: item[0])[1] if candidates else []
+
+
+def _postfixed_labeled_exclusion_value(
+    query: str, label_terms: Sequence[str]
+) -> str:
+    """Extract one value from ``value + label + exclusion suffix``."""
+    normalized = unicodedata.normalize("NFKC", query)
+    token = r"[\u4e00-\u9fffA-Za-z0-9_\-\.]{1,40}"
+    split_re = re.compile(
+        r"(?:[，,。；;！？!?\s]+|但|且|同时|又|只看|仅看|保留|排除|剔除|去除|去掉|移除)"
+    )
+    matches: list[tuple[int, str]] = []
+    for term in sorted(label_terms, key=len, reverse=True):
+        for match in re.finditer(
+            rf"{re.escape(term)}(?=\s*(?:除外|之外|以外))",
+            normalized,
+            re.IGNORECASE,
+        ):
+            prefix = normalized[: match.start()]
+            candidate = split_re.split(prefix)[-1]
+            candidate = _strip_component_scope_prefix(candidate)
+            if re.fullmatch(token, candidate):
+                matches.append((match.start(), candidate))
+    return max(matches, key=lambda item: item[0])[1] if matches else ""
+
+
 # “和/与”既可能连接多个值，也可能连接后续查询对象。后接“所有/全部”时
 # 属于“渠道为 X 和所有 ASIN”这类单值句，不标记为枚举；最终值集合仍由
 # 当前账号授权枚举反查决定。
@@ -3345,10 +3425,13 @@ def _labeled_value_match(query: str, label_terms: Sequence[str]) -> tuple[str, b
     """
     value = r"([\u4e00-\u9fffA-Za-z0-9_\-\.]{2,40}?)"
     boundary = (
-        r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|且|但|后|下|里|中|所有|全部|"
+        r"(?=的|地|，|,|。|；|;|、|/|\s|和|与|或|且|但|同时|又|后|下|里|中|所有|全部|"
         r"除外|之外|以外|看|查|统计|汇总|分析|展示|列出|$)"
     )
-    for term in sorted(label_terms, key=len, reverse=True):
+    terms = sorted(label_terms, key=len, reverse=True)
+    # Explicit prefix ownership wins over a label-looking suffix inside a
+    # later value, e.g. ``部门是范泰克、火星事业部``.
+    for term in terms:
         escaped = re.escape(term)
         patterns = (
             # 正向或负向中缀：渠道=美国、销售小组不等于一部-C组。
@@ -3377,6 +3460,31 @@ def _labeled_value_match(query: str, label_terms: Sequence[str]) -> tuple[str, b
                 + boundary,
                 re.IGNORECASE,
             ),
+        )
+        match = None
+        for pattern in patterns:
+            match = pattern.search(query)
+            if match is not None:
+                break
+        if match is None:
+            continue
+        # 值之后紧跟列举分隔符即判定为显式列举。
+        # 这里必须用 Pattern.match(s, pos)（已锚定在 pos），不能再加 ^——
+        # ^ 只认字符串真开头，叠加后续接判断永远为假
+        enumerated = bool(_VALUE_SEPARATOR.match(query, match.end(1)))
+        return match.group(1).strip(), enumerated
+
+    postfixed_values = _postfixed_labeled_list_values(query, label_terms)
+    if postfixed_values:
+        return postfixed_values[0], True
+
+    postfixed_value = _postfixed_labeled_exclusion_value(query, label_terms)
+    if postfixed_value:
+        return postfixed_value, False
+
+    for term in terms:
+        escaped = re.escape(term)
+        patterns = (
             re.compile(
                 escaped
                 + r"\s*"
@@ -3397,18 +3505,11 @@ def _labeled_value_match(query: str, label_terms: Sequence[str]) -> tuple[str, b
                 re.IGNORECASE,
             ),
         )
-        match = None
         for pattern in patterns:
             match = pattern.search(query)
             if match is not None:
-                break
-        if match is None:
-            continue
-        # 值之后紧跟列举分隔符即判定为显式列举。
-        # 这里必须用 Pattern.match(s, pos)（已锚定在 pos），不能再加 ^——
-        # ^ 只认字符串真开头，叠加后续接判断永远为假
-        enumerated = bool(_VALUE_SEPARATOR.match(query, match.end(1)))
-        return match.group(1).strip(), enumerated
+                enumerated = bool(_VALUE_SEPARATOR.match(query, match.end(1)))
+                return match.group(1).strip(), enumerated
     return "", False
 
 
@@ -4202,11 +4303,22 @@ def _resolve_enum_component_filter(
         requested
         and _component_filter_polarity(query, [labeled_first or requested]) == "none"
     )
-    listed_values = (
-        _labeled_list_values(query, labeled_first)
-        if enumerated and not exclusion_cancelled
-        else []
-    )
+    listed_values: list[str] = []
+    if enumerated and not exclusion_cancelled:
+        prefixed_values = _labeled_list_values(query, labeled_first)
+        postfixed_values = _postfixed_labeled_list_values(
+            query, spec.get("label_terms") or ()
+        )
+        # A postfixed candidate belongs to the already selected label only
+        # when both parsers agree on the first value. Otherwise it came from
+        # a label-looking suffix inside a later value (e.g. ``火星事业部``).
+        if (
+            postfixed_values
+            and normalize(postfixed_values[0]) == normalize(labeled_first)
+        ):
+            listed_values = postfixed_values
+        else:
+            listed_values = prefixed_values
     if len(listed_values) > 1:
         authorized_by_normalized = {normalize(value): value for value in values}
         matched = _deduplicate(
@@ -4364,6 +4476,17 @@ def _resolve_enum_component_filter(
         str(value): _component_filter_polarity(query, [str(value)])
         for value in matched
     }
+    # A list-level exclusion applies to every member even when an ASCII comma
+    # splits the regex span used for per-value polarity. This covers both
+    # ``排除字段 A,B`` and ``A,B 字段除外`` while preserving explicit
+    # include/exclude conflicts detected on an individual value.
+    if len(listed_values) > 1 and "conflict" not in value_polarities.values():
+        endpoint_polarities = {
+            _component_filter_polarity(query, [listed_values[0]]),
+            _component_filter_polarity(query, [listed_values[-1]]),
+        }
+        if "exclude" in endpoint_polarities:
+            value_polarities = {str(value): "exclude" for value in matched}
     if "conflict" in value_polarities.values():
         return _block_component_filter(
             contract,

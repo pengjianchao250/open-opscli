@@ -127,6 +127,10 @@ def _query_component_payload():
         "查询组件渠道数据集当前可见的渠道",
         "查询组件渠道数据集允许的渠道有哪些",
         "查询组件渠道数据集可用的渠道有哪些",
+        "查询组件渠道数据集: show available 渠道, top 5",
+        "查询组件渠道数据集: list the available 渠道",
+        "查询组件渠道数据集: what values are available for 渠道",
+        "查询组件渠道数据集: what 渠道 values are available",
     ],
 )
 def test_explicit_component_enumeration_builds_query_template(query):
@@ -139,7 +143,7 @@ def test_explicit_component_enumeration_builds_query_template(query):
     assert contract["execution_ref"]["table_id"] == 7
     template = contract["execution_ref"]["query_template"]
     assert template["dimensions"] == [{"field": "channel_name", "alias": "channel_name"}]
-    if "前5条" in query:
+    if "前5条" in query or "top 5" in query:
         assert template["limit"] == 5
 
 
@@ -161,6 +165,29 @@ def test_component_dataset_remains_blocked_for_business_analysis(query):
 
     assert contract["status"] == "clarify_required"
     assert "business_dataset" in contract["model_view"]["clarification_reason_codes"]
+    assert "query_template" not in contract["execution_ref"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询组件渠道数据集: show available sales performance",
+        "查询组件渠道数据集: list the available inventory",
+        "查询组件渠道数据集: what sales values are available",
+        "查询组件渠道数据集: what inventory values are available",
+    ],
+)
+def test_english_available_business_analysis_does_not_enable_component_dataset(query):
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_query_component_payload()),
+        query,
+        enum_fn=lambda *_a, **_k: [],
+    )
+
+    assert contract["status"] == "clarify_required"
+    assert set(contract["model_view"]["clarification_reason_codes"]).intersection(
+        {"business_dataset", "dataset_constraints"}
+    )
     assert "query_template" not in contract["execution_ref"]
 
 
