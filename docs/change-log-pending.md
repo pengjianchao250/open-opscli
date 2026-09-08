@@ -1,3 +1,12 @@
+## 2026-09-08 tests - 删除 Keepa 与 SellerSprite debug CLI 用例
+
+**变更原因**：Keepa 与 SellerSprite 的 debug CLI 已停用，相关测试持续验证不再公开的入口并形成已知失败基线。
+**改动点**：从 `tests/keepa/test_cli_split.py` 删除 5 个 Keepa debug 用例，从 `tests/seller_sprite/test_cli_split.py` 删除 2 个 SellerSprite debug 用例及对应 import；保留正式远端 CLI 的帮助、参数隔离、任务状态、导出和远端适配器合同测试。
+**验证结果**：Keepa/SellerSprite 的 CLI split、正式 CLI、远端适配器与刷新相关回归共 `40 passed`；两个测试文件已无 debug 模块或 debug 命令引用，`git diff --check` 通过。
+**影响范围**：仅测试覆盖范围，不修改 Keepa、SellerSprite 或 debug 模块运行时代码。
+**回滚方式**：恢复两个 `test_cli_split.py` 中删除的 debug 用例和 import。
+---
+
 ## 2026-09-08 Git - 合并远端 release 到 feature/sellersprite
 
 **变更原因**：当前功能分支需要同步远端 release 的 AppHub、Rufus、认证、REST API 与发布改动，同时保留 SellerSprite、JSON Lens、预取计划和统一凭据自愈能力。
