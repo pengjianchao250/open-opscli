@@ -5,6 +5,7 @@
 > 范围：`opscli/app`、AppHub API 调用边界、Git 源码交付、相关 Skill、测试和使用文档  
 > API 依据：AppHub Control API 最新目录 `https://s.apifox.cn/9c71c630-8d57-44b7-becd-f09fbe370f5e/509871234e0`
 > 2026-09-07 修订：AppHub 请求统一使用自动刷新的 Bearer JWT；创建不再内联 Git 凭据，`init/push` 继续使用独立凭据接口。
+> 2026-09-07 分支修订：文中的 `main` 分支约定已被 `docs/design/2026-09-07-opscli-app与建站Skill-master分支统一方案.md` 替代，新应用统一使用 `master`。
 
 ## 1. 需求背景
 

@@ -76,7 +76,7 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     assert auth.token_aliases == ["ops"]
     body = json.loads(request.content)
     assert body["apiVersion"] == "apps.aukeys/v1"
-    assert body["database"] == {"path": None}
+    assert body["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert body["opscli"] == {"auth_mode": "viewer", "datasets": []}
     assert "runtime" not in body
     assert "python" not in body

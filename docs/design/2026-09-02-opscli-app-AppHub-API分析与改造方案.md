@@ -1,6 +1,7 @@
 # opscli app 与 AppHub API 全量分析及改造方案
 
 > **历史方案，已被取代**：2026-09-05 起以 `docs/design/2026-09-05-opscli-app三命令源码交付职责定稿.md` 为准。API 前缀、三命令职责以及 push 后结束的边界均以新文档为准。
+> **分支约定已被取代**：2026-09-07 起新应用统一使用 `master`，以 `docs/design/2026-09-07-opscli-app与建站Skill-master分支统一方案.md` 为准。
 
 > 日期：2026-09-02  
 > 范围：Apifox 中 AppHub 68 个正式 API、`opscli/app` 当前实现、AppHub 架构与 CLI 任务设计。  

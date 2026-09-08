@@ -81,6 +81,7 @@ class FakeClient:
     def get_git_config(self, slug: str) -> dict:
         return {
             "repo_url": _repo_url(slug),
+            "default_branch": "master",
             "username": "owner",
             "bound": True,
         }
@@ -98,7 +99,7 @@ class FakeCredentialStore:
         self.exists = exists
         self.saved: list[dict] = []
 
-    def has_credential(self, root, *, repo_url, username):
+    def has_credential(self, root, *, repo_url, username, token_hint=None):
         return self.exists
 
     def save_credential(self, root, *, repo_url, username, token):
@@ -118,7 +119,8 @@ class FakeGit:
         self.init_calls.append((root, kwargs))
         return {
             "git_created": len(self.init_calls) == 1,
-            "remote_main_sha": "a" * 40,
+            "remote_branch": "master",
+            "remote_branch_sha": "a" * 40,
         }
 
     def push_all(self, root, **kwargs):
@@ -160,7 +162,7 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
 
     assert len(client.create_payloads) == 1
     payload = client.create_payloads[0]
-    assert payload["database"] == {"path": None}
+    assert payload["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert "runtime" not in payload
     assert git.init_calls == []
     assert git.push_calls == []
@@ -225,7 +227,11 @@ def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> 
     assert client.accessible_calls == 1
     assert client.create_payloads == []
     assert result["slug"] == "sales-dashboard"
-    assert git.init_calls[0][1] == {"repo_url": _repo_url("sales-dashboard")}
+    assert git.init_calls[0][1] == {
+        "repo_url": _repo_url("sales-dashboard"),
+        "branch": "master",
+    }
+    assert result["default_branch"] == "master"
     assert BindingStore().load(app_root).schema_version == 3
 
 
@@ -260,7 +266,10 @@ def test_init_creates_application_when_no_remote_match(tmp_path: Path) -> None:
     assert result["slug"] == "inventory-dashboard"
     assert client.issue_calls == [True]
     assert credentials.saved[0]["token"] == "rotated-secret"
-    assert git.init_calls[0][1] == {"repo_url": _repo_url("inventory-dashboard")}
+    assert git.init_calls[0][1] == {
+        "repo_url": _repo_url("inventory-dashboard"),
+        "branch": "master",
+    }
 
 
 def test_init_migrates_legacy_binding_without_template_fields(tmp_path: Path) -> None:
@@ -313,6 +322,7 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     assert result["credential_refreshed"] is True
     assert result["credential_rotated"] is True
     assert git.push_calls[0][1]["message"] == "优化首页"
+    assert git.push_calls[0][1]["branch"] == "master"
     assert "release_id" not in result
     assert "version" not in result
     assert result["message"] == "源码已推送到远端仓库。"

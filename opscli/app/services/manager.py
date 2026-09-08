@@ -74,7 +74,11 @@ class AppManager:
             app_slug=app_slug,
         )
         return {
-            **self._binding_result(root, binding, "Git 已绑定应用仓库并基于远端 main 初始化。"),
+            **self._binding_result(
+                root,
+                binding,
+                f"Git 已绑定应用仓库并基于远端 {binding.default_branch} 初始化。",
+            ),
             **credential_result,
             **git_result,
         }
@@ -87,11 +91,12 @@ class AppManager:
             root,
             repo_url=binding.repo_url,
             message=summary,
+            branch=binding.default_branch,
         )
         message_text = (
             "源码已推送到远端仓库。"
             if git_result.get("pushed")
-            else "远端 main 已是最新源码，无需重复推送。"
+            else f"远端 {binding.default_branch} 已是最新源码，无需重复推送。"
         )
         return {
             **self._binding_result(root, binding, ""),
@@ -119,7 +124,11 @@ class AppManager:
         self.binding_store.save(root, binding)
         self.manifest_store.sync_identity(root, binding)
         binding, credential_result = self._ensure_credential(root, binding, git_config)
-        git_result = self.git_service.initialize(root, repo_url=binding.repo_url)
+        git_result = self.git_service.initialize(
+            root,
+            repo_url=binding.repo_url,
+            branch=binding.default_branch,
+        )
         return binding, credential_result, git_result, app_detail
 
     def _ensure_binding(
@@ -198,6 +207,7 @@ class AppManager:
             root,
             repo_url=binding.repo_url,
             username=username,
+            token_hint=_optional_text(git_config.get("token_hint")),
         ):
             return binding, {"credential_refreshed": False, "credential_rotated": False}
 
@@ -235,10 +245,14 @@ class AppManager:
         app_id = _optional_text(
             app_detail.get("app_id") or app_detail.get("id") or app_detail.get("site_id")
         ) or binding.app_id
+        default_branch = _optional_text(
+            git_config.get("default_branch") or app_detail.get("default_branch")
+        ) or binding.default_branch
         return binding.migrated(
             app_id=app_id,
             app_name=_optional_text(app_detail.get("title")) or binding.app_name,
             repo_url=repo_url,
+            default_branch=default_branch,
             git_username=_optional_text(git_config.get("username")) or binding.git_username,
             owner_user_id=_optional_text(app_detail.get("owner_user_id"))
             or binding.owner_user_id,

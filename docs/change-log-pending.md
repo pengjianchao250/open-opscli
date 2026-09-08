@@ -1,3 +1,40 @@
+## 2026-09-08 AppHub 镜像 - 发布名称增加 release
+
+**变更原因**：基础镜像名称需要标明 release 分支，流水线旧校验仍要求已从运行镜像移除的 Node、pnpm、uv 和 UID 10001。
+
+**改动点**：已通过 Jenkins 配置页将 `opscli-ops-apphub-base-image` 任务的 `IMAGE_REPOSITORY` 改为 `ops-apphub/opscli-base-release`，继续发布提交前 6 位及 `latest` 标签；镜像验证改为 Python 3.12、构建工具不存在、UID/GID 1000、依赖目录不可写。下游模板同步镜像引用。
+
+**验证结果**：保存后重新打开配置页，完整脚本回读与预期一致；新运行环境与权限检查在本地 `localhost/opscli-base:verify-20260908` 镜像上通过，未触发 Jenkins 构建或推送镜像。新名称需等待下一次成功构建发布后可用。
+
+**影响范围**：基础镜像发布地址及运行验收；任务名、Webhook 地址、release 分支和凭证引用保持不变。
+
+**回滚方式**：将 Jenkins 的 `IMAGE_REPOSITORY` 与下游引用同时恢复为 `ops-apphub/opscli-base`；如恢复旧 Dockerfile，应同时恢复旧运行校验。
+
+## 2026-09-08 AppHub 镜像 - 分离构建工具与运行环境
+
+**变更原因**：下游应用将使用本仓库基础镜像，需要对齐 Python 3.12 与 UID/GID 1000，并避免把 Node、编译器和开发依赖带入业务容器。
+
+**改动点**：`opscli/docker/ops-apphub/template.dockerfile` 改为 Python 3.12 公共层、SDK builder 与精简 runtime；按 `uv.lock` 分层安装运行依赖和内部纯 Python SDK。opscli 仍取当前发行源码、不硬编码版本；可通过构建参数 `VCS_REF` 记录 OCI revision。最终环境由 root 持有，app 用户只读依赖、可写应用与数据目录。
+
+**验证结果**：`git diff --check` 通过。Podman 实际构建基础镜像（197,785,632 字节，Python 3.12.14 / opscli 0.0.161），`uv sync --locked` 解析 108 个包，运行环境不含 pytest/respx、Node/pnpm/uv/git/编译器；SDK 目录 6.36 MiB，无 `.c/.so/.pyd`；app UID/GID 1000 可写应用与数据目录、不可写依赖目录。下游镜像构建及 `uv pip check` 88 包一致性检查通过，新 SDK 环境运行后端快速档 131 条通过（忽略已由本地 156 条回归覆盖的 Git 绑定脚本测试），前端 11 条及本地/容器构建通过。隔离卷下 HTTP、静态资源、SQLite 初始化/WAL、健康检查与重建容器后任务持久化验证通过。未发布镜像或修改外部 Jenkins/Harbor 任务。
+
+**影响范围**：AppHub 基础镜像；最终镜像不再提供 Node、pnpm、uv 或编译工具，下游应在构建阶段自行使用。发版流程继续构建当前源码并更新 `latest`，下游构建需拉取新基础镜像。
+
+**回滚方式**：恢复本次 Dockerfile 改动并重新构建基础镜像；不修改 SDK 源码或运行数据库。
+## 2026-09-07 App - 支持空远端仓库首次推送自动创建提交
+
+**变更原因**：新建应用通过 `app init` 绑定空远端后，本地仓库尚无 HEAD；原 `app push` 在自动暂存和提交前直接返回 `GIT-NO-COMMIT`，导致默认模板无法完成首次源码推送。
+
+**改动点**：调整 `GitService.push_all()` 的检查顺序，无 HEAD 但工作区存在源码时先执行 `git add -A` 并创建初始提交；只有无 HEAD 且无任何可提交内容时继续返回 `GIT-NO-COMMIT`。新增空远端首次推送和空仓库拒绝推送的回归测试。
+
+**验证结果**：新增用例定向运行 `2 passed`；完整 `tests/app` 回归 `47 passed`；使用现有项目环境运行 Ruff 检查 `opscli/app/services/gitops.py` 与 `tests/app/test_gitops.py`，结果通过。
+
+**影响范围**：仅影响 `opscli app push` 对无 HEAD 新仓库的首次提交处理；已有提交、非 fast-forward 拒绝、binding 忽略检查和普通推送逻辑保持不变。
+
+**回滚方式**：还原本节记录、`GitService.push_all()` 的首次提交分支及对应两项测试。
+
+---
+
 ## 2026-09-05 MCP query - 币种语义与三入口 schema 审查跟进
 
 **变更原因**：`bf32a66c` 补齐 MCP 币种参数后，生产分支的字段语义索引仍把
@@ -1275,13 +1312,13 @@ Agent 在真实降级场景里拿到的多数候选根本执行不了。
 
 **切换前的对照验证**（21 条 `routing_eval_cases.json` 用例，同一套打分算法只换数据源）：
 
-| 指标 | 画像 | 意图目录 |
-| --- | --- | --- |
-| top-1 路由命中 | 16/21 | 16/21（打平，无回退） |
-| 候选可执行（能解析出 table_id） | **4/21** | **21/21** |
-| alias 有效率 | 2/15 | 36/36 |
-| 覆盖当前 44 个数据集 | 2 个（5%） | 36 个（82%） |
-| 意图条数 | 16 | 41 |
+| 指标                            | 画像       | 意图目录              |
+| ------------------------------- | ---------- | --------------------- |
+| top-1 路由命中                  | 16/21      | 16/21（打平，无回退） |
+| 候选可执行（能解析出 table_id） | **4/21**   | **21/21**             |
+| alias 有效率                    | 2/15       | 36/36                 |
+| 覆盖当前 44 个数据集            | 2 个（5%） | 36 个（82%）          |
+| 意图条数                        | 16         | 41                    |
 
 另测了「catalog + use_cases/scenario_description/priority 全信号」变体：对 21 条用例
 零增益，还把 case_013 的首选从活动数据集带偏到即时综合数据集，故**只换数据、不改算法**。
@@ -7433,11 +7470,11 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 **变更原因**：形态/词表碰撞扫描（拿账号真实授权枚举 1436 个值 + 2038 个字段标签
 与各字段形态/词表做交叉命中）找出三个生产值会被误读，均已实测确认：
 
-| 真实授权值 | 字段 | 命中词 | 实测后果 |
-|---|---|---|---|
+| 真实授权值       | 字段     | 命中词             | 实测后果                                   |
+| ---------------- | -------- | ------------------ | ------------------------------------------ |
 | `亚马逊-运营C组` | 销售小组 | `亚马逊`(platform) | 凭空多出平台范围 `['亚马逊SC','亚马逊VC']` |
-| `SC-BCH-0002` | 产品型号 | `sc`(amazon_sc) | 凭空多出平台范围 `['亚马逊SC']` |
-| `SD-51709` | 渠道SKU | `sd`(ad_type) | 选表候选归零，dataset 未定，查询彻底不可用 |
+| `SC-BCH-0002`    | 产品型号 | `sc`(amazon_sc)    | 凭空多出平台范围 `['亚马逊SC']`            |
+| `SD-51709`       | 渠道SKU  | `sd`(ad_type)      | 选表候选归零，dataset 未定，查询彻底不可用 |
 
 前两者是静默缩范围（组件值本身正确锁定，但多出用户从未提的平台口径，
 披露还会声称"本次默认按亚马逊SC + 亚马逊VC处理"）；第三者更重——
@@ -8917,4 +8954,30 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：规划合同新增键 `execution_ref.snapshot_policy`、`model_view.field_alias_mappings_zh`、澄清码 `snapshot_metric_window_conflict` / `dimension_not_in_dataset`；执行结果新增 `result_disclosures.freshness_disclosure_zh`，`order_disclosure_zh` 文案改为中文标签；快照指标多日请求的时间过滤由多日改为单日；趋势/时间粒度查询多一条 `orderBy`；图表执行结果多 `evidence_contract` 键；未授权国家点名的请求由 planned 变为澄清。
 
 **回滚方式**：`git revert` 本次提交；或 `git checkout -- opscli/query/services/planner opscli/query/commands/cli.py opscli/mcp/tools/query.py opscli/skills/templates/ops-dataset-query tests/query tests/skills/test_dataset_query_template.py && rm tests/query/planner/test_snapshot_policy.py tests/query/planner/test_round2_defects.py`，再重新安装 Skill。
+---
+
+## 2026-09-07 ops-app - 新应用建站链路统一使用 master 分支
+
+**变更原因**：AppHub 后端自动部署读取应用源码仓库的 `master`，而 `opscli app`、统一模板配置和建站 Skill 仍默认使用 `main`，可能导致源码推送成功但自动部署读取不到对应提交。
+
+**改动点**：`opscli app` 默认分支改为 `master`，Git 初始化、远端探测、fetch、upstream、fast-forward 校验和 push 改为按 binding 的 `default_branch` 执行；binding 从 AppHub 响应刷新 `default_branch`，缺失时默认 `master`，初始化返回字段改为通用的 `remote_branch*`。模板配置和安全 clone 脚本默认分支同步改为 `master`；`ops-app-build-spec` 明确模板与业务仓库均使用 `master`，版本升至 `v0.0.12`；`ops-app-data-builder` 增加本地 `master`、业务 `origin` 和 `origin/master` 门禁，版本升至 `v0.1.7`。新增决策文档并在旧设计文档顶部标记原 `main` 约定已被替代。
+
+**兼容边界**：只处理新应用，不增加旧应用分支迁移；模板仓库 clone URL 仍为 `http://10.1.13.143:3000/aukeys-admin/template.git`，`/template/master` 仅是 Gitea 页面路径；不修改参考脚本 `bind-apphub-git.py`。
+
+**验证结果**：`tests/app tests/auth/test_config.py` 通过，`54 passed`；build-spec 版本/模板/master 部署契约/安装、模板 clone 和 data-builder 定向测试通过，`18 passed`。完整 build-spec 契约文件另有 4 条与本次分支修改无关的既有文档断言失败，本次未扩展处理。
+
+**回滚方式**：回退 `opscli/app` 分支参数化、模板默认分支、两份 Skill 版本与门禁、相关测试及本条设计文档。
+---
+## 2026-09-08 amazon-rufus - 修复报告丢失回答正文
+
+**变更原因**：`get-backend B0CSN6FR1W US -q "这个商品适合送礼吗？"` 实际取得完整 Rufus 回答，但报告优先取商品链接并套用标题诊断模板，正文丢失。
+
+**改动点**：共享报告格式化器按题目要求的固定章节识别诊断题，普通问题复用已有逐题渲染；诊断正文提取先读取正文、blocks 和总结，再回退到链接。补充原始 SSE 同时包含正文和链接、单题及六/七题普通问答、三类诊断正文来源、内置七题报告的回归测试；上传 BOM 测试改为断言送礼问答格式。
+
+**验证结果**：修改前现有报告用例为 4 failed、1 passed；首批新增 4 条回归全部先复现失败。最终 `.venv/Scripts/python.exe -X utf8 -m pytest tests/amazon_rufus tests/mcp/test_amazon_rufus_tools.py -q -k "not test_get_platform_cookie_sends_platform_query"` 为 169 passed、1 deselected，采集器精简诊断报告定向测试另有 1 passed，`git diff --check` 通过。排除项是预存平台 Cookie 超时断言失败（期望 10，实际 180），已用原 HEAD 格式化器复核。原命令在项目虚拟环境实跑成功，生成 `output/amazon-rufus/B0CSN6FR1W-20260908-112545-46abaddde2b14c79b6efbded2e80edf3.md` 并上传，已读取正文确认包含完整送礼回答。未运行全库测试。
+
+**影响范围**：CLI、MCP 和采集报告共用的 Rufus 报告渲染；普通问答恢复逐题显示，默认诊断报告保留原有章节。
+
+**回滚方式**：撤销本次报告格式化器、新增回归测试及本条记录的变更，保留其他已有修改。
+
 ---

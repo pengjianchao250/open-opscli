@@ -20,14 +20,14 @@
 
 ## 当前 opscli 流程
 
-- 新项目源码已经通过统一模板仓库 clone，不再通过 `opscli app init` 获取模板。
-- 模板 clone 成功后、开始业务开发前，立即执行 `opscli app create "<app-name>" --path "<project-directory>" --json` 创建 AppHub 应用并写入本地 binding。
-- `create` 成功后立即执行 `opscli app init "<project-directory>" --json`，将已克隆项目绑定到应用源码仓库并同步 remote，不覆盖已有业务源码；模板 clone 遗留的 `origin` 会在目标仓库预检后替换。
-- `opscli app init`：目标仓库为空时保留本地源码，不要求远端预先存在 `main`。
-- `create/init` 任一步失败都停止后续开发，并按 `ops-feedback` 规范处理失败。
-- `opscli app push`：整体暂存、提交并普通推送 `HEAD:main`，不执行强制推送。
+- 新项目源码通过当前 Skill 的 `scripts/clone_template.py` 从统一模板仓库的 `master` 分支 clone；脚本成功后项目根目录不得存在 `.git`，不再通过 `opscli app init` 获取模板。
+- 模板 clone 和 `.git` 清理验证成功后、开始业务开发前，立即执行 `opscli app create "<app-name>" --path "<project-directory>" --json` 创建 AppHub 应用并写入本地 binding。
+- `create` 成功后立即执行 `opscli app init "<project-directory>" --json`，为现有模板源码初始化全新 Git 仓库并绑定应用源码仓库，不覆盖已有源码，也不继承模板仓库的 remote 或提交历史。
+- `opscli app init`：目标仓库为空时保留本地源码，不要求远端预先存在 `master`。
+- 模板 clone、`.git` 清理验证或 `create/init` 任一步失败都停止后续开发；`opscli` 失败按 `ops-feedback` 规范处理。
+- `opscli app push`：整体暂存、提交并普通推送 `HEAD:master`，不执行强制推送。
 - `opscli app push --message` 必填，用于存在工作区修改时创建普通 Git commit。
-- `push` 成功只表示源码到达远端 `main`，不创建 release、不查询版本、不消费发布事件。
+- `push` 成功只表示源码到达远端 `master`，不创建 release、不查询版本、不消费发布事件。
 
 执行会修改 Git 或远端状态的命令前：
 
@@ -36,7 +36,7 @@
 3. 说明 `opscli app push` 会整体暂存当前项目改动。
 4. 取得用户明确确认后执行 `opscli app push`。
 
-不得把业务代码推回统一模板仓库。remote 与本地应用绑定不一致时停止，先完成核对或重新初始化绑定。
+不得把业务代码推回统一模板仓库。开始业务开发前必须确认模板 `.git` 已清理，初始化后 `origin` 不指向统一模板仓库；remote 与本地应用绑定不一致时停止，先完成核对或重新初始化绑定。
 
 ## 职责结束边界
 

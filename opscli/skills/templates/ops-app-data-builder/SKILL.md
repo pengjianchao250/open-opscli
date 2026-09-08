@@ -2,7 +2,7 @@
 name: ops-app-data-builder
 description: 用于 Codex 中为已绑定 AppHub 应用的标准模板项目构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未绑定项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.6
+  version: 0.1.7
 ---
 
 # OPS 应用数据层构建
@@ -73,8 +73,9 @@ metadata:
 1. 根目录存在 `.opscli/app.json`，项目已绑定 AppHub 应用和独立仓库。
 2. 项目存在标准模板拉取后的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py`、`backend/api/v1/query.py` 和 `app.yaml`。
 3. binding 包含有效 `app_id` 和 `slug`，并且 `.opscli/app.json.slug == app.yaml.name`；`.opscli/app.json` 未被 Git 跟踪。
+4. 当前本地分支是 `master`，`origin` 与 `.opscli/app.json.repo_url` 指向同一 AppHub 业务仓库，且远端存在 `origin/master`。
 
-如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码、缺少标准 QueryGateway 文件，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成或重新执行 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架。
+如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码、缺少标准 QueryGateway 文件、当前分支不是 `master`、`origin` 不是 binding 对应的业务仓库、缺少 `origin/master`，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成或重新执行 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架。
 
 ### 1. 读取项目证据
 
