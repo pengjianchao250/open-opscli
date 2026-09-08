@@ -34,9 +34,25 @@ def test_binding_v3_round_trip_and_source_detection(tmp_path: Path) -> None:
     assert "template_repo_url" not in payload
     assert "template_branch" not in payload
     assert "token" not in target.read_text(encoding="utf-8").lower()
+    assert payload["default_branch"] == "master"
 
     (tmp_path / "index.html").write_text("app", encoding="utf-8")
     assert store.has_source_files(tmp_path) is True
+
+
+def test_binding_reads_remote_default_branch() -> None:
+    binding = SiteBinding.from_app_detail(
+        "销售看板",
+        {
+            "app_id": "app-1",
+            "slug": "sales-dashboard",
+            "title": "销售看板",
+            "repo_url": "https://gitea.example/apps/sales-dashboard.git",
+            "default_branch": "master",
+        },
+    )
+
+    assert binding.default_branch == "master"
 
 
 @pytest.mark.parametrize("schema_version", [1, 2])

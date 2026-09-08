@@ -109,7 +109,7 @@ def push(
     message: str = typer.Option(..., "--message", "-m", help="Git 提交说明"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """提交并推送源码到远端 main，不创建 AppHub release。"""
+    """提交并推送源码到应用绑定的远端默认分支，不创建 AppHub release。"""
     _run(
         "app push",
         lambda manager: manager.push(path, message=message),

@@ -9,6 +9,19 @@
 **影响范围**：AppHub 基础镜像；最终镜像不再提供 Node、pnpm、uv 或编译工具，下游应在构建阶段自行使用。发版流程继续构建当前源码并更新 `latest`，下游构建需拉取新基础镜像。
 
 **回滚方式**：恢复本次 Dockerfile 改动并重新构建基础镜像；不修改 SDK 源码或运行数据库。
+## 2026-09-07 App - 支持空远端仓库首次推送自动创建提交
+
+**变更原因**：新建应用通过 `app init` 绑定空远端后，本地仓库尚无 HEAD；原 `app push` 在自动暂存和提交前直接返回 `GIT-NO-COMMIT`，导致默认模板无法完成首次源码推送。
+
+**改动点**：调整 `GitService.push_all()` 的检查顺序，无 HEAD 但工作区存在源码时先执行 `git add -A` 并创建初始提交；只有无 HEAD 且无任何可提交内容时继续返回 `GIT-NO-COMMIT`。新增空远端首次推送和空仓库拒绝推送的回归测试。
+
+**验证结果**：新增用例定向运行 `2 passed`；完整 `tests/app` 回归 `47 passed`；使用现有项目环境运行 Ruff 检查 `opscli/app/services/gitops.py` 与 `tests/app/test_gitops.py`，结果通过。
+
+**影响范围**：仅影响 `opscli app push` 对无 HEAD 新仓库的首次提交处理；已有提交、非 fast-forward 拒绝、binding 忽略检查和普通推送逻辑保持不变。
+
+**回滚方式**：还原本节记录、`GitService.push_all()` 的首次提交分支及对应两项测试。
+
+---
 
 ## 2026-09-05 MCP query - 币种语义与三入口 schema 审查跟进
 
@@ -1287,13 +1300,13 @@ Agent 在真实降级场景里拿到的多数候选根本执行不了。
 
 **切换前的对照验证**（21 条 `routing_eval_cases.json` 用例，同一套打分算法只换数据源）：
 
-| 指标 | 画像 | 意图目录 |
-| --- | --- | --- |
-| top-1 路由命中 | 16/21 | 16/21（打平，无回退） |
-| 候选可执行（能解析出 table_id） | **4/21** | **21/21** |
-| alias 有效率 | 2/15 | 36/36 |
-| 覆盖当前 44 个数据集 | 2 个（5%） | 36 个（82%） |
-| 意图条数 | 16 | 41 |
+| 指标                            | 画像       | 意图目录              |
+| ------------------------------- | ---------- | --------------------- |
+| top-1 路由命中                  | 16/21      | 16/21（打平，无回退） |
+| 候选可执行（能解析出 table_id） | **4/21**   | **21/21**             |
+| alias 有效率                    | 2/15       | 36/36                 |
+| 覆盖当前 44 个数据集            | 2 个（5%） | 36 个（82%）          |
+| 意图条数                        | 16         | 41                    |
 
 另测了「catalog + use_cases/scenario_description/priority 全信号」变体：对 21 条用例
 零增益，还把 case_013 的首选从活动数据集带偏到即时综合数据集，故**只换数据、不改算法**。
@@ -7445,11 +7458,11 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 **变更原因**：形态/词表碰撞扫描（拿账号真实授权枚举 1436 个值 + 2038 个字段标签
 与各字段形态/词表做交叉命中）找出三个生产值会被误读，均已实测确认：
 
-| 真实授权值 | 字段 | 命中词 | 实测后果 |
-|---|---|---|---|
+| 真实授权值       | 字段     | 命中词             | 实测后果                                   |
+| ---------------- | -------- | ------------------ | ------------------------------------------ |
 | `亚马逊-运营C组` | 销售小组 | `亚马逊`(platform) | 凭空多出平台范围 `['亚马逊SC','亚马逊VC']` |
-| `SC-BCH-0002` | 产品型号 | `sc`(amazon_sc) | 凭空多出平台范围 `['亚马逊SC']` |
-| `SD-51709` | 渠道SKU | `sd`(ad_type) | 选表候选归零，dataset 未定，查询彻底不可用 |
+| `SC-BCH-0002`    | 产品型号 | `sc`(amazon_sc)    | 凭空多出平台范围 `['亚马逊SC']`            |
+| `SD-51709`       | 渠道SKU  | `sd`(ad_type)      | 选表候选归零，dataset 未定，查询彻底不可用 |
 
 前两者是静默缩范围（组件值本身正确锁定，但多出用户从未提的平台口径，
 披露还会声称"本次默认按亚马逊SC + 亚马逊VC处理"）；第三者更重——
@@ -8910,4 +8923,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：规划合同新增键 `component_candidates_zh` / `unsupported_currencies` 与 5 个澄清码（只增不删）；点名指标缺失的请求由 planned 变为澄清；趋势/按日请求多一个日期维度；含币种词的请求不再误注入国家筛选。
 
 **回滚方式**：`git checkout -- opscli/query/services/planner/agent_query_planner.py opscli/query/services/planner/query_plan.py tests/query/planner/test_query_plan.py opscli/skills/templates/ops-dataset-query && rm tests/query/planner/test_acceptance_defects.py`，再重新安装 Skill。
+---
+
+## 2026-09-07 ops-app - 新应用建站链路统一使用 master 分支
+
+**变更原因**：AppHub 后端自动部署读取应用源码仓库的 `master`，而 `opscli app`、统一模板配置和建站 Skill 仍默认使用 `main`，可能导致源码推送成功但自动部署读取不到对应提交。
+
+**改动点**：`opscli app` 默认分支改为 `master`，Git 初始化、远端探测、fetch、upstream、fast-forward 校验和 push 改为按 binding 的 `default_branch` 执行；binding 从 AppHub 响应刷新 `default_branch`，缺失时默认 `master`，初始化返回字段改为通用的 `remote_branch*`。模板配置和安全 clone 脚本默认分支同步改为 `master`；`ops-app-build-spec` 明确模板与业务仓库均使用 `master`，版本升至 `v0.0.12`；`ops-app-data-builder` 增加本地 `master`、业务 `origin` 和 `origin/master` 门禁，版本升至 `v0.1.7`。新增决策文档并在旧设计文档顶部标记原 `main` 约定已被替代。
+
+**兼容边界**：只处理新应用，不增加旧应用分支迁移；模板仓库 clone URL 仍为 `http://10.1.13.143:3000/aukeys-admin/template.git`，`/template/master` 仅是 Gitea 页面路径；不修改参考脚本 `bind-apphub-git.py`。
+
+**验证结果**：`tests/app tests/auth/test_config.py` 通过，`54 passed`；build-spec 版本/模板/master 部署契约/安装、模板 clone 和 data-builder 定向测试通过，`18 passed`。完整 build-spec 契约文件另有 4 条与本次分支修改无关的既有文档断言失败，本次未扩展处理。
+
+**回滚方式**：回退 `opscli/app` 分支参数化、模板默认分支、两份 Skill 版本与门禁、相关测试及本条设计文档。
 ---

@@ -31,7 +31,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.11"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.12"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -75,6 +75,7 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
 
     for required in (
         "http://10.1.13.143:3000/aukeys-admin/template",
+        "分支：`master`",
         'python "<skill-directory>/scripts/clone_template.py" "<project-directory>"',
         "成功后立即删除项目根目录 `.git` 并验证其不存在",
         'opscli app create "<app-name>" --path "<project-directory>" --json',
@@ -248,6 +249,9 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "opscli app create",
         "opscli app init",
         "opscli app push",
+        "统一模板仓库的 `master` 分支",
+        "HEAD:master",
+        "远端 `master`",
         "整体暂存当前项目改动",
         "push 成功只表示源码到达远端",
         "不提供 release 命令",
@@ -313,7 +317,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.11"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.12"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

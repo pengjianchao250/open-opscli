@@ -65,6 +65,12 @@ def test_clone_template_rejects_non_empty_target(tmp_path: Path) -> None:
     assert (target / "keep.txt").read_text(encoding="utf-8") == "existing"
 
 
+def test_clone_template_defaults_to_master_branch() -> None:
+    module = _load_script()
+
+    assert module.DEFAULT_TEMPLATE_BRANCH == "master"
+
+
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
 def test_clone_template_removes_cloned_repository_metadata(tmp_path: Path) -> None:
     module = _load_script()
