@@ -1,3 +1,15 @@
+## 2026-09-08 AppHub 镜像 - 分离构建工具与运行环境
+
+**变更原因**：下游应用将使用本仓库基础镜像，需要对齐 Python 3.12 与 UID/GID 1000，并避免把 Node、编译器和开发依赖带入业务容器。
+
+**改动点**：`opscli/docker/ops-apphub/template.dockerfile` 改为 Python 3.12 公共层、SDK builder 与精简 runtime；按 `uv.lock` 分层安装运行依赖和内部纯 Python SDK。opscli 仍取当前发行源码、不硬编码版本；可通过构建参数 `VCS_REF` 记录 OCI revision。最终环境由 root 持有，app 用户只读依赖、可写应用与数据目录。
+
+**验证结果**：`git diff --check` 通过。Podman 实际构建基础镜像（197,785,632 字节，Python 3.12.14 / opscli 0.0.161），`uv sync --locked` 解析 108 个包，运行环境不含 pytest/respx、Node/pnpm/uv/git/编译器；SDK 目录 6.36 MiB，无 `.c/.so/.pyd`；app UID/GID 1000 可写应用与数据目录、不可写依赖目录。下游镜像构建及 `uv pip check` 88 包一致性检查通过，新 SDK 环境运行后端快速档 131 条通过（忽略已由本地 156 条回归覆盖的 Git 绑定脚本测试），前端 11 条及本地/容器构建通过。隔离卷下 HTTP、静态资源、SQLite 初始化/WAL、健康检查与重建容器后任务持久化验证通过。未发布镜像或修改外部 Jenkins/Harbor 任务。
+
+**影响范围**：AppHub 基础镜像；最终镜像不再提供 Node、pnpm、uv 或编译工具，下游应在构建阶段自行使用。发版流程继续构建当前源码并更新 `latest`，下游构建需拉取新基础镜像。
+
+**回滚方式**：恢复本次 Dockerfile 改动并重新构建基础镜像；不修改 SDK 源码或运行数据库。
+
 ## 2026-09-05 MCP query - 币种语义与三入口 schema 审查跟进
 
 **变更原因**：`bf32a66c` 补齐 MCP 币种参数后，生产分支的字段语义索引仍把
