@@ -1,14 +1,14 @@
 # JSON Lens Prototype
 
-这是一个可丢弃的 HTML-first 原型，用来验证动态 API/JSON 结果的浏览方式。
+这是一个部署到 AppHub 的 HTML-first 工具，用来浏览和分析动态 API/JSON 结果。
 
 ## 运行
 
-在当前目录执行：
+在项目根目录执行：
 
 ```powershell
-npm install
-npm run dev
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
 打开 <http://127.0.0.1:4173/?variant=a>。开发服务器会把 `/api` 代理到本地 `http://127.0.0.1:8765`。本地 FastAPI 需要显式启用 `LOCAL_AUTH_FALLBACK_ENABLED=true`，或在 `127.0.0.1` 域下设置 `polarisUserToken` Cookie；页面不读取 localStorage 登录信息。
@@ -28,8 +28,8 @@ npm run dev
 ## 测试
 
 ```powershell
-npm install
-npm test
+npm --prefix frontend install
+npm --prefix frontend test
 ```
 
 测试分层：
@@ -42,10 +42,31 @@ npm test
 常用入口：
 
 ```powershell
-npm run test:e2e          # 无头模式运行全部页面测试
-npm run test:e2e:headed   # 打开浏览器运行，便于观察交互
-npm run test:e2e:ui       # 使用 Playwright UI 逐条运行和回放
-npm run test:e2e:report   # 打开最近一次测试的 HTML 报告
+npm --prefix frontend run test:e2e          # 无头模式运行全部页面测试
+npm --prefix frontend run test:e2e:headed   # 打开浏览器运行，便于观察交互
+npm --prefix frontend run test:e2e:ui       # 使用 Playwright UI 逐条运行和回放
+npm --prefix frontend run test:e2e:report   # 打开最近一次测试的 HTML 报告
 ```
 
-更新视觉基线使用 `npm run test:update-snapshots`。测试拦截应用前缀内的相对业务 API，不依赖真实后端或真实凭证。
+更新视觉基线使用 `npm --prefix frontend run test:update-snapshots`。测试拦截应用前缀内的相对业务 API，不依赖真实后端或真实凭证。
+
+## AppHub 发布
+
+项目通过根目录 `app.yaml` 声明为 AppHub 应用。根级 `Dockerfile` 使用 Node 24
+构建 Vite 静态资源，再由 AppHub Python 基础镜像启动单个 FastAPI 进程，托管
+构建产物以及 `/api/v1/keepa/run` 接口。`nixpacks.toml` 保留同等启动合同。
+
+发布前验证：
+
+```powershell
+npm --prefix frontend run build
+npm --prefix frontend run test:deployment
+```
+
+部署测试使用 `uv` 按 `requirements.txt` 创建隔离环境，不修改全局 Python。
+
+生产进程入口为：
+
+```text
+uvicorn backend.app:app --host 0.0.0.0 --port 8000
+```

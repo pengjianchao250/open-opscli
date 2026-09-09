@@ -1,3 +1,12 @@
+## 2026-09-08 AppHub 站点 - 按 ops-app-build-spec 迁移 test-keepa
+
+**变更原因**：`test-keepa` 现有仓库由旧建站流程生成，前端文件位于根目录且缺少统一 AppHub 项目合同；用户确认应使用 `ops-app-build-spec` 进行存量项目迁移。
+**改动点**：将 JSON Lens 的 Vite 页面、npm 清单、Playwright 配置和前端测试迁入 `sites/json-lens-prototype/frontend/`；同步 Dockerfile、Nixpacks、FastAPI 静态目录、忽略规则和部署合同测试；Docker 只安装业务依赖并复用基础镜像 SDK，Nixpacks 校验实际使用的 Keepa 模块；补齐根 `AGENTS.md`、`backend/CLAUDE.md`、`docs/apphub-contract.md` 及 `docs/ops-app/` 迁移、项目、数据、开发和部署说明。项目无 SQLite 需求，未复制数据库、Alembic 或 Compose 示例。
+**验证结果**：本地隔离环境中，Node 单元测试 6 项通过，Playwright 36 项通过，Vite 8.2.2 生产构建通过；Python 3.12 部署合同与后端冒烟通过，真实 `frontend/dist` 静态托管冒烟通过，`aukeys-opscli 0.0.132` 的 Keepa 模块导入通过，Python compileall 与 `git diff --check` 通过。本机未安装 Docker，未执行镜像构建。
+**影响范围**：仅 `sites/json-lens-prototype` 的源码目录和构建路径；页面业务行为、Keepa API、AppHub Viewer 身份模式及远端绑定不变。
+**回滚方式**：回退站点本次迁移改动，将 `frontend/` 中原有文件恢复到仓库根并恢复 Dockerfile、Nixpacks 和 FastAPI 的根级 `dist` 路径。
+---
+
 ## 2026-09-08 AppHub 站点 - 删除浏览器认证 SDK 并使用相对 API
 
 **变更原因**：AppHub 应用以 `/ops-app/{appId}/{slug}/` 同源前缀运行，浏览器 Cookie 由平台网关验证，网关注入 Viewer 身份头并在转发到应用前清除原始 Cookie。站点前端继续读取 localStorage、拼装认证头和使用根级 `/api/v1` 会重复平台职责，并绕过应用部署前缀。
@@ -5,6 +14,15 @@
 **验证结果**：JSON Lens 单元测试 `6 passed`、Playwright `36 passed`，SellerSprite Lens 单元测试 `11 passed`、Playwright `8 passed`；两个 Vite 生产构建通过，产物脚本和样式均使用 `./assets/*` 相对地址；浏览器回归确认同源 Cookie 自动随相对 API 请求发送，前端不再生成 `X-Ops-Token`、`X-Session-Id` 或 `X-User-*`；SDK 与旧认证配置引用扫描零残留，`git diff --check` 通过。
 **影响范围**：两个 `sites/*-lens-prototype` 的浏览器请求与本地联调方式；FastAPI 的 AppHub viewer/session/local 鉴权、SellerSprite Collector 内部网关 Key，以及 `/mcp`、`/sse` MCP API Key 鉴权均不变。
 **回滚方式**：恢复 `sites/ops-mcp-api-sdk`、两个站点的包依赖和认证头注入，并把相对 API 请求恢复为可配置的独立 REST 地址。
+---
+
+## 2026-09-08 AppHub 站点 - 修复 test-keepa 发布声明与运行入口
+
+**变更原因**：`test-keepa` 远端提交缺少 AppHub 根级 `app.yaml`，页面发布报 `YAML-INVALID`；补齐声明后的 release #72 原始事件进一步指出仓库根目录缺少平台必需的 `Dockerfile`，release #73 又指出声明 SQLite 的新应用必须包含 `compose.apphub.yaml`。该站点实际无数据库，因此移除无效数据库声明。完整导入 `opscli.api` 还会在 Python 3.12 环境加载无关路由并触发依赖兼容错误。
+**改动点**：为 `sites/json-lens-prototype` 增加无数据库的 AppHub YAML、Dockerfile、Docker 忽略清单、Nixpacks、Python 依赖和 FastAPI 启动入口；Docker 多阶段构建使用 Node 24 生成 Vite 产物，并由 AppHub opscli 基础镜像启动单 FastAPI 进程；后端改为独立应用，惰性加载 Keepa MCP 同源实现，接收 AppHub Viewer/Session 凭证并保留额度与遥测治理，同时托管 Vite 构建产物；新增部署合同和后端接口冒烟测试。
+**验证结果**：Python 3.12 隔离部署合同与后端冒烟测试通过；Node 单元测试 6 项通过；Vite 生产构建通过；Python compileall 与 `git diff --check` 通过。本机未安装 Docker。源码提交 `e909fc62140ad4679975562d58dcb83afab83bf5` 的 AppHub release #74 与手工重试 #75 均通过 YAML 校验、gitleaks 和打 tag，确认 `YAML-INVALID` 已解决；两次最终均因 Coolify 控制面 `ConnectError: [Errno 111] Connection refused` 失败，属于平台上游故障。
+**影响范围**：仅 `sites/json-lens-prototype` 的 AppHub 构建、启动、认证转发和 Keepa 请求；不修改 opscli 服务端已有 API。
+**回滚方式**：回退该站点新增的 AppHub/Python 文件及 `.gitignore`、`package.json`、`README.md` 改动，并删除本条记录。
 ---
 
 ## 2026-09-08 REST API - Keepa 与 SellerSprite 统一 AppHub 认证

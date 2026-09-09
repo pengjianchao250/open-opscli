@@ -1,5 +1,5 @@
 {
-  "name": "json-lens-prototype",
+  "name": "test-keepa-frontend",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "node --test tests/*.test.js",
+    "test:deployment": "uv run --no-project --python 3.12 --with-requirements ../requirements.txt python ../tests/deployment_contract.py && uv run --no-project --python 3.12 --with-requirements ../requirements.txt python ../tests/backend_app.py",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
