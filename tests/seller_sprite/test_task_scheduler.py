@@ -1901,6 +1901,34 @@ def test_scheduler_uses_explicit_task_auth_from_memory_without_persisting_secret
     asyncio.run(scenario())
 
 
+def test_scheduler_accepts_jwt_only_runtime_auth(tmp_path: Path):
+    async def scenario():
+        from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler
+
+        AuthContextRecordingRunManager.records = []
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        store = SellerSpriteTaskQueueStore(db_path=tmp_path / "queue.sqlite3")
+        scheduler = SellerSpriteTaskScheduler(
+            store=store,
+            settings=settings,
+            account_provider=DummyAccountProvider(),
+            manager_factory=lambda **kwargs: AuthContextRecordingRunManager(**kwargs),
+        )
+
+        await scheduler.enqueue(
+            _request("job-jwt-only", "B07YRMT36L"),
+            jwt="viewer-jwt",
+        )
+        await _wait_for_state(scheduler, "job-jwt-only", "succeeded")
+
+        assert AuthContextRecordingRunManager.records == [
+            ("job-jwt-only", "viewer-jwt", None, None),
+        ]
+        await scheduler.close()
+
+    asyncio.run(scenario())
+
+
 def test_scheduler_fails_closed_when_credential_scope_has_no_session(tmp_path: Path):
     async def scenario():
         from opscli.seller_sprite.services.task_scheduler import SellerSpriteTaskScheduler

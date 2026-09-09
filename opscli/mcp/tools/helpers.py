@@ -205,6 +205,9 @@ def _get_authenticated_user_email() -> str | None:
 
     auth_mode = get_current_auth_mode()
     api_key = get_current_api_key()
+    if auth_mode == "internal" or str(auth_mode or "").startswith("apphub_"):
+        verified_email = str(get_current_user_email() or "").strip().lower()
+        return verified_email or None
     if auth_mode == "remote":
         # 只有远程校验模式注入的 transport 邮箱可视为已验证身份。
         verified_email = str(get_current_user_email() or "").strip().lower()

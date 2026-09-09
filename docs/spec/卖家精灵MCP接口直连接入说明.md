@@ -202,6 +202,8 @@ seller_sprite_jobs_status(job_ids=["job-a", "job-b"], wait_seconds=30)
 
 Listing Analysis 必须使用 `seller_sprite_listing_analysis_submit`、`seller_sprite_listing_analysis_status`、`seller_sprite_listing_analysis_result` 的 submit/status/result 三段式。`seller_sprite_run` 生产入口会明确拒绝 `listing-analysis`，调用方必须改用 `seller_sprite_listing_analysis_submit`。它不属于普通批量任务，Listing Analysis `job_id` 不得传入 `seller_sprite_jobs_status`；本工作流继续使用专用 status/result，不推荐改用通用单任务状态工具。
 
+Listing Analysis 不允许 Agent 自动触发。只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才允许调用 submit；普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动提交。用户提供已有 `job_id` 或对已提交任务说“继续/查结果”时，可以直接使用 status/result 续查，不能重新 submit。
+
 ```text
 seller_sprite_listing_analysis_submit(asin="B0XXXX", station="GLOBAL", site="US", export_format="json")
 seller_sprite_listing_analysis_status(job_id="listing-job-1")

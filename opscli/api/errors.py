@@ -26,6 +26,16 @@ class ApiAuthError(Exception):
     注册针对性 exception_handler 不会波及合并进来的 MCP ASGI 路由的错误渲染。
     """
 
+    def __init__(
+        self,
+        *,
+        code: str = "authentication_required",
+        message: str = "请先完成 AppHub 账号授权",
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
 
 def success_response(data: object) -> JSONResponse:
     """构造统一成功响应（与 MCP 工具的 success/data/error 结构一致）。"""
@@ -89,10 +99,10 @@ def register_exception_handlers(app: FastAPI) -> None:
     """
 
     @app.exception_handler(ApiAuthError)
-    async def _handle_auth_error(_request: Request, _exc: ApiAuthError) -> JSONResponse:
+    async def _handle_auth_error(_request: Request, exc: ApiAuthError) -> JSONResponse:
         return error_response(
-            code="authentication_required",
-            message="请先完成 opscli 账号授权",
+            code=exc.code,
+            message=exc.message,
             status_code=401,
         )
 

@@ -4,7 +4,6 @@ from typer.testing import CliRunner
 
 from opscli.cli import app
 from opscli.seller_sprite import cli as seller_sprite_cli
-from opscli.seller_sprite_debug import cli as seller_sprite_debug_cli
 
 runner = CliRunner()
 
@@ -18,16 +17,6 @@ def test_public_seller_sprite_help_shows_remote_commands_only():
     assert "queue" not in result.stdout
     assert "account-binding" not in result.stdout
     assert "--mode" not in result.stdout
-
-
-def test_debug_seller_sprite_help_keeps_local_debug_options():
-    result = runner.invoke(app, ["seller-sprite-debug", "--help"])
-    assert result.exit_code == 0
-    assert "run" in result.stdout
-
-    run_help = runner.invoke(app, ["seller-sprite-debug", "run", "--help"])
-    assert run_help.exit_code == 0
-    assert "--mode" in run_help.stdout
 
 
 def test_public_seller_sprite_run_help_hides_local_only_options():
@@ -53,43 +42,6 @@ def test_public_seller_sprite_run_rejects_local_only_options():
 
     assert result.exit_code == 2
     assert "No such option" in result.output
-
-
-def test_debug_seller_sprite_run_keeps_local_execution_path(monkeypatch):
-    captured = {}
-
-    class FakeResult:
-        def to_dict(self):
-            return {"job_id": "debug-job", "mode": "api-direct"}
-
-    class FakeManager:
-        def scenarios(self):
-            return []
-
-        async def run(self, request):
-            captured["request"] = request
-            return FakeResult()
-
-    monkeypatch.setattr(seller_sprite_debug_cli, "SellerSpriteApiManager", lambda: FakeManager())
-
-    result = runner.invoke(
-        app,
-        [
-            "seller-sprite-debug",
-            "run",
-            "keyword-reverse",
-            "--params",
-            json.dumps({"asin": "B07YRMT36L"}),
-            "--mode",
-            "api-direct",
-        ],
-    )
-
-    assert result.exit_code == 0
-    assert captured["request"].scenario == "keyword-reverse"
-    assert captured["request"].params == {"asin": "B07YRMT36L"}
-    assert captured["request"].mode == "api-direct"
-    assert '"job_id": "debug-job"' in result.stdout
 
 
 def test_public_seller_sprite_run_uses_public_contract_without_local_flags(monkeypatch):

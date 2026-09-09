@@ -4,17 +4,26 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
-from opscli.mcp.context import get_current_api_key
+from opscli.mcp.context import (
+    get_current_api_key,
+    get_current_auth_mode,
+    get_current_jwt,
+    get_current_session_id,
+    get_current_user_email,
+    get_current_user_id,
+)
 from opscli.mcp_client import RemoteMcpClient
 
 from .helpers import _err
 
 ENV_COLLECTOR_MCP_URL = "OPSCLI_COLLECTOR_MCP_URL"
+ENV_COLLECTOR_GATEWAY_API_KEY_FILE = "OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE"
 
 
 class CollectorMcpProxyError(Exception):
@@ -38,12 +47,19 @@ async def call_collector(
     """以当前最终用户身份调用 Collector 的同名 Tool。"""
     try:
         url = _collector_url()
-        api_key = _current_api_key()
+        headers, apphub_request = _collector_headers()
         client = client_factory(
             url,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
         )
-        return await client.call_tool(tool_name, _proxy_arguments(arguments))
+        return await client.call_tool(
+            tool_name,
+            _proxy_arguments(
+                tool_name,
+                arguments,
+                include_apphub_auth=apphub_request,
+            ),
+        )
     except CollectorMcpProxyError as exc:
         return _err(exc, tool=f"MCP → {tool_name}（Collector 代理）")
     except Exception as exc:  # noqa: BLE001
@@ -107,12 +123,71 @@ def _current_api_key() -> str:
     return api_key
 
 
-def _proxy_arguments(arguments: dict[str, Any]) -> dict[str, Any]:
-    return {
+def _collector_headers() -> tuple[dict[str, str], bool]:
+    auth_mode = str(get_current_auth_mode() or "")
+    if auth_mode.startswith("apphub_"):
+        email = str(get_current_user_email() or "").strip().lower()
+        if not email:
+            raise CollectorMcpProxyError(
+                "COLLECTOR_MCP_IDENTITY_MISSING",
+                "当前 AppHub 请求缺少已验证用户身份",
+            )
+        key_path = os.environ.get(ENV_COLLECTOR_GATEWAY_API_KEY_FILE, "").strip()
+        if not key_path:
+            raise CollectorMcpProxyError(
+                "COLLECTOR_MCP_CONFIG_MISSING",
+                f"缺少 {ENV_COLLECTOR_GATEWAY_API_KEY_FILE}，无法访问数据采集服务",
+            )
+        key = Path(key_path).expanduser().read_text(encoding="utf-8").strip()
+        if not key:
+            raise CollectorMcpProxyError(
+                "COLLECTOR_MCP_CONFIG_INVALID",
+                f"{ENV_COLLECTOR_GATEWAY_API_KEY_FILE} 指向的凭证文件为空",
+            )
+        headers = {
+            "X-Collector-Gateway-Key": key,
+            "X-AppHub-User-Email": email,
+            "X-AppHub-Auth-Mode": auth_mode.removeprefix("apphub_"),
+        }
+        user_id = str(get_current_user_id() or "").strip()
+        if user_id:
+            headers["X-AppHub-User-Id"] = user_id
+        return headers, True
+    return {"Authorization": f"Bearer {_current_api_key()}"}, False
+
+
+def _proxy_arguments(
+    tool_name: str,
+    arguments: dict[str, Any],
+    *,
+    include_apphub_auth: bool,
+) -> dict[str, Any]:
+    forwarded = {
         key: value
         for key, value in arguments.items()
         if value is not None and key not in {"session_id", "jwt"}
     }
+    if include_apphub_auth and tool_name in {
+        "seller_sprite_run",
+        "seller_sprite_listing_analysis_submit",
+        "seller_sprite_listing_analysis_status",
+        "seller_sprite_listing_analysis_result",
+    }:
+        session_id = get_current_session_id()
+        jwt = get_current_jwt()
+        if (
+            not session_id
+            and not jwt
+            and get_current_auth_mode() == "apphub_local"
+        ):
+            from .helpers import _get_auth_pair
+
+            session_id, jwt = _get_auth_pair("ops", None, None)
+        if session_id:
+            forwarded["session_id"] = session_id
+        if jwt:
+            forwarded["jwt"] = jwt
+    return forwarded
 
 
 def _is_collector_unavailable(error: BaseException) -> bool:

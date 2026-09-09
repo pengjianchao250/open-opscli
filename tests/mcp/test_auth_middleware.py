@@ -82,6 +82,63 @@ def test_remote_middleware_injects_auth_mode_into_scope_and_context(monkeypatch)
     }
 
 
+def test_internal_gateway_key_injects_trusted_apphub_identity():
+    captured = {}
+
+    async def app(scope, receive, send):
+        from opscli.mcp.context import get_current_auth_mode, get_current_user_email
+
+        captured["scope_mode"] = scope.get("mcp_auth_mode")
+        captured["context_mode"] = get_current_auth_mode()
+        captured["email"] = get_current_user_email()
+
+    middleware = ApiKeyAuthMiddleware(
+        app,
+        api_key="regular-mcp-key",
+        internal_api_key="collector-gateway-key",
+    )
+    scope = {
+        "type": "http",
+        "path": "/mcp",
+        "query_string": b"",
+        "headers": [
+            (b"x-collector-gateway-key", b"collector-gateway-key"),
+            (b"x-apphub-user-email", b"User@Example.com"),
+        ],
+    }
+
+    _run(middleware(scope, lambda: None, lambda message: None))
+
+    assert captured == {
+        "scope_mode": "internal",
+        "context_mode": "internal",
+        "email": "user@example.com",
+    }
+
+
+def test_path_scoped_middleware_leaves_rest_outside_mcp_key_boundary():
+    captured = {}
+
+    async def app(scope, receive, send):
+        captured["path"] = scope["path"]
+
+    middleware = ApiKeyAuthMiddleware(
+        app,
+        api_key="mcp-key",
+        protected_path_prefixes=("/mcp", "/sse"),
+    )
+    scope = {
+        "type": "http",
+        "path": "/api/v1/keepa/run",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    _run(middleware(scope, lambda: None, lambda message: None))
+
+    assert captured == {"path": "/api/v1/keepa/run"}
+
+
 @respx.mock
 def test_remote_verify_uses_short_cache():
     """同一 API Key 的连续校验应命中短缓存，避免轮询时重复访问 OPS。"""

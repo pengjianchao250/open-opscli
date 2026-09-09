@@ -18,6 +18,7 @@ from opscli.beta.canopy.domain.models import CanopyScenarioRequest
 from opscli.beta.canopy.services import CanopyApiManager
 from opscli.beta.canopy.services.api_manager import request_canopy_api
 
+from .export_fallback import attach_json_data_fallback, build_export_payload_with_fallback
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
@@ -323,8 +324,11 @@ async def beta_canopy_export(job_id: str) -> dict:
     """仅当用户明确提到 beta/Canopy/测试服务时，读取 Canopy 任务导出文件信息。"""
     try:
         status = CanopyApiManager().job_status(job_id)
-        export = _public_export_payload(status.get("export"))
-        if not export.get("url"):
+        public_status = _strip_sensitive(status)
+        if not isinstance(public_status, dict):
+            raise ValueError("任务导出结构不合法")
+        export = _public_export_payload(build_export_payload_with_fallback(public_status))
+        if not export.get("url") and "json_data" not in export:
             raise ValueError(f"任务导出文件没有可下载地址：{job_id}")
         return _ok(export)
     except Exception as exc:
@@ -489,6 +493,7 @@ def _public_result(payload: dict[str, Any]) -> dict[str, Any]:
         public.pop("result_path", None)
         public.pop("response", None)
         _strip_public_debug_fields(public.get("request"))
+        attach_json_data_fallback(public)
         _sanitize_public_export(public)
         _compact_public_data(public)
         public["warnings"] = _public_warnings(public.get("warnings"))
@@ -514,7 +519,7 @@ def _sanitize_public_export(public: dict[str, Any]) -> None:
     if isinstance(url, str) and url.startswith("file://"):
         export["url"] = None
         url = None
-    if url:
+    if url or "json_data" in export:
         return
 
     warnings = public.get("warnings")

@@ -125,9 +125,12 @@ class TokenManager:
             self._store.save_token(system_key, body["jwt"], expires_in)
             return body["jwt"]
         except httpx.HTTPStatusError as e:
-            raise TokenFetchError(f"获取 {system_key} JWT 失败: {e.response.status_code}")
+            raise TokenFetchError(
+                f"获取 {system_key} JWT 失败: {e.response.status_code}",
+                status_code=e.response.status_code,
+            ) from e
         except Exception as e:
-            raise TokenFetchError(f"获取 {system_key} JWT 异常: {e}")
+            raise TokenFetchError(f"获取 {system_key} JWT 异常: {e}") from e
 
     def get_token(self, alias: str) -> str:
         sys = self._registry.get(alias)
@@ -220,6 +223,9 @@ class TokenManager:
             body = resp.json()
             return body["jwt"]
         except httpx.HTTPStatusError as e:
-            raise TokenFetchError(f"获取 {alias} JWT 失败: {e.response.status_code}")
+            raise TokenFetchError(
+                f"获取 {alias} JWT 失败: {e.response.status_code}",
+                status_code=e.response.status_code,
+            ) from e
         except Exception as e:
-            raise TokenFetchError(f"获取 {alias} JWT 异常: {e}")
+            raise TokenFetchError(f"获取 {alias} JWT 异常: {e}") from e

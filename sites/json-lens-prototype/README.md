@@ -1,16 +1,17 @@
 # JSON Lens Prototype
 
-这是一个可丢弃的 HTML-first 原型，用来验证动态 API/JSON 结果的浏览方式。
+这是一个部署到 AppHub 的 HTML-first 工具，用来浏览和分析动态 API/JSON 结果。
 
 ## 运行
 
-在仓库根目录执行：
+在项目根目录执行：
 
 ```powershell
-python -m http.server 4173 --directory sites/json-lens-prototype
+npm --prefix frontend install
+npm --prefix frontend run dev
 ```
 
-打开 <http://127.0.0.1:4173/?variant=a>。
+打开 <http://127.0.0.1:4173/?variant=a>。开发服务器会把 `/api` 代理到本地 `http://127.0.0.1:8765`。本地 FastAPI 需要显式启用 `LOCAL_AUTH_FALLBACK_ENABLED=true`，或在 `127.0.0.1` 域下设置 `polarisUserToken` Cookie；页面不读取 localStorage 登录信息。
 
 布局变体：
 
@@ -18,7 +19,7 @@ python -m http.server 4173 --directory sites/json-lens-prototype
 - `?variant=b`：结果优先，顶部请求工具栏
 - `?variant=c`：数据检查器 + 请求/字段侧栏
 
-原型内置离线样例数据。默认 API 地址为 `http://127.0.0.1:8765/api/v1/keepa/run`。真实 API 模式下，可在“连接设置”中修改接口地址并填写 Bearer API Key；Key 只存在当前页面内存，不写入 localStorage。
+原型内置离线样例数据。页面只调用相对地址 `./api/v1/keepa/run`。部署到 AppHub 后，浏览器 Cookie 由同源网关验证，网关注入 Viewer 身份头并将应用前缀内请求转发给 FastAPI；前端不读取或保存认证凭证。
 
 结果表格会缩略显示超长文本，悬停可查看完整内容。“下载 CSV”会导出当前筛选和排序后的表格数据，数组和对象字段以 JSON 文本保存。
 
@@ -27,8 +28,45 @@ python -m http.server 4173 --directory sites/json-lens-prototype
 ## 测试
 
 ```powershell
-npm install
-npm test
+npm --prefix frontend install
+npm --prefix frontend test
 ```
 
-测试分层：Node 原生测试验证请求头归一化；Playwright 验证浏览器请求合同、场景切换 E2E 和桌面/移动端视觉快照。更新视觉基线使用 `npm run test:update-snapshots`。
+测试分层：
+
+- Node 原生测试验证表格筛选/排序和 CSV 导出。
+- Playwright 场景矩阵覆盖全部 11 个 Keepa 查询场景，校验 AppHub 相对 API 路径、页面请求体和响应渲染。
+- 页面交互测试覆盖必填/筛选校验、复杂参数转换、API 错误、结果视图、布局切换、站点兼容和历史查询。
+- 视觉回归测试覆盖桌面端、移动端、暗色主题和历史查询展开状态。
+
+常用入口：
+
+```powershell
+npm --prefix frontend run test:e2e          # 无头模式运行全部页面测试
+npm --prefix frontend run test:e2e:headed   # 打开浏览器运行，便于观察交互
+npm --prefix frontend run test:e2e:ui       # 使用 Playwright UI 逐条运行和回放
+npm --prefix frontend run test:e2e:report   # 打开最近一次测试的 HTML 报告
+```
+
+更新视觉基线使用 `npm --prefix frontend run test:update-snapshots`。测试拦截应用前缀内的相对业务 API，不依赖真实后端或真实凭证。
+
+## AppHub 发布
+
+项目通过根目录 `app.yaml` 声明为 AppHub 应用。根级 `Dockerfile` 使用 Node 24
+构建 Vite 静态资源，再由 AppHub Python 基础镜像启动单个 FastAPI 进程，托管
+构建产物以及 `/api/v1/keepa/run` 接口。`nixpacks.toml` 保留同等启动合同。
+
+发布前验证：
+
+```powershell
+npm --prefix frontend run build
+npm --prefix frontend run test:deployment
+```
+
+部署测试使用 `uv` 按 `requirements.txt` 创建隔离环境，不修改全局 Python。
+
+生产进程入口为：
+
+```text
+uvicorn backend.app:app --host 0.0.0.0 --port 8000
+```

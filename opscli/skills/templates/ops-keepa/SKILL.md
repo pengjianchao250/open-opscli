@@ -58,7 +58,7 @@ opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --
 ## 正式链路
 
 - 本地 CLI 代理链路：`opscli keepa ...`
-- 远端 MCP tools：`keepa_scenarios`、`keepa_quota_status`、`keepa_run`、`keepa_job_status`、`keepa_export`
+- 远端 MCP tools：`keepa_scenarios`、`keepa_quota_status`、`keepa_run`、`keepa_job_status`、`keepa_export`、`keepa_history`
 - 常见前置：确认本机 `opscli auth login` 已完成且登录态仍有效
 
 说明：
@@ -118,6 +118,7 @@ opscli keepa export <job_id>
 3. 组织 `scenario + site + params`，执行 `opscli keepa run ...`
 4. 用户执行前想确认今天还能查几次时，使用 `opscli keepa quota-status`
 5. 如果用户要续查任务或只要导出文件，再用 `job-status` / `export`
+6. 如果用户要读取已经沉淀的历史数据，按任务 ID 或 `scenario/site/params/time` 条件使用 `keepa_history`；只列任务时传 `include_records=false`，读取数据明细时按需使用 `dataset_code + record_offset + record_limit` 分页
 
 ## 场景速查
 
@@ -178,7 +179,7 @@ opscli keepa run deals --site US --params '{"selection":{"priceTypes":[18],"page
 - 成功时只保留：场景、站点、查询对象、`job_id`、`row_count`、导出文件
 - 若 `keepa_run` 响应顶层存在 `quota`，在最终回复末尾补一句：
   - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
-- `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
+- `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export`、`keepa_history` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 - 如果 `row_count=0`，明确告诉用户无匹配结果，并提醒核对站点、ASIN、关键词或筛选条件
 - 用户问“字段准不准”时，说明 JSON 保留 Keepa 原始业务结构，XLSX 在相同响应基础上生成中文字段、可读派生值和多 Tab 明细；口径以 Keepa 原始响应和官方文档为准

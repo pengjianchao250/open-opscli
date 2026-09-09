@@ -8,8 +8,10 @@ from types import SimpleNamespace
 from openpyxl import Workbook
 
 from opscli.keepa.collection_storage_integration import (
+    KEEPA_CACHE_SCOPE,
     KeepaCollectionReconciler,
     KeepaCollectionSubmitter,
+    build_keepa_cache_key,
 )
 from opscli.keepa.collection_storage_parser import KeepaCollectionParser
 from opscli.keepa.domain.models import (
@@ -82,6 +84,8 @@ def test_keepa_xlsx_result_becomes_common_collection_document(tmp_path):
 
     assert document.parser_version == "keepa-v4"
     assert document.request_params["normalized_params"] == {"asin": "B0088PUEPK"}
+    assert len(document.request_params["_cache"]["cache_key"]) == 64
+    assert document.request_params["_cache"]["cache_scope"] == KEEPA_CACHE_SCOPE
     assert [artifact.artifact_type for artifact in document.artifacts] == [
         "params",
         "raw",
@@ -261,6 +265,8 @@ def test_keepa_submitter_adds_common_collection_environment(tmp_path):
     assert submission.data_environment == "debug"
     assert submission.ingestion_mode == "live"
     assert submission.result_path == Path(result.result_path).resolve()
+    assert submission.cache_key == build_keepa_cache_key(request)
+    assert submission.cache_scope == KEEPA_CACHE_SCOPE
 
 
 def test_keepa_reconciler_recovers_post_cutover_result_missing_from_outbox(tmp_path):
@@ -287,6 +293,20 @@ def test_keepa_reconciler_recovers_post_cutover_result_missing_from_outbox(tmp_p
             "scenario": "product",
             "site": "US",
             "result_path": str(new_result),
+            "params_path": str(new_root / "params.json"),
+            "row_count": 1,
+        },
+    )
+    _write_json(
+        new_root / "params.json",
+        {
+            "request": {
+                "scenario": "product",
+                "site": "US",
+                "params": {"asin": "B0TEST"},
+                "export_format": "xls",
+            },
+            "normalized_params": {"asin": "B0TEST", "domain": 1},
         },
     )
     os.utime(old_result, (946684800, 946684800))
@@ -304,6 +324,9 @@ def test_keepa_reconciler_recovers_post_cutover_result_missing_from_outbox(tmp_p
     )
 
     assert [item.source_job_id for item in first.submissions] == ["new-job"]
+    assert first.submissions[0].cache_key
+    assert first.submissions[0].cache_scope == KEEPA_CACHE_SCOPE
+    assert first.submissions[0].result_metadata["row_count"] == 1
     assert first.next_cursor == new_result.stat().st_mtime_ns
     outbox.submit(first.submissions[0])
     second = reconciler.reconcile(

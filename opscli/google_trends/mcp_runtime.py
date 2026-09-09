@@ -32,6 +32,8 @@ class GoogleTrendsMcpRuntime:
 
     def __init__(self) -> None:
         self.collection_submitter: Callable[..., bool] | None = None
+        self.cache_repository: Any | None = None
+        self.cache_environment: str | None = None
         self._ready = False
         self._lifespan_depth = 0
 
@@ -90,6 +92,8 @@ class GoogleTrendsMcpRuntime:
 
         source_registered = False
         self.collection_submitter = None
+        self.cache_repository = None
+        self.cache_environment = None
         self._ready = False
         try:
             from opscli.google_trends.collection_storage_integration import (
@@ -116,10 +120,14 @@ class GoogleTrendsMcpRuntime:
                 self.collection_submitter = GoogleTrendsCollectionSubmitter(
                     storage_runtime
                 )
+                self.cache_repository = getattr(storage_runtime, "repository", None)
+                self.cache_environment = storage_runtime.settings.data_environment
             self._ready = True
             self._lifespan_depth = 1
         except Exception:  # noqa: BLE001
             self.collection_submitter = None
+            self.cache_repository = None
+            self.cache_environment = None
             self._cleanup_storage(
                 storage_runtime,
                 source_registered=source_registered,
@@ -132,6 +140,8 @@ class GoogleTrendsMcpRuntime:
         finally:
             self._lifespan_depth = 0
             self.collection_submitter = None
+            self.cache_repository = None
+            self.cache_environment = None
             self._ready = False
             self._cleanup_storage(
                 storage_runtime,
@@ -196,6 +206,8 @@ class GoogleTrendsMcpRuntime:
             session_id=session_id,
             jwt=jwt,
             collection_submitter=self.collection_submitter,
+            cache_repository=self.cache_repository,
+            cache_environment=self.cache_environment,
         )
 
     @staticmethod

@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import logging
 import os
+import secrets
 import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from opscli.api.cors import cors_headers_for_scope
 from opscli.config import __version__
 
 # 直接使用 Starlette 官方类型，消除中间件接口与 Starlette 的类型不兼容问题
@@ -101,6 +103,8 @@ class ApiKeyAuthMiddleware:
         *,
         api_key: str | None = None,
         auth_verify_url: str | None = None,
+        protected_path_prefixes: tuple[str, ...] | None = None,
+        internal_api_key: str | None = None,
     ):
         """
         Args:
@@ -112,6 +116,8 @@ class ApiKeyAuthMiddleware:
         self.app = app
         self._api_key = api_key
         self._auth_verify_url = auth_verify_url
+        self._protected_path_prefixes = protected_path_prefixes
+        self._internal_api_key = internal_api_key
         # 缓存结构：api_key -> (last_verified_ts, user_data)
         # last_verified_ts 为最近一次远程校验成功的时间戳，用于计算新鲜期与宽限期。
         self._verify_cache: dict[str, tuple[float, dict]] = {}
@@ -124,6 +130,33 @@ class ApiKeyAuthMiddleware:
             _logger.info("MCP Server 运行在固定 API Key 模式")
         else:
             _logger.warning("MCP Server 未配置任何 API Key 鉴权！")
+
+    @staticmethod
+    def _header(scope: Scope, name: bytes) -> str | None:
+        for header_name, value in scope.get("headers", []):
+            if header_name.lower() == name:
+                normalized = value.decode("utf-8", errors="replace").strip()
+                return normalized or None
+        return None
+
+    def _is_protected_path(self, path: str) -> bool:
+        if self._protected_path_prefixes is None:
+            return True
+        return any(path.startswith(prefix) for prefix in self._protected_path_prefixes)
+
+    def _internal_identity(self, scope: Scope) -> dict[str, str | None] | None:
+        if not self._internal_api_key:
+            return None
+        supplied = self._header(scope, b"x-collector-gateway-key")
+        if not supplied or not secrets.compare_digest(supplied, self._internal_api_key):
+            return None
+        email = self._header(scope, b"x-apphub-user-email")
+        if not email:
+            return None
+        return {
+            "email": email.strip().lower(),
+            "user_id": self._header(scope, b"x-apphub-user-id"),
+        }
 
     def _extract_token(self, scope: Scope) -> str | None:
         """从 Query Param 或 Header 中提取 API Key。
@@ -179,6 +212,10 @@ class ApiKeyAuthMiddleware:
                 _logger.debug("客户端在 POST /messages/ 时断开连接，已忽略")
             return
 
+        if not self._is_protected_path(path):
+            await self.app(scope, receive, send)
+            return
+
         token = self._extract_token(scope)
         trace_keepa = path.startswith("/api/v1/keepa")
         auth_started_at = time.monotonic() if trace_keepa else 0.0
@@ -208,7 +245,15 @@ class ApiKeyAuthMiddleware:
             )
 
         # ── 校验逻辑 ────────────────────────────────────────────────
-        if self._auth_verify_url:
+        internal_identity = self._internal_identity(scope)
+        if internal_identity:
+            token = None
+            scope["mcp_auth_mode"] = "internal"
+            scope["mcp_user_id"] = internal_identity.get("user_id")
+            scope["mcp_user_email"] = internal_identity.get("email")
+            scope["mcp_allowed_tools"] = None
+            scope["mcp_permission_enabled"] = False
+        elif self._auth_verify_url:
             # 远程校验模式
             try:
                 user_info = await self._verify_remote(token)
@@ -229,7 +274,7 @@ class ApiKeyAuthMiddleware:
                         )
                     )
                 # 临时故障不代表 Key 无效，返回 503 让客户端稍后重试，避免误走 OAuth。
-                await self._send_503(send, reason="auth_service_unavailable")
+                await self._send_503(scope, send, reason="auth_service_unavailable")
                 return
             if not user_info:
                 if trace_keepa:
@@ -444,7 +489,7 @@ class ApiKeyAuthMiddleware:
             raise ApiKeyVerificationUnavailable(failure_desc)
         return None
 
-    async def _send_401(self, _scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
+    async def _send_401(self, scope: Scope, send: Send, reason: str = "invalid_api_key") -> None:
         body = f'{{"error":"Unauthorized","message":"Invalid or missing API Key","reason":"{reason}"}}'
         await send({
             "type": "http.response.start",
@@ -452,14 +497,14 @@ class ApiKeyAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"www-authenticate", b'Bearer realm="opscli-mcp"'),
-            ],
+            ] + cors_headers_for_scope(scope),
         })
         await send({
             "type": "http.response.body",
             "body": body.encode("utf-8"),
         })
 
-    async def _send_503(self, send: Send, reason: str) -> None:
+    async def _send_503(self, scope: Scope, send: Send, reason: str) -> None:
         """返回鉴权依赖临时不可用，避免把未完成校验的 Key 误判为无效。"""
         body = (
             '{"error":"Service Unavailable",'
@@ -472,7 +517,7 @@ class ApiKeyAuthMiddleware:
             "headers": [
                 (b"content-type", b"application/json"),
                 (b"retry-after", b"5"),
-            ],
+            ] + cors_headers_for_scope(scope),
         })
         await send({
             "type": "http.response.body",

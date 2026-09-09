@@ -140,7 +140,7 @@ class SellerSpriteTaskScheduler:
         )
         self.manager_factory = manager_factory or self._default_manager_factory
         self.collection_submitter = collection_submitter
-        self._runtime_auth: dict[str, tuple[str, str | None]] = {}
+        self._runtime_auth: dict[str, tuple[str | None, str | None]] = {}
         self._account_credential_scope: str | None = None
         self._account_expected_user_email: str | None = None
         self._runner_task: asyncio.Task | None = None
@@ -305,7 +305,7 @@ class SellerSpriteTaskScheduler:
                 requested_account_id=requested_account_id,
                 requested_account_key=requested_account_key,
             )
-        if session_id:
+        if session_id or jwt:
             # 显式凭证仅按 job_id 短暂保存在内存中，禁止写入 SQLite 或跨任务复用。
             self._runtime_auth[str(normalized.job_id)] = (session_id, jwt)
         if credential_scope:
@@ -322,6 +322,34 @@ class SellerSpriteTaskScheduler:
         if self.auto_start:
             await self.start()
         return status
+
+    async def enqueue_cached_owned_mcp_run(
+        self,
+        request: SellerSpriteScenarioRequest,
+        *,
+        mcp_user_email: str,
+        source_job_id: str,
+        row_count: int,
+        export_payload: dict[str, Any] | None,
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
+        requested_account_id: str | None = None,
+        requested_account_key: str | None = None,
+    ) -> dict[str, Any]:
+        """为当前用户创建不进入 Worker 的缓存成功任务。"""
+        normalized = self._normalize_request(request)
+        get_scenario(normalized.scenario)
+        return self.store.enqueue_cached_owned_mcp_run(
+            request=normalized,
+            queue_scope=QUEUE_SCOPE,
+            root_dir=self._build_root_dir(normalized),
+            user_email=mcp_user_email,
+            source_job_id=source_job_id,
+            row_count=row_count,
+            export_payload=export_payload,
+            account_route=account_route,
+            requested_account_id=requested_account_id,
+            requested_account_key=requested_account_key,
+        )
 
     async def start(self) -> None:
         """恢复过期任务并启动后台调度循环。"""
@@ -1815,6 +1843,7 @@ class SellerSpriteTaskScheduler:
             status = self.store.get_status(result.job_id)
             if status.get("state") != "succeeded":
                 return
+            status.update(self.store.get_task_account_binding(result.job_id))
             self.collection_submitter(request=request, result=result, status=status)
         except Exception:
             logger.exception(
@@ -1906,7 +1935,7 @@ def _login_stage(exc: Exception, failover_count: int) -> str:
 def _resolve_task_auth(
     context: dict[str, Any],
     *,
-    runtime_auth: tuple[str, str | None] | None = None,
+    runtime_auth: tuple[str | None, str | None] | None = None,
     require_auth: bool = False,
     expected_user_email: str | None = None,
 ) -> tuple[str | None, str | None]:

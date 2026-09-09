@@ -1,27 +1,29 @@
 # opscli API 使用文档
 
-> 版本：v1.0（2026-09-01）｜适用：`aukeys-opscli >= 0.0.129`
+> 版本：v1.1（2026-09-08）｜适用：`aukeys-opscli >= 0.0.129`
 > 本文面向**通过 HTTP 调用 opscli 服务端**的使用者。调用纪律与部署约束见 [API调用规范](OPSCLI_API调用规范.md)；进程内 Python 调用见 [SDK使用文档](OPSCLI_SDK使用文档.md)。
 
 ---
 
 ## 1. 服务简介
 
-opscli 可以服务端形态运行：一条 `opscli-mcp` 命令同时提供 **REST API**（`/api/v1/*`，面向网站与业务系统）与 **MCP 端点**（`/mcp`、`/sse`，面向 AI Agent）。两者共用同一业务内核与治理（查询走同一 `QueryManager`，Keepa 走同一套额度/遥测）。
+opscli 可以服务端形态运行：一条 `opscli-mcp` 命令同时提供 **REST API**（`/api/v1/*`，面向网站与业务系统）与 **MCP 端点**（`/mcp`、`/sse`，面向 AI Agent）。两者共用业务内核与治理，但 REST 使用 AppHub 身份，MCP 端点继续使用 MCP API Key。
 
 当前 REST 能力：
 
 - **query 取数全家桶（12 个端点）**：自然语言规划/取数、数据集元数据、语义目录、payload 构造与执行、图表查询；
 - **Keepa 场景（2 个端点）**：场景清单与场景执行；
+- **SellerSprite 场景**：场景/额度、普通异步任务与 Listing Analysis；
+- **认证检查**：当前 AppHub OPS 凭据检查；
 - **健康检查（1 个端点）**。
 
-快速自检：服务启动后打开 `http://<host>:<port>/docs` 可看到全部 15 个端点的 Swagger 文档（`/openapi.json` 为机器可读合同）。
+快速自检：服务启动后打开 `http://<host>:<port>/docs` 查看当前 Swagger 文档（`/openapi.json` 为机器可读合同）。
 
 ---
 
 ## 2. 启动服务
 
-### 2.1 单用户模式（固定 API Key）
+### 2.1 MCP 固定 Key 模式
 
 ```bash
 opscli-mcp --transport both --host 0.0.0.0 --port 8765
@@ -38,22 +40,23 @@ opscli-mcp --transport both --host 0.0.0.0 --port 8765
 
 CLI 参数：`--transport sse|http|both`（缺省为 stdio，**无 REST API**）、`--host`（默认 0.0.0.0）、`--port`（默认 8765）、`--auth-verify-url`。
 
-### 2.2 多用户模式（远程校验，产品化推荐）
+### 2.2 MCP 远程校验模式
 
 ```bash
 opscli-mcp --transport both --auth-verify-url https://<ops-host>/v1/mcp/verify-key
 ```
 
-不传 `--auth-verify-url` 时会自动用 `config.ini` 的 `ops_url` 拼接。此模式下 API Key 由 OPS 后端统一签发与校验，每个 Key 独立身份与凭证隔离。
+不传 `--auth-verify-url` 时会自动用 `config.ini` 的 `ops_url` 拼接。该参数只影响 `/mcp`、`/sse`，不参与 REST 鉴权。
 
-### 2.3 准备业务账号（重要）
+### 2.3 准备 AppHub 登录态
 
-API Key 只是"进门凭证"，取数还需要该 Key 下有**已登录的 opscli 账号**：
+REST 业务请求使用以下任一方式：
 
-- 多用户模式：后端校验通过即注入身份，无需额外登录；
-- 单用户模式：先通过 MCP auth 工具完成一次登录（如 `auth_mcp_login`，或 `auth_login_start` + 浏览器授权 + `auth_login_poll`），登录态落在该 Key 的隔离凭证目录。
+- Session：Cookie `polarisUserToken` 或 Header `X-Session-Id`，服务端调用 `AuthClient.get_me()` 校验身份；
+- viewer：`X-Ops-Token` + `X-User-Email`，可选 `X-User-Id` / `X-User-Name`；
+- 本地开发：显式设置 `LOCAL_AUTH_FALLBACK_ENABLED=true`，生产必须关闭。
 
-未登录就调用业务端点会得到 `401 {"error": {"code": "authentication_required", ...}}`。
+SellerSprite 还要求通用网关和 Collector 配置同一个 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。该内部 Key 不得发送给浏览器。
 
 ---
 
@@ -61,7 +64,9 @@ API Key 只是"进门凭证"，取数还需要该 Key 下有**已登录的 opscl
 
 ```bash
 BASE=http://127.0.0.1:8765
-KEY=<你的-api-key>
+OPS_TOKEN=<你的-ops-token>
+SESSION_ID=<你的-session-id>
+USER_EMAIL=<你的邮箱>
 
 # 1) 健康检查（无需 Key）
 curl -s $BASE/health/live
@@ -69,7 +74,8 @@ curl -s $BASE/health/live
 
 # 2) 一句话取数：规划 + 执行一步完成
 curl -s -X POST "$BASE/api/v1/query/flow" \
-  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -H "X-Ops-Token: $OPS_TOKEN" -H "X-Session-Id: $SESSION_ID" \
+  -H "X-User-Email: $USER_EMAIL" -H "Content-Type: application/json" \
   -d '{"request": "近30天各站点销售额", "limit": 100}'
 ```
 
@@ -92,11 +98,11 @@ curl -s -X POST "$BASE/api/v1/query/flow" \
 
 ## 4. 鉴权
 
-- 传递方式（按优先级）：`Authorization: Bearer <key>` ＞ `?api_key=<key>` ＞ `X-MCP-Proxy-Auth: Bearer <key>`；
-- **身份不接受自报**：请求体中传 `session_id` / `jwt` / `userEmail` 会被合同直接拒绝（422），身份只来自 API Key 对应的传输层鉴权；
-- Key 无效/缺失 → `401`（中间件裸响应 `{"error":"Unauthorized",...}`，非统一信封）；
-- 远程校验服务临时不可用 → `503` + `Retry-After: 5`（可退避重试）；
-- Key 有效但未登录业务账号 → `401` 信封 `authentication_required`。
+- Session 模式优先使用 Cookie `polarisUserToken`，其次 `X-Session-Id`；可同时携带 `X-Ops-Token`；
+- viewer 模式要求 `X-Ops-Token + X-User-Email`，用户身份头必须来自可信 AppHub 宿主；
+- 请求体中传 `session_id` / `jwt` / `userEmail` 会被合同直接拒绝（422）；
+- AppHub 登录态缺失、无效或过期 → `401` 信封 `authentication_required`；
+- MCP API Key 只用于 `/mcp`、`/sse`。
 
 ---
 
@@ -149,7 +155,8 @@ curl -s http://127.0.0.1:8765/health/live   # {"status":"live"}（无信封）
 | top_n | int | 否 | Top N 类问题（1~50） |
 
 ```bash
-curl -s -X POST $BASE/api/v1/query/plan -H "Authorization: Bearer $KEY" \
+curl -s -X POST $BASE/api/v1/query/plan -H "X-Ops-Token: $OPS_TOKEN" \
+  -H "X-Session-Id: $SESSION_ID" -H "X-User-Email: $USER_EMAIL" \
   -H "Content-Type: application/json" \
   -d '{"request":"近7天美国站点广告花费Top10的ASIN","top_n":10}'
 ```
@@ -181,8 +188,8 @@ curl -s -X POST $BASE/api/v1/query/plan -H "Authorization: Bearer $KEY" \
 | all_fields | `true` 返回全量授权数据集全部字段（带用户级缓存，1 小时） |
 
 ```bash
-curl -s "$BASE/api/v1/query/metadata?dataset=ds_xxx" -H "Authorization: Bearer $KEY"
-curl -s "$BASE/api/v1/query/metadata?all_fields=true" -H "Authorization: Bearer $KEY"
+curl -s "$BASE/api/v1/query/metadata?dataset=ds_xxx" -H "X-Session-Id: $SESSION_ID"
+curl -s "$BASE/api/v1/query/metadata?all_fields=true" -H "X-Session-Id: $SESSION_ID"
 ```
 
 返回维度/指标字段列表、`select_columns`、`filter_configs` 等，是构造查询前的必读信息。
@@ -283,7 +290,8 @@ curl -s "$BASE/api/v1/query/metadata?all_fields=true" -H "Authorization: Bearer 
 | wait | bool | 否 | 等待任务完成（长任务建议 false + 轮询 job 状态） |
 
 ```bash
-curl -s -X POST $BASE/api/v1/keepa/run -H "Authorization: Bearer $KEY" \
+curl -s -X POST $BASE/api/v1/keepa/run -H "X-Ops-Token: $OPS_TOKEN" \
+  -H "X-Session-Id: $SESSION_ID" -H "X-User-Email: $USER_EMAIL" \
   -H "Content-Type: application/json" \
   -d '{"scenario":"product_lookup","params":{"asin":"B0XXXXXXX"},"site":"US","export_format":"json"}'
 ```
@@ -318,13 +326,18 @@ POST /charts/{uuid}/run（dry_run 可先验证 SQL）
 ### 7.4 错误处理伪代码
 
 ```python
-resp = http.post(url, json=body, headers={"Authorization": f"Bearer {key}"}, timeout=310)
+resp = http.post(
+    url,
+    json=body,
+    headers={"X-Session-Id": session_id, "X-Ops-Token": ops_token},
+    timeout=310,
+)
 if resp.status_code == 503:
     wait_and_retry(delay=resp.headers.get("Retry-After", 5))
 elif resp.status_code in (400, 422, 404):
     fix_request(resp.json()["error"]["message"])   # 修改请求，不可原样重试
 elif resp.status_code == 401:
-    relogin_or_replace_key()                        # 永不原样重试
+    refresh_apphub_login()                          # 不原样重放业务请求
 elif resp.status_code == 502:
     retry_with_backoff()                            # 上游失败，可幂等重试
 envelope = resp.json()
@@ -339,8 +352,8 @@ if data.get("truncated"):
 
 ## 8. 常见问题
 
-**Q：401 `Unauthorized`（裸响应）和 401 `authentication_required`（信封）有什么区别？**
-前者是 API Key 错误/缺失（中间件拒绝），检查 Key；后者是 Key 有效但该身份下没有已登录的业务账号，按 §2.3 完成授权。
+**Q：REST 返回 401 `authentication_required` 怎么处理？**
+当前 AppHub Session/Token 缺失、无效或已过期，刷新 AppHub 登录态后重新发起请求。MCP Key 的裸 `Unauthorized` 只会出现在 `/mcp`、`/sse`。
 
 **Q：请求返回 422 说某字段不允许？**
 合同是 `extra="forbid"`：只接受 OpenAPI 文档中列出的字段。传了 MCP 工具的参数（如 `session_id`）、CLI 专属参数（如 `skills_dir`）都会被拒。以 `/docs` 的合同为准。
@@ -352,7 +365,7 @@ if data.get("truncated"):
 REST 侧 `timeout` 上限 300 秒。大数据量建议：缩小时间窗、减少维度粒度、分页拉取；服务端默认执行超时 120 秒，可按请求传 `timeout` 调整（≤300）。
 
 **Q：能拿到和 CLI 完全一致的数据吗？**
-能。REST、MCP、CLI 共用同一 `QueryManager` 与同一鉴权链路，同一账号同一查询结果一致（parity 有测试保障）。
+能。REST、MCP、CLI 共用同一 `QueryManager` 和业务实现；REST 与 MCP 使用不同传输鉴权，但解析到同一账号时查询结果一致。
 
 **Q：其他服务（opscli-collector-mcp 等）有 REST API 吗？**
 没有。REST API 仅在 `opscli-mcp` 上；collector 系列是纯 MCP 服务。stdio 模式下也没有 REST API。

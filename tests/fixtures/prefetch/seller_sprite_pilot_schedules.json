@@ -1,0 +1,104 @@
+{
+  "generated_at": "2026-09-03",
+  "source": "production collection_runs candidate export",
+  "run_time": "06:00",
+  "timezone_name": "Asia/Shanghai",
+  "schedules": [
+    {
+      "pilot_order": 1,
+      "name": "试点-每日反查-B0B8VQLN6Y",
+      "source_system": "seller_sprite",
+      "scenario": "keyword-reverse",
+      "params": {
+        "asin": "B0B8VQLN6Y"
+      },
+      "site": "US",
+      "period": "30d",
+      "page_size": 100,
+      "export_format": "xls",
+      "enabled": false,
+      "evidence": {
+        "account_route": "requires_shared_pool_verification",
+        "active_days": 14,
+        "successful_runs": 30,
+        "average_rows": 93.3,
+        "nonzero_rate": 100.0,
+        "last_completed_at": "2026-09-03 05:26:59"
+      }
+    },
+    {
+      "pilot_order": 2,
+      "name": "备选-每日反查-B0GHMCCBGQ",
+      "source_system": "seller_sprite",
+      "scenario": "keyword-reverse",
+      "params": {
+        "asin": "B0GHMCCBGQ"
+      },
+      "site": "US",
+      "period": "30d",
+      "page_size": 100,
+      "export_format": "xls",
+      "enabled": false,
+      "evidence": {
+        "account_route": "requires_shared_pool_verification",
+        "active_days": 14,
+        "successful_runs": 29,
+        "average_rows": 79.6,
+        "nonzero_rate": 100.0,
+        "last_completed_at": "2026-09-03 05:28:12"
+      }
+    },
+    {
+      "pilot_order": 3,
+      "name": "备选-每日竞品查询-组合1",
+      "source_system": "seller_sprite",
+      "scenario": "competitor-lookup",
+      "params": {
+        "asins": [
+          "B0B8VQLN6Y",
+          "B0GHMCCBGQ",
+          "B0FHV8MSVT"
+        ]
+      },
+      "site": "US",
+      "period": "30d",
+      "page_size": 100,
+      "export_format": "xls",
+      "enabled": false,
+      "evidence": {
+        "account_route": "requires_shared_pool_verification",
+        "active_days": 14,
+        "successful_runs": 28,
+        "average_rows": 58.1,
+        "nonzero_rate": 100.0,
+        "last_completed_at": "2026-09-03 05:24:15"
+      }
+    },
+    {
+      "pilot_order": 4,
+      "name": "备选-每日竞品查询-组合2",
+      "source_system": "seller_sprite",
+      "scenario": "competitor-lookup",
+      "params": {
+        "asins": [
+          "B0GK189P5P",
+          "B0BGLV4F6X",
+          "B09Q1YHXLP"
+        ]
+      },
+      "site": "US",
+      "period": "30d",
+      "page_size": 100,
+      "export_format": "xls",
+      "enabled": false,
+      "evidence": {
+        "account_route": "requires_shared_pool_verification",
+        "active_days": 14,
+        "successful_runs": 27,
+        "average_rows": 87.5,
+        "nonzero_rate": 100.0,
+        "last_completed_at": "2026-09-03 05:24:43"
+      }
+    }
+  ]
+}
