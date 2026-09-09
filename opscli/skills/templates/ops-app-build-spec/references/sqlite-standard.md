@@ -44,7 +44,9 @@ def _set_pragmas(dbapi_conn, _record):
     cur.close()
 ```
 
-- 引擎使用 `sqlite+aiosqlite:///<绝对路径>`，`poolclass=NullPool`，`connect_args={"timeout": 5}`。SQLite 不需要连接池，长期持有连接会让 WAL 文件无法 checkpoint 收缩。
+- 引擎使用 `sqlite+aiosqlite:///<绝对路径>`，`connect_args={"timeout": 5}`。AppHub 共享卷暴露的文件库使用标准异步池 `AsyncAdaptedQueuePool`，不设 `poolclass=NullPool`；SQLAlchemy 2.0.38 起该池是默认值，须核对运行镜像版本和实际池类型。
+- 每个请求/任务独立 Session，结束事务后关闭 Session、归还连接，保留默认 rollback。池中空闲物理连接不阻塞 checkpoint，长读事务才会妨碍推进；及时释放游标，保持自动 checkpoint。
+- 启动校验后将连接归还池中；lifespan 的 finally 必须在启动失败、正常及异常退出时归还已借连接并执行 `await engine.dispose()`。最后连接关闭可能清理 WAL/SHM，停止或重启窗口仍可能不可读；不手工创建辅助文件，不使用 `immutable=1`，不扩大控制面写权限。
 - 禁止在 `async def` 中直接调用同步 `sqlite3`；只允许 `aiosqlite` 驱动或 `asyncio.to_thread`。同一连接不得多线程并发使用。
 - 写事务必须以 `BEGIN IMMEDIATE` 开始：默认 DEFERRED 事务在第一次写时才升级写锁，升级失败会立即抛 `SQLITE_BUSY` 且不受 `busy_timeout` 保护。SQLAlchemy 下按官方 pysqlite / aiosqlite 文档的事务配方实现：`connect` 事件把 DBAPI 连接的 `isolation_level` 置为 `None`，`begin` 事件执行 `BEGIN IMMEDIATE`。
 - `with sqlite3.connect(...) as conn` 只提交事务不关闭连接；直接使用 `sqlite3` 的脚本必须显式 `close()`。
@@ -117,4 +119,5 @@ VACUUM INTO '/backup/app-20260902.db';
 ## 测试替身边界
 
 - 单元与集成测试用内存库 `sqlite+aiosqlite:///:memory:`，配 `StaticPool`，跳过 `journal_mode`。
+- WAL 生命周期回归必须使用独立文件库；在真实 readonly 挂载验证请求全部结束后表/结构/分页仍可读、新提交可见、未提交事务已回滚、空闲连接不阻塞 checkpoint、长读事务结束后 checkpoint 恢复，以及退出释放和重启恢复。内存测试及 Windows 可写临时目录不能替代此验收，完整示例见通用规范 §1.5。
 - 禁止只靠 SQLite 验证并发、锁、死锁、大数据量性能、方言 SQL、字符集排序规则或真实索引选择；这些场景在 SQLite 上测不出问题。

@@ -221,11 +221,12 @@ def init_database() -> None:
 
 ```python
 from sqlalchemy import create_engine, event
+from sqlalchemy.pool import NullPool
 
 engine = create_engine(
     f"sqlite:///{settings.sqlite_path}",
-    # SQLite 不需要连接池（无网络握手开销），但默认的 QueuePool 会缓存连接，
-    # 长期持有会让 WAL 文件无法 checkpoint 收缩；小型应用用 NullPool 更省心。
+    # 非 AppHub 共享卷暴露的同步小型应用可按需禁用连接复用。
+    # 空闲连接不阻塞 checkpoint；长读事务才会妨碍推进。
     poolclass=NullPool,
     connect_args={"timeout": 5, "check_same_thread": False},
 )
@@ -239,6 +240,28 @@ def _set_pragmas(dbapi_conn, _record):
         cur.execute(f"PRAGMA {name}={value}")
     cur.close()
 ```
+
+【AppHub 共享卷暴露】文件型 SQLite 使用标准异步连接池，不能套用上面的同步 `NullPool` 示例：
+
+```python
+from sqlalchemy.ext.asyncio import create_async_engine
+
+# 复用标准异步池，归还连接时保留默认 rollback。
+engine = create_async_engine(
+    f"sqlite+aiosqlite:///{settings.sqlite_path}",
+    connect_args={"timeout": 5},
+)
+# PRAGMA 连接事件挂在 engine.sync_engine，仍使用上面的 _set_pragmas。
+event.listen(engine.sync_engine, "connect", _set_pragmas)
+```
+
+- SQLAlchemy 2.0.38 起，文件型 `aiosqlite` 默认池为 `AsyncAdaptedQueuePool`。必须核对业务运行镜像的 SQLAlchemy 版本和实际池类型，不得只据本地版本推断；内存测试仍显式 `StaticPool`，跳过 `journal_mode`。
+- 启动初始化、迁移与版本校验完成后，连接归还池中。每个请求/任务独立 Session，用完结束事务并关闭 Session；保留归还时的默认 rollback，不跨请求共享 Session，不长期占用游标或读事务。池中空闲物理连接可保留，不妨碍 checkpoint；保持自动 checkpoint 开启。
+- lifespan 的 finally 必须覆盖启动失败和退出异常，停止任务、归还已借连接后执行 `await engine.dispose()`；不得为保留 WAL/SHM 而省略正常清理。
+- 最后一个物理连接关闭可能清理 `-wal` / `-shm`。AppHub 的 readonly 挂载不能补建辅助文件，因此仅保证应用正常运行且读取条件满足时可浏览；停止、重启、在线换库或引擎重建窗口可能返回不可读，不手工创建辅助文件，不使用 `immutable=1`，不扩大控制面写权限。
+- 验收使用独立文件库和真实 readonly 挂载：请求全部结束后验证表、结构、分页仍可读；新提交可见；未提交事务不会进入下一请求；空闲池不阻塞 `wal_checkpoint(TRUNCATE)`，长读事务结束后 checkpoint 可继续；正常与异常退出均释放连接，重启后原数据和浏览恢复。Windows 可写临时目录与内存测试不能替代此验收。
+
+依据：[SQLite WAL 只读条件](https://www.sqlite.org/wal.html#read_only_databases)、[aiosqlite 默认池](https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#pooling-behavior)、[连接归还时清理事务](https://docs.sqlalchemy.org/en/20/core/pooling.html#reset-on-return)。
 
 【必须】PRAGMA 是**连接级**设置（`journal_mode` 除外，它持久化在库文件中），换连接就失效，因此必须挂在 `connect` 事件上而不是执行一次。
 
@@ -750,7 +773,7 @@ SQLite 的并发模型必须理解清楚，否则所有优化都是盲目的：
    → 90% 的情况在这里
 2. 是否用了 BEGIN IMMEDIATE？（DEFERRED 的锁升级失败绕过 busy_timeout）
 3. busy_timeout 是否设置且足够（≥5000）？
-4. 是否有连接泄漏（长期持有未关闭的连接，占住锁）？
+4. 是否有事务或游标泄漏（未结束的事务或未释放的游标持续占锁）？
 5. 是否有多个进程在写同一个库？
 6. 是否在 WAL 模式？（默认 DELETE 模式下读也会阻塞写）
 7. 库文件是否在网络文件系统上？（NFS/SMB → 立即迁走，锁不可靠）
@@ -760,8 +783,8 @@ SQLite 的并发模型必须理解清楚，否则所有优化都是盲目的：
 
 ### 5.4 WAL 的注意事项
 
-- WAL 文件会增长，在 checkpoint 时收缩。长期持有的读事务会**阻止 checkpoint**，导致 WAL 无限增长——这是「库文件不大但 `-wal` 几个 GB」的原因。
-- 【必须】不要长期持有连接不释放（尤其是开着的读事务）。
+- WAL 文件随写入增长；checkpoint 将数据写回主库，文件通常复用，`TRUNCATE` 才截断文件。长期读事务可能阻止 checkpoint 推进及 WAL 复用，导致持续增长；池中的空闲连接没有这个问题。
+- 【必须】查询结束后及时释放游标、结束读事务，并关闭 Session 归还连接；池中的空闲物理连接可保留。
 - 【应当】高写入场景下监控 `-wal` 文件大小；必要时手动 `PRAGMA wal_checkpoint(TRUNCATE)`。
 - 【禁止】WAL 模式下把库文件放在网络文件系统上（WAL 依赖共享内存 `-shm`，跨主机不可用）。
 
@@ -797,7 +820,7 @@ async def handler():
 ### 6.2 连接与线程
 
 【必须】`check_same_thread=False` 允许跨线程使用连接，但**同一个连接不得被多个线程并发使用**（SQLite 连接对象不是线程安全的）。安全做法二选一：
-- 每个线程/任务用自己的连接（推荐，配合 `NullPool`）；
+- 每个线程/任务独立获取连接，用完归还或关闭（AppHub 共享卷应用按 §1.5 使用标准异步池）；
 - 用锁把连接串行化（简单但会成为瓶颈）。
 
 【必须】写操作在异步应用中同样要**串行化**——建议用一个 `asyncio.Lock` 保护写路径，把「单写者」约束显式化，而不是靠 `busy_timeout` 碰运气。
@@ -1044,7 +1067,7 @@ CREATE INDEX IF NOT EXISTS idx_task_pending ON task(priority DESC, created_at) W
 | 19 | 自开后台线程持续写 | 违反单写者，锁竞争 | 写操作集中到单一入口 |
 | 20 | 多进程写同一个库 | 锁竞争、性能崩塌 | 单写者或换服务端数据库 |
 | 21 | async 函数里直接调同步 sqlite3 | 阻塞事件循环，连锁故障 | aiosqlite 或 `to_thread` |
-| 22 | 长期持有连接不释放 | 阻止 WAL checkpoint，`-wal` 涨到几 GB | 用完即关 |
+| 22 | 长期不结束读事务 | 阻碍 WAL checkpoint 推进和复用，文件持续增长 | 结束事务、释放游标并归还连接 |
 | 23 | `cp` 活动中的库文件 | 备份损坏或丢数据 | backup API / `VACUUM INTO` |
 | 24 | 缓存表无过期无清理 | 无上限增长的定时炸弹 | `expires_at` + 定时清理 |
 | 25 | 大文件/大 BLOB 入库 | 库膨胀、备份变慢 | 对象存储，库里存 key |
@@ -1067,7 +1090,7 @@ CREATE INDEX IF NOT EXISTS idx_task_pending ON task(priority DESC, created_at) W
 | 外键约束没生效 | 没开 `PRAGMA foreign_keys=ON` | 每连接设置 |
 | 存进去的类型不对 | 非 STRICT 表的动态类型 | 改用 STRICT 表 + CHECK |
 | 日期排序错乱 | 混用日期格式 | 统一 ISO-8601 UTC 并回填 |
-| `-wal` 文件几个 GB | 长期读事务阻止 checkpoint | 释放长连接；`wal_checkpoint(TRUNCATE)` |
+| `-wal` 文件几个 GB | 长期读事务妨碍 checkpoint 推进 | 结束长读事务；按需 `wal_checkpoint(TRUNCATE)` |
 | 删了很多数据但文件没变小 | SQLite 不自动归还空间 | 维护窗口 `VACUUM` 或增量 vacuum |
 | 查询突然变慢 | 缺索引 / 统计信息过期 / 重建表漏建索引 | `EXPLAIN QUERY PLAN` + `ANALYZE` |
 | `malformed database schema` / 损坏 | 网络文件系统 / 非法拷贝 / 磁盘故障 | `integrity_check` 确认，从备份恢复 |

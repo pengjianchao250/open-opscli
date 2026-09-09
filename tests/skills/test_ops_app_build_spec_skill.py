@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from opscli.skills.packaging import validate_release_manifest
@@ -35,8 +36,16 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
+def test_ops_app_build_spec_entry_references_resolve() -> None:
+    """入口引用必须随 Skill 存在，防止残留旧资产路径。"""
+    references = re.findall(r"(?:references|assets)/[\w/.-]+\.(?:md|py)", _read("SKILL.md"))
+    assert references
+    for relative_path in references:
+        assert (SKILL_DIR / relative_path).is_file(), relative_path
+
+
 def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
-    """普通后端开发和前端合同变更必须读取同一后端红线。"""
+    """主入口维护阅读路由，数据细则允许放在对应参考文件中。"""
     skill = _read("SKILL.md")
 
     for required in (
@@ -69,6 +78,12 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         assert required in skill
 
     assert "references/backend-standard.md" not in skill
+    data_access = _read("references/data-access-standard.md")
+    for required in (
+        "OPSCLI_API_BASE_URL", "OPSCLI_API_KEY", "owner_user_id", "pending `job_id`",
+        "XLS/XLSX", "第一阶段不增加运行时数据 YAML",
+    ):
+        assert required in data_access
 
 
 def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
@@ -95,12 +110,10 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     for obsolete in ("create-vue", "assets/app.yaml", "ops-app.config"):
         assert obsolete not in skill
 
-    for required in (
-        ".opscli/app.json.slug == app.yaml.name",
-        ".gitignore` 必须忽略 `.opscli/",
-        "app_id`、仓库、Owner 和 Git 信息只保留在本地 binding",
-    ):
-        assert required in skill
+    assert ".opscli/app.json.slug == app.yaml.name" in skill
+    deployment = _read("references/deployment-standard.md")
+    assert ".gitignore` 必须忽略 `.opscli/" in deployment
+    assert "app_id`、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
     assert skill.index('python "<skill-directory>/scripts/clone_template.py"') < skill.index(
         'opscli app create "<app-name>" --path "<project-directory>" --json'
@@ -118,15 +131,15 @@ def test_ops_app_build_spec_frontend_follows_backend_contract() -> None:
     frontend = _read("references/frontend-standard.md")
 
     for required in (
-        "API 合同以后端为主",
+        "API 合同以后端为准",
         "backend-redlines.md",
-        "实际路由和 Pydantic Schema",
+        "Pydantic Schema 和生成的 OpenAPI",
         "前端不得维护第二套口径",
-        "具体 API 前缀、响应形状、成功语义和业务失败表达只从目标项目后端合同读取",
+        "具体端点及字段仍从目标项目后端合同读取",
         "是否存在 HTTP 200 内的业务失败，只按目标项目合同判断",
         "先由后端更新路由、Schema、相关测试和 OpenAPI",
         "不新增前端兼容分支掩盖漂移",
-        "前端不得保存密钥、JWT、Cookie",
+        "应用代码不得读取、复制或持久化平台密钥、JWT、Cookie",
     ):
         assert required in frontend
 
@@ -269,8 +282,7 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
 
     for required in (
         "apiVersion: apps.aukeys/v1",
-        'python: "3.12"',
-        "entrypoint: backend/app.py",
+        "backend/app.py",
         "uvicorn backend.app:app --host 0.0.0.0 --port 8000",
         "单应用进程合同",
         "opscli app create",
@@ -299,6 +311,9 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "python -m opscli.app.migrate",
         "ops-app.config",
         "opscli app release",
+        "services.sqlite: true",
+        "runtime: fastapi",
+        "entrypoint: backend/app.py",
     ):
         assert obsolete not in deployment
 
