@@ -23,6 +23,10 @@ class FakeAuth:
         self.token_aliases.append(alias)
         return next(self.tokens)
 
+    def get_me(self) -> dict:
+        """模拟已认证用户资料，不读取本机登录态。"""
+        return {"data": {"id": "42"}}
+
 
 def test_client_uses_current_apphub_api_prefix(monkeypatch) -> None:
     monkeypatch.setattr(
@@ -50,7 +54,7 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
             201,
             json={
                 "data": {
-                    "app_id": "app-1",
+                    "app_id": "Ab123",
                     "slug": "sales-dashboard",
                     "repo_url": "https://gitea.example/apps/sales-dashboard.git",
                 }
@@ -64,13 +68,15 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     )
 
     payload = client.create_app(
-        AppCreateRequest.from_app_name("销售看板", slug="sales-dashboard").to_dict()
+        AppCreateRequest.from_app_name("销售看板", slug="sales-dashboard").to_dict(),
+        idempotency_key="d65c1375-02b1-48ac-a9ea-5859476dbe27",
     )
 
     request = observed["request"]
     assert request.url == "https://apphub.example/api/v1/apps"
     assert request.headers["Authorization"] == "Bearer ops-jwt"
     assert request.headers["X-Opscli-Version"] == __version__
+    assert request.headers["Idempotency-Key"] == "d65c1375-02b1-48ac-a9ea-5859476dbe27"
     assert "x-session-id" not in request.headers
     assert "cookie" not in request.headers
     assert auth.token_aliases == ["ops"]
@@ -82,7 +88,7 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     assert "python" not in body
     assert "entrypoint" not in body
     assert "services" not in body
-    assert payload["app_id"] == "app-1"
+    assert payload["app_id"] == "Ab123"
 
 
 def test_client_fetches_latest_jwt_for_every_request() -> None:
@@ -179,8 +185,44 @@ def test_http_error_envelope_is_mapped() -> None:
     )
 
     with pytest.raises(AppHubHttpError) as caught:
-        client.create_app(AppCreateRequest.from_app_name("demo").to_dict())
+        client.create_app(AppCreateRequest.from_app_name("demo").to_dict(),
+                          idempotency_key="d65c1375-02b1-48ac-a9ea-5859476dbe27")
 
     assert caught.value.code == "CONFLICT"
     assert caught.value.fix_hint == "rename"
     assert caught.value.request_id == "req-1"
+
+
+def test_id_endpoints_keep_case_and_do_not_use_slug_paths() -> None:
+    """详情与 Git 配置路径必须精确携带公开 ID。"""
+    paths = []
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={})
+    client = AppHubClient(
+        base_url="https://apphub.example", auth_client=FakeAuth(["jwt"] * 4),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    for app_id in ("Ab123", "ab123"):
+        client.get_app(app_id)
+        client.get_git_config(app_id)
+    assert paths == [
+        "/api/v1/apps/by-id/Ab123", "/api/v1/apps/by-id/Ab123/git-config",
+        "/api/v1/apps/by-id/ab123", "/api/v1/apps/by-id/ab123/git-config",
+    ]
+
+
+def test_creation_scope_is_stable_and_separates_environment_and_owner() -> None:
+    """请求作用域只存摘要，令牌刷新不改变主体，切账号和环境不能复用。"""
+    auth = FakeAuth()
+    client = AppHubClient(base_url="https://qa.example", auth_client=auth)
+    try:
+        original = client.creation_scope()
+        assert client.creation_scope() == original
+        auth.get_me = lambda: {"data": {"id": "43"}}
+        assert client.creation_scope() != original
+        auth.get_me = lambda: {"data": {"id": "42"}}
+        client.api_base_url = "https://production.example/api/v1"
+        assert client.creation_scope() != original
+    finally:
+        client.close()

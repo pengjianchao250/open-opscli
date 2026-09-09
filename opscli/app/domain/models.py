@@ -14,6 +14,13 @@ _SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_VALID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
 
 
+def validate_app_id(value: Any, *, code: str = "APP-BINDING-INVALID") -> str:
+    """校验公开应用 ID，保留大小写且不把名称或数字转换为身份。"""
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9]{5}", value) is None:
+        raise AppProjectError(code, "应用 app_id 必须是五位大小写字母数字，请按应用 ID 重新绑定。")
+    return value
+
+
 @dataclass(frozen=True)
 class AppCreateRequest:
     """AppHub 创建应用请求。"""
@@ -69,6 +76,8 @@ class SiteBinding:
     owner_email: str | None = None
     created_at: str | None = None
     schema_version: int = BINDING_SCHEMA_VERSION
+    # 控制面环境参与目录绑定，防止两个环境偶然生成相同公开 ID。
+    apphub_url: str | None = None
 
     @property
     def site_name(self) -> str:
@@ -97,11 +106,10 @@ class SiteBinding:
         app_name: str,
         payload: dict[str, Any],
     ) -> "SiteBinding":
+        """只接受服务端明确返回的公开 ID，不用 slug 补齐身份。"""
         slug = _required_text(payload, "slug")
         repo_url = _required_text(payload, "repo_url")
-        app_id = _optional_text(
-            payload.get("app_id") or payload.get("id") or payload.get("site_id")
-        ) or slug
+        app_id = validate_app_id(payload.get("app_id"), code="APPHUB-PROTOCOL")
         return cls(
             app_id=app_id,
             app_name=str(payload.get("title") or payload.get("site_name") or app_name),
@@ -115,10 +123,12 @@ class SiteBinding:
             owner_user_id=_optional_text(payload.get("owner_user_id")),
             owner_email=_optional_text(payload.get("owner_email") or payload.get("owner")),
             created_at=_optional_text(payload.get("created_at")),
+            apphub_url=_optional_text(payload.get("apphub_url")),
         )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "SiteBinding":
+        """读取有明确应用 ID 的本地绑定，旧名称绑定需显式恢复。"""
         try:
             source_version = int(payload.get("schema_version", 1))
         except (TypeError, ValueError) as exc:
@@ -129,7 +139,7 @@ class SiteBinding:
                 f"不支持的应用绑定版本：{source_version}",
             )
         try:
-            app_id = payload.get("app_id") or payload.get("site_id")
+            app_id = validate_app_id(payload.get("app_id"))
             app_name = _optional_text(
                 payload.get("app_name") or payload.get("site_name")
             )
@@ -139,7 +149,7 @@ class SiteBinding:
                 raise ValueError("missing required binding fields")
             binding = cls(
                 schema_version=source_version,
-                app_id=str(app_id),
+                app_id=app_id,
                 app_name=app_name,
                 slug=slug,
                 repo_url=repo_url,
@@ -150,14 +160,13 @@ class SiteBinding:
                     payload.get("owner_email") or payload.get("created_by")
                 ),
                 created_at=_optional_text(payload.get("created_at")),
+                apphub_url=_optional_text(payload.get("apphub_url")),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise AppProjectError(
                 "APP-BINDING-INVALID",
                 "应用绑定文件字段不完整或格式错误。",
             ) from exc
-        if not binding.app_id or binding.app_id == "None":
-            raise AppProjectError("APP-BINDING-INVALID", "应用绑定缺少 app_id/site_id。")
         if not _SLUG_VALID_RE.fullmatch(binding.slug):
             raise AppProjectError("APP-BINDING-INVALID", "应用绑定 slug 格式错误。")
         return binding

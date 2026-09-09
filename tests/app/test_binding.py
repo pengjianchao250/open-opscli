@@ -10,7 +10,7 @@ from opscli.app.domain.models import SiteBinding
 from opscli.app.services.binding import BindingStore
 
 
-def _binding(app_id: str = "app-1") -> SiteBinding:
+def _binding(app_id: str = "Ab123") -> SiteBinding:
     return SiteBinding(
         app_id=app_id,
         app_name="销售看板",
@@ -44,7 +44,7 @@ def test_binding_reads_remote_default_branch() -> None:
     binding = SiteBinding.from_app_detail(
         "销售看板",
         {
-            "app_id": "app-1",
+            "app_id": "Ab123",
             "slug": "sales-dashboard",
             "title": "销售看板",
             "repo_url": "https://gitea.example/apps/sales-dashboard.git",
@@ -66,7 +66,7 @@ def test_binding_loads_legacy_schema_and_saves_as_v3(
         json.dumps(
             {
                 "schema_version": schema_version,
-                "site_id": "site-1",
+                "app_id": "Ab123",
                 "site_name": "销售看板",
                 "slug": "sales-dashboard",
                 "repo_url": "https://gitea.example/legacy/apphub.git",
@@ -101,7 +101,7 @@ def test_binding_refuses_different_app(tmp_path: Path) -> None:
     store.save(tmp_path, _binding())
 
     with pytest.raises(AppProjectError) as caught:
-        store.save(tmp_path, _binding("app-2"))
+        store.save(tmp_path, _binding("Xy789"))
 
     assert caught.value.code == "APP-ALREADY-BOUND"
 
@@ -118,3 +118,24 @@ def test_binding_rejects_empty_required_fields(tmp_path: Path, field: str) -> No
         BindingStore().load(tmp_path)
 
     assert caught.value.code == "APP-BINDING-INVALID"
+
+
+@pytest.mark.parametrize("app_id", [None, "", "sales-dashboard", "Ab1234", " Ab123", 12345])
+def test_remote_response_requires_public_id_without_fallback(app_id) -> None:
+    """数字 ID、site_id、slug 都不能代替公开 app_id。"""
+    payload = _binding().to_dict()
+    payload.update(app_id=app_id, id="Ab123", site_id="Ab123", slug="sales")
+    with pytest.raises(AppProjectError) as caught:
+        SiteBinding.from_create_response("销售看板", payload)
+    assert caught.value.code == "APPHUB-PROTOCOL"
+
+
+def test_legacy_schema_cannot_replace_id_just_because_slug_matches(tmp_path: Path) -> None:
+    """升级旧版本绑定也不能利用同名条件替换合法 ID。"""
+    target = BindingStore().save(tmp_path, _binding())
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload["schema_version"] = 1
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(AppProjectError) as caught:
+        BindingStore().save(tmp_path, _binding("Xy789"))
+    assert caught.value.code == "APP-ALREADY-BOUND"

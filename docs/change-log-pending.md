@@ -9019,3 +9019,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：撤销本次报告格式化器、新增回归测试及本条记录的变更，保留其他已有修改。
 
 ---
+
+## 2026-09-09 amazon-rufus - 兼容 Alexa 名称触发
+
+**变更原因**：商品页购物助手 Rufus 改名为 Alexa，需要让 Agent 在用户使用新名称时找到原有 Skill 和 MCP 工具。
+
+**改动点**：内置及项目内 ops-amazon-rufus Skill 同步补充 Alexa/Rufus 触发词、名称映射和智能音箱场景边界；9 个 Rufus MCP 工具描述补充 Alexa 名称，获取工具明确引导先使用原 Skill。
+
+**验证结果**：两份 Skill 均通过 quick_validate.py，文件内容逐字节一致；通过本地 MCP Client.list_tools() 确认 9 个工具均暴露 Alexa/Rufus 描述，获取入口包含 ops-amazon-rufus 引导，工具名称未变。`.venv/Scripts/python.exe -X utf8 -m pytest tests/mcp/test_amazon_rufus_tools.py -q` 为 26 passed；`git diff --check` 通过。未运行真实 Amazon 获取或线上 Agent 触发验收。
+
+**影响范围**：仅 Skill 说明和 MCP 工具描述；Skill、CLI、MCP 工具名称及执行逻辑保持兼容。
+
+**回滚方式**：撤销两份 SKILL.md、amazon_rufus.py 中本次说明文字及本条记录。
+
+---

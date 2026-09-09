@@ -36,12 +36,16 @@
 
 新项目按主 Skill 从统一模板仓库的 `master` 分支安全 clone、清理模板 Git，随后连续执行 `opscli app create`、`opscli app init`。已有正确绑定的项目不重复初始化。空远端首次初始化允许尚无 `master` 或本地 HEAD。
 
+同名应用以 `app_id` 区分；该 ID 固定五位 Base62、大小写敏感。缺少或不可信的 binding 使用 `opscli app init "<project-directory>" --app-id "<app_id>"` 显式恢复，不按 slug 自动选择。绑定中的 `apphub_url` 限定控制面环境，环境不匹配时先切回原环境；另一环境使用独立目录。
+
+创建请求发送前将 UUID 幂等键、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`；失败后保留记录，在相同目录、名称、账号和环境下重试。主动新建同名应用使用独立目录与新键。此记录与 binding 一起被 `.opscli/` 忽略规则保护，不进入源码。
+
 `opscli app push "<project-directory>" --message "<summary>"` 会整体暂存、提交并普通推送 `HEAD:master`，不执行强制推送。`--message` 必填，用于存在修改时创建 commit。
 
 推送前展示：
 
 - 本次完整文件范围，包括既有暂存内容；说明该命令会整体暂存当前项目改动。
-- 准确 origin、binding 对应的业务仓库与目标分支 `master`。
+- 准确 app_id、origin、binding 对应的业务仓库与目标分支 `master`。
 - 已执行检查、未验证项和仍然存在的失败。
 
 用户已明确授权本次源码提交且范围一致时继续执行，不重复询问；范围含未授权的其他改动时停止，不通过删除或隐藏他人改动来凑出可推送状态。

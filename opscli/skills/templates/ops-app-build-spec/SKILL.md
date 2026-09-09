@@ -56,6 +56,10 @@ clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连�
 
 ## 已有项目与项目约定
 
+应用唯一身份是五位、区分大小写的 `app_id`，名称和 slug 允许重复。已有有效 `.opscli/app.json` 时继续使用原绑定；缺少绑定或旧文件没有真实 ID 时，先核对平台应用 ID，再执行 `opscli app init "<project-directory>" --app-id "<app_id>" --json`。`--app` 仅核对 slug，不能选择应用；无绑定的 init/push 不会按名称恢复或创建。
+
+创建同名新应用必须使用另一独立目录。创建超时或失败后，在原目录使用相同名称、账号和环境重试 `create`；保留 `.opscli/creation.json` 中的幂等记录，禁止删记录或换键来重试。`app_id` 不写入 `app.yaml`，仓库地址以平台返回的 `repo_url` 为准。
+
 业务项目绑定自己的远端后，不能只根据 remote 判断模板身份。根目录应有 `app.yaml`、`AGENTS.md`、`docs/apphub-contract.md`、`frontend/`、`backend/app.py` 和 `backend/CLAUDE.md`，运行入口与项目合同一致。合同缺失时读取迁移规范，不在原目录重新初始化或批量覆盖。
 
 无论新项目还是已绑定项目，都沿用实际项目规则：
