@@ -48,18 +48,21 @@ class AppCreateRequest:
         return cls.from_app_name(site_name)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "apiVersion": "apps.aukeys/v1",
             "name": self.name,
             "title": self.title,
             "description": self.description,
-            "contact": self.contact,
             "resources": {"cpu": None, "memory": None},
             "database": {"kind": "sqlite", "path": "/data/app.db"},
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
         }
+        # contact 未填写时省略字段，兼容尚未接收该可选字段的 AppHub 服务版本。
+        if self.contact is not None:
+            payload["contact"] = self.contact
+        return payload
 
 
 @dataclass(frozen=True)

@@ -252,9 +252,9 @@ POST /api/v1/apps 成功
 | --- | --- |
 | 创建应用 | `POST /api/v1/apps` |
 | 查询当前用户创建的应用 | `GET /api/v1/apps` |
-| 查询应用详情 | `GET /api/v1/apps/{slug}` |
+| 查询应用详情 | `GET /api/v1/apps/{app_id}` |
 | 查询当前用户可访问应用 | `GET /api/v1/accessible-apps` |
-| 查询 Git 配置 | `GET /api/v1/apps/{slug}/git-config` |
+| 查询 Git 配置 | `GET /api/v1/apps/{app_id}/git-config` |
 | 签发 Git 凭据 | `POST /api/v1/git/credentials` |
 
 `GET /api/v1/accessible-apps` 与 `GET /api/v1/apps` 职责不同。当前 binding 恢复逻辑使用前者是合理的，不应仅因为存在 `/apps` 列表接口就替换。

@@ -30,7 +30,7 @@ push   = require_binding → ensure_git → ensure_pushed
 
 AppHub 服务根地址使用 `OPSCLI_APPHUB_URL`。配置值只包含服务根地址，客户端统一追加 `/api/v1`。
 
-源码仓库地址不由 opscli 拼接。`POST /api/v1/apps` 和 `GET /api/v1/apps/by-id/{app_id}/git-config` 返回的完整 `repo_url` 是仓库事实源。
+源码仓库地址不由 opscli 拼接。`POST /api/v1/apps` 和 `GET /api/v1/apps/{app_id}/git-config` 返回的完整 `repo_url` 是仓库事实源。
 
 AppHub 请求通过 `AuthClient.get_token("ops")` 获取或刷新运营 JWT，发送 `Authorization: Bearer <JWT>` 与 `X-Opscli-Version`；创建还发送 `Idempotency-Key: <UUID>`。不发送 `X-Session-Id`、登录 Cookie 或 CSRF 头；无效 Bearer 由 AppHub 返回 401，身份服务不可用返回 503。
 
@@ -99,7 +99,7 @@ opscli app init .\sales-dashboard
 执行步骤：
 
 1. 读取 `.opscli/app.json`；缺少或不可信的 binding 时必须指定 `--app-id Ab123` 恢复已有应用，新应用先执行 create。`--app` 保留 slug 含义，仅用于核对声明。
-2. 调用 `GET /api/v1/apps/by-id/{app_id}` 和 `GET /api/v1/apps/by-id/{app_id}/git-config`，校验响应 ID 后刷新应用与仓库信息。禁止 ID 缺失时退回 slug。
+2. 调用 `GET /api/v1/apps/{app_id}` 和 `GET /api/v1/apps/{app_id}/git-config`，校验响应 ID 后刷新应用与仓库信息。禁止 ID 缺失时退回 slug。
 3. 必要时调用 `POST /api/v1/git/credentials` 签发 Git 凭据。
 4. 先探测应用独立仓库，再将其配置为 `origin`；如果目录来自模板 clone，会替换模板仓库的 `origin`。
 5. 远端已有 `main` 时获取并建立跟踪；远端为空时保留本地模板源码，等待后续 `push` 创建首个 `main`。
@@ -136,8 +136,8 @@ push 成功只能说明：
 `opscli app` 使用：
 
 - `POST /api/v1/apps`
-- `GET /api/v1/apps/by-id/{app_id}`
-- `GET /api/v1/apps/by-id/{app_id}/git-config`
+- `GET /api/v1/apps/{app_id}`
+- `GET /api/v1/apps/{app_id}/git-config`
 - `POST /api/v1/git/credentials`
 
 `opscli app` 不调用：

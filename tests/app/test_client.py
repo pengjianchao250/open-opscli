@@ -84,11 +84,22 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     assert body["apiVersion"] == "apps.aukeys/v1"
     assert body["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert body["opscli"] == {"auth_mode": "viewer", "datasets": []}
+    assert "contact" not in body
     assert "runtime" not in body
     assert "python" not in body
     assert "entrypoint" not in body
     assert "services" not in body
     assert payload["app_id"] == "Ab123"
+
+
+def test_create_request_includes_explicit_contact() -> None:
+    request = AppCreateRequest(
+        name="sales-dashboard",
+        title="销售看板",
+        contact="owner@example.com",
+    )
+
+    assert request.to_dict()["contact"] == "owner@example.com"
 
 
 def test_client_fetches_latest_jwt_for_every_request() -> None:
@@ -193,22 +204,37 @@ def test_http_error_envelope_is_mapped() -> None:
     assert caught.value.request_id == "req-1"
 
 
-def test_id_endpoints_keep_case_and_do_not_use_slug_paths() -> None:
-    """详情与 Git 配置路径必须精确携带公开 ID。"""
+def test_get_app_uses_case_sensitive_app_id_path() -> None:
+    """应用详情路径必须精确携带公开 ID。"""
     paths = []
     def handler(request):
         paths.append(request.url.path)
         return httpx.Response(200, json={})
     client = AppHubClient(
-        base_url="https://apphub.example", auth_client=FakeAuth(["jwt"] * 4),
+        base_url="https://apphub.example", auth_client=FakeAuth(["jwt"] * 2),
         http_client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
     for app_id in ("Ab123", "ab123"):
         client.get_app(app_id)
+    assert paths == [
+        "/api/v1/apps/Ab123", "/api/v1/apps/ab123",
+    ]
+
+
+def test_get_git_config_uses_case_sensitive_app_id_path() -> None:
+    """Git 配置路径必须精确携带公开 ID。"""
+    paths = []
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={})
+    client = AppHubClient(
+        base_url="https://apphub.example", auth_client=FakeAuth(["jwt"] * 2),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    for app_id in ("Ab123", "ab123"):
         client.get_git_config(app_id)
     assert paths == [
-        "/api/v1/apps/by-id/Ab123", "/api/v1/apps/by-id/Ab123/git-config",
-        "/api/v1/apps/by-id/ab123", "/api/v1/apps/by-id/ab123/git-config",
+        "/api/v1/apps/Ab123/git-config", "/api/v1/apps/ab123/git-config",
     ]
 
 

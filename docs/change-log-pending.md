@@ -1,3 +1,31 @@
+## 2026-09-09 App - AppHub 查询接口统一使用 app_id
+
+**变更原因**：AppHub 已将应用详情和 Git 配置接口从 slug 定位统一调整为大小写敏感的五位 `app_id`，现有客户端实现已符合新契约，但测试和当前规范文档仍保留 slug 或 `/by-id/` 旧路径。
+
+**改动点**：更新 `tests/app/test_client.py`，分别校验 `GET /api/v1/apps/{app_id}` 与 `GET /api/v1/apps/{app_id}/git-config` 并保留大小写敏感覆盖；同步更新 AppHub 使用指南、开发规范和 2026-09-05 两份当前定稿文档；为 2026-09-02 两份历史方案增加接口已被取代说明。未改动 release 接口文档，等待 AppHub 单独确认其身份参数契约。
+
+**验证结果**：修改前执行 `python -m pytest tests/app/test_client.py -q -p no:cacheprovider` 为 `1 failed, 8 passed`，失败原因为旧 `/by-id/` 路径断言；修改后专项测试为 `10 passed`，完整 `tests/app` 回归为 `76 passed`。完整回归首次受沙箱临时目录 ACL 限制，改用仓库内专用临时目录并在受控权限下重跑通过。
+
+**影响范围**：仅影响 `opscli app` 的 AppHub 查询接口契约测试和相关文档，不修改运行时代码、binding 格式、CLI 参数、Git 凭据逻辑或 release API。
+
+**回滚方式**：恢复客户端路径测试中的 `/by-id/` 断言及相关文档旧路径，并删除两份历史文档新增的 2026-09-09 废弃说明和本节变更记录。
+
+---
+
+## 2026-09-09 ops-app - 创建应用时省略未填写的 contact
+
+**变更原因**：AppHub 文档将 `contact` 定义为可选字段，但部分已部署服务版本尚未接收该字段；客户端此前固定发送 `contact: null`，会触发服务端 `extra_forbidden` 并阻塞应用创建。
+
+**改动点**：`AppCreateRequest.to_dict()` 仅在调用方显式提供 `contact` 时写入请求体；创建请求测试新增默认省略和显式值保留断言，不过滤其他合同允许的 `null` 字段。
+
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/app/test_client.py -q` 通过，`11 passed`；使用全新可写 `--basetemp` 运行完整 `tests/app`，`77 passed`。修复后的真实 `opscli app create` 重试不再出现 `contact` 的 `YAML-INVALID`，已进入后续用户资料校验阶段。当前虚拟环境未安装 `ruff`，未执行该静态检查。
+
+**影响范围**：仅影响 `opscli app create` 的请求体序列化；默认创建不再发送 `contact`，显式设置时行为保持不变。
+
+**回滚方式**：恢复 `AppCreateRequest.to_dict()` 固定写入 `contact`，并撤销对应测试和本条记录。
+
+---
+
 ## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
 
 **变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。
