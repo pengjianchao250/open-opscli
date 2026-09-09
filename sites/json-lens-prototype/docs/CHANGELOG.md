@@ -1,5 +1,17 @@
 # 变更记录
 
+## 2026-09-09 Keepa - 修复 AppHub Viewer 被误判为 MCP 会话
+
+**变更原因**：AppHub 已完成 Cookie 校验并向应用注入 Viewer JWT 与用户身份，但站点 FastAPI 在调用 Keepa 共享内核时只传递了 JWT、邮箱和 Session，遗漏 `apphub_viewer` 认证模式，导致共享凭证层误走普通 MCP 登录流程并错误提示缺少 `session_id`。
+
+**改动点**：站点后端按请求凭证将 MCP 请求上下文标记为 `apphub_viewer` 或 `apphub_session`，同时明确该请求不携带 MCP API Key；保持浏览器相对 API、AppHub Cookie 校验和 Keepa 业务接口不变。
+
+**验证结果**：部署冒烟新增 Viewer JWT 无 Session 回归，确认 Keepa 调用期间可读取 `apphub_viewer`、用户邮箱和 JWT，且不会把用户身份字段混入业务参数。
+
+**影响范围**：仅 `POST /api/v1/keepa/run` 调用 Keepa 共享内核时的请求级认证上下文。
+
+**回滚方式**：回退本次提交会恢复线上“无 session_id”错误，不建议回滚。
+
 ## 2026-09-09 AppHub - 重新触发发布验证
 
 **变更原因**：AppHub 发布链路已由平台同事处理，重新提交当前已验证的站点源码，确认自动构建与发布流程恢复正常。

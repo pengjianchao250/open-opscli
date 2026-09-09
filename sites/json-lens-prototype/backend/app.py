@@ -52,11 +52,18 @@ async def _default_keepa_runner(**kwargs: Any) -> dict[str, Any]:
     from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
     from opscli.mcp.tools.keepa import _KEEPA_API_MODE, keepa_run
 
+    session_id = kwargs.get("session_id")
+    jwt = kwargs.get("jwt")
+    auth_mode = "apphub_session" if session_id else "apphub_viewer"
     context_token = mcp_request_ctx.set(
         {
+            "api_key": None,
+            "auth_mode": auth_mode,
             "email": kwargs.pop("user_email", None),
-            "session_id": kwargs.get("session_id"),
-            "jwt": kwargs.get("jwt"),
+            "session_id": session_id,
+            "jwt": jwt,
+            "allowed_tools": None,
+            "permission_enabled": False,
         }
     )
     api_mode_token = _KEEPA_API_MODE.set(True)
