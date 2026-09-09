@@ -31,7 +31,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.14"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.15"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -50,7 +50,9 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         "前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite",
         "docs/ops-app/data-spec.md",
         "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
-        "OPSCLI_THIRD_PARTY_DATA_API_KEY",
+        "QueryCredentials",
+        "https://ops.api.qa.aukeyit.com",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "未隔离的 viewer 数据",
         "owner_user_id",
         "pending `job_id`",
@@ -143,6 +145,8 @@ def test_ops_app_build_spec_backend_redlines_use_current_apphub_design() -> None
         "目标项目现有依赖清单",
         "AppHub SQLite 应用保持单写实例",
         "viewer、session 或 local 网关",
+        "ThirdPartyApiClient",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "用户未授权时",
         "--autogenerate",
         "alembic_version",
@@ -197,10 +201,20 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         "固定同步必须标记为 `blocked`",
         "Mock、测试替身和本地回退不得被描述成线上真实接入",
         "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
-        "OPSCLI_THIRD_PARTY_DATA_API_KEY",
+        "QueryCredentials",
+        "get_query_credentials()",
+        "X-User-Email",
+        "X-Session-Id",
+        'AuthClient.build_session_headers("ops")',
+        'AuthClient.build_request_auth("ops")',
+        "https://ops.mcp.xenkee.com",
+        "https://ops.api.qa.aukeyit.com",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "不兼容旧变量别名",
     ):
         assert required in content
+
+    assert "OPSCLI_THIRD_PARTY_DATA_API_KEY" not in content
 
     for obsolete_env in (
         "OPSCLI_" + "API_BASE_URL",
@@ -274,6 +288,10 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
         ".opscli/app.json.slug == app.yaml.name",
         ".opscli/app.json` 不得被 Git 跟踪或暂存",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "https://ops.mcp.xenkee.com",
+        "https://ops.api.qa.aukeyit.com",
+        "部署配置不得注入共享 API Key",
     ):
         assert required in deployment
 
@@ -330,7 +348,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.14"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.15"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

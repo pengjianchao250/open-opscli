@@ -15,6 +15,9 @@
 - AppHub 生产入口保持单应用进程合同：`uvicorn backend.app:app --host 0.0.0.0 --port 8000`。Compose 或其他本地工具不能替代平台运行配置。
 - 不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务或项目侧公开路径拼接。
 - 已跟踪文件中没有 `.opscli/app.json`、`.env`、密钥、本地数据库、真实业务数据或构建产物。
+- 使用 Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://ops.api.qa.aukeyit.com`。
+- `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 必须是纯 origin，不含 `/api`、接口路径、查询参数或末尾 `/`；不得设置代码默认值、按鉴权模式推断环境或拆分 provider 专属变量。
+- 第三方数据鉴权来自每个请求已校验的 `QueryCredentials`，部署配置不得注入共享 API Key、JWT、Session、Cookie 或 viewer ticket。
 
 具体配置值以当前模板和当前 Skill 的限制为准。发现项目使用旧模板配置时，列出差异并在提交前修正，不复制 Skill 内的静态配置文件。
 

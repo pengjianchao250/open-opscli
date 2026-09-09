@@ -79,7 +79,8 @@ description: 基于统一 AppHub 模板仓库创建、开发或迁移内部 Web 
 - 无论新项目还是已绑定项目，开发前都先读取目标项目的 `AGENTS.md`、`backend/CLAUDE.md`、`docs/apphub-contract.md` 和 `README.md`。
 - 修改前端、后端、SQLite 或 opscli 接入时读取对应规范，只执行与当前改动相关的条款。
 - 前端请求或共享类型变化时，先确认后端路由、Schema 和 OpenAPI，再改前端；不得用前端兼容分支掩盖后端合同漂移。
-- 页面涉及真实数据时必须读取取数规范；不得猜测数据集、字段、凭证、SDK 签名或运行时入口。
+- 页面需要真实业务数据时必须读取取数规范并使用 `$ops-app-data-builder`；不选择或猜测数据集、字段、聚合、筛选、第三方场景、凭证、SDK 签名或运行时入口。
+- 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite；所有线上取数都经过当前站点 FastAPI `/api`。
 - 只修改当前业务需要的代码，保留用户已有修改和模板基础能力。
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
 - 用户未授权时，不安装依赖、启动服务、执行数据库写入、提交、推送或部署。
@@ -126,6 +127,7 @@ Dockerfile
 
 - `docs/ops-app/project-spec.md`：当前技术栈、目录、命令、路由、接口、数据和约束。
 - 有真实数据需求时生成 `docs/ops-app/data-spec.md`：数据产品、真实合同、执行模式、站点 API、加工、SQLite、安全、测试和阻塞项。
+- 第一阶段不增加运行时数据 YAML，避免形成第二套配置权威源。
 - `docs/ops-app/development.md`：本地开发、环境变量和联调方式。
 - `docs/ops-app/deployment.md`：构建、持久化、发布检查和回滚说明。
 - 根目录 `AGENTS.md`：只写简短受管区块，引用上述规范；已有文件时保留其他内容。
@@ -194,9 +196,11 @@ database:
 - 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - `VITE_*`、源码、构建产物、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
-- Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run` 和后端 Secret。
-- SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，pending `job_id` 被持久化并复用，成功 JSON 结果才进入共享快照。
-- Keepa 和 SellerSprite 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不读取旧变量别名；XLS/XLSX、临时下载 URL 和用户加工结果未写入共享快照。
+- Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run`，请求级 `ThirdPartyApiClient` 复用模板 `get_query_credentials()` 解析出的 `viewer/session/local` 身份。
+- SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，按当前 `owner_user_id` 持久化并复用 pending `job_id`，成功 JSON 结果只进入当前用户私有快照。
+- Keepa 和 SellerSprite 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产注入 `https://ops.mcp.xenkee.com`，预发布注入 `https://ops.api.qa.aukeyit.com`，不得设置默认环境、读取共享 API Key 或旧变量别名。
+- 第三方调用只从已校验的 `QueryCredentials` 重建允许的 Header，不盲目透传浏览器 Header，不把凭证写入请求体、前端、日志、SQLite 或源码，也不在三种模式间回退。
+- `third_party_source_snapshot` 和 `third_party_async_job` 都使用 `UNIQUE(owner_user_id, provider, request_hash)`；XLS/XLSX 和临时下载 URL 不写入 SQLite。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器。

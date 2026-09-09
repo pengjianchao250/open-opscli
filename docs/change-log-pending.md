@@ -1,3 +1,18 @@
+## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
+
+**变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 改为复用最新模板 `QueryCredentials`，由请求级 `ThirdPartyApiClient` 按 viewer、session、local 重建允许的 Header；删除 `OPSCLI_THIRD_PARTY_DATA_API_KEY` 合同，只保留由部署环境显式注入的 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://ops.api.qa.aukeyit.com`；`third_party_source_snapshot` 和 `third_party_async_job` 改为 `UNIQUE(owner_user_id, provider, request_hash)`；同步更新 Reference、静态评估、需求文档和契约测试。Skill 版本分别升至 `v0.1.10` 和 `v0.0.15`。
+
+**验证结果**：`ops-app-data-builder` 完整契约测试 `11 passed`；`ops-app-build-spec` 完整契约测试 `12 passed, 1 failed`，唯一失败为既有迁移资产 `assets/backend/AGENTS.md` 标题与旧断言不一致，与本次改造无关；本次相关建站测试及安装门禁 `6 passed`；静态 eval 与发行清单检查通过。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；不修改 `opscli/app` 和最新模板仓库，不兼容旧模板项目，也不保留共享 API Key 或跨模式回退。
+
+**回滚方式**：整体回退两份 Skill 的本次版本、Reference、评估和测试改动；不得在新生成项目中局部恢复共享 API Key，以免重新引入跨用户数据复用。
+
+---
+
+
 ## 2026-09-08 Skills - 第三方数据 API 环境变量收窄命名
 
 **变更原因**：原第三方数据 API 根地址与密钥变量当前只服务于站点后端调用 Keepa 与 SellerSprite，但命名过于通用，容易被误解为整个 OPSCLI 平台的公共 API 配置。
