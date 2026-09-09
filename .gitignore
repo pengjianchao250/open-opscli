@@ -48,6 +48,8 @@ calculator-draft-*/
 tmp-calculator-*.json
 output/scrape-do-real-api/
 output/feedback-query/
+output/feedback/
 output/test-artifacts/
 output/google-trends/
 output/ops-amazon-stylesnap/
+output/seller-sprite-rest-e2e-*/

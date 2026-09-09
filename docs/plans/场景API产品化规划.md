@@ -10,6 +10,17 @@
 - `POST /api/v1/query/flow`：自然语言取数场景入口。
 - `GET /api/v1/keepa/scenarios`：列出 Keepa 可用场景。
 - `POST /api/v1/keepa/run`：执行 Keepa 场景并返回统一任务结果。
+- `GET /api/v1/seller-sprite/scenarios`：通过 Collector 列出卖家精灵场景。
+- `GET /api/v1/seller-sprite/quota`：读取当前用户卖家精灵额度。
+- `POST /api/v1/seller-sprite/jobs`：提交普通异步采集任务并返回 `202`。
+- `GET /api/v1/seller-sprite/jobs/{job_id}`：读取单个普通任务状态。
+- `GET /api/v1/seller-sprite/jobs/{job_id}/result`：直接读取普通任务的内联 JSON 结果。
+- `POST /api/v1/seller-sprite/jobs/status`：批量读取普通任务状态。
+- `GET /api/v1/seller-sprite/jobs/{job_id}/export`：JSON 任务直接返回内联结果，
+  `xls/xlsx` 任务返回文件下载信息。
+- `POST /api/v1/seller-sprite/listing-analysis/jobs`：提交 Listing Analysis 任务。
+- `GET /api/v1/seller-sprite/listing-analysis/jobs/{job_id}`：读取 Listing Analysis 状态。
+- `GET /api/v1/seller-sprite/listing-analysis/jobs/{job_id}/result`：读取 Listing Analysis 结果。
 - MCP `/mcp`、`/sse`、`/messages` 与 REST 共用同一个 ASGI 进程和生命周期。
 - 所有 HTTP 路由继续位于 `ApiKeyAuthMiddleware` 之后。
 - REST 请求只接受场景合同字段，不接受 `session_id`、`jwt` 等内部认证参数。
@@ -18,6 +29,12 @@
 - Keepa REST 响应保留完整格式化 `data`，带有 `request_source=api` 和
   `response_mode=formatted_data`；该路径跳过导出文件上传，不要求调用方依赖 `export.url`。
 - Keepa MCP/CLI 继续使用导出上传和 `data_preview` 摘要，避免完整历史数据进入 Agent 上下文。
+- SellerSprite REST 只部署在通用 MCP FastAPI 网关，通过当前用户 API Key 调用
+  Collector MCP；通用进程不启动 SellerSprite Scheduler，Collector 也不新增公开 REST 入口。
+- SellerSprite REST 保持异步 Job 合同；`export_format=json` 的成功任务通过 API
+  内联返回业务结果，不暴露或依赖下载 URL，`xls/xlsx` 才保留文件下载合同。
+- SellerSprite 的 API 结果转换只位于 FastAPI 适配层；MCP Tool、Collector Scheduler、
+  账号池、队列、权限、额度、任务所有权和现有 MCP 返回合同保持不变。
 
 ## 推荐架构
 

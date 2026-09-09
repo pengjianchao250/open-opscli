@@ -72,7 +72,7 @@ async def seller_sprite_listing_analysis_submit(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """通过 Collector 提交 Listing Analysis 任务。"""
+    """仅当用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时提交，禁止自动触发。"""
     return await _call_collector("seller_sprite_listing_analysis_submit", locals())
 
 
@@ -82,7 +82,7 @@ async def seller_sprite_listing_analysis_status(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """通过 Collector 读取 Listing Analysis 任务状态。"""
+    """仅续查用户已明确提交的 Listing Analysis job_id，不创建或自动触发新任务。"""
     return await _call_collector("seller_sprite_listing_analysis_status", locals())
 
 
@@ -93,7 +93,7 @@ async def seller_sprite_listing_analysis_result(
     session_id: str | None = None,
     jwt: str | None = None,
 ) -> dict:
-    """通过 Collector 读取 Listing Analysis 任务结果。"""
+    """仅读取用户已明确提交的 Listing Analysis job_id 结果，不创建或自动触发新任务。"""
     return await _call_collector("seller_sprite_listing_analysis_result", locals())
 
 

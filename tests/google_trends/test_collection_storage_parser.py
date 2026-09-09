@@ -83,6 +83,8 @@ def test_google_trends_json_export_becomes_main_dataset(tmp_path: Path):
 
     assert document.parser_version == "google-trends-v1"
     assert document.request_params["normalized_params"]["q"] == "flashlight"
+    assert len(document.request_params["_cache"]["cache_key"]) == 64
+    assert document.request_params["_cache"]["cache_scope"] == "shared"
     assert [artifact.artifact_type for artifact in document.artifacts] == [
         "params",
         "raw",

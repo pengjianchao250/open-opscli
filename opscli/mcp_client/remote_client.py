@@ -71,7 +71,10 @@ class RemoteMcpClient:
                 async with streamable_http_client(
                     self.url,
                     http_client=http_client,
-                ) as (read_stream, write_stream, _):
+                ) as transport_streams:
+                    # MCP SDK v1 返回第三个 session ID 回调，v2 仅返回读写流。
+                    # 工具调用只依赖前两个稳定成员，避免与次要返回值耦合。
+                    read_stream, write_stream = transport_streams[:2]
                     async with ClientSession(read_stream, write_stream) as session:
                         try:
                             # 只限制 initialize 本身，不能让 transport 的 TaskGroup

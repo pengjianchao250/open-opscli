@@ -20,10 +20,8 @@ from opscli.query.domain.exceptions import DatasetNotFoundError, InvalidPayloadE
 @pytest.fixture()
 def client(monkeypatch):
     """已认证账号下的 API 测试客户端（业务内核按测试需要打桩）。"""
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
     return TestClient(create_api_app())
 
 
@@ -51,10 +49,6 @@ ALL_QUERY_ENDPOINTS = [
 )
 def test_all_query_endpoints_require_authenticated_user(monkeypatch, method, path, body):
     """无已验证账号时，任何 query 端点都必须以统一 401 信封拒绝。"""
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: None,
-    )
     unauthenticated = TestClient(create_api_app())
 
     response = unauthenticated.request(method, path, json=body)
@@ -65,7 +59,7 @@ def test_all_query_endpoints_require_authenticated_user(monkeypatch, method, pat
         "data": None,
         "error": {
             "code": "authentication_required",
-            "message": "请先完成 opscli 账号授权",
+            "message": "请先完成 AppHub 账号授权",
         },
     }
 

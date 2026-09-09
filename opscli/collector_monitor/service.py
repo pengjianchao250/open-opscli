@@ -66,6 +66,8 @@ class _AccountRepository(Protocol):
 
     def usage_today(self, *, limit: int = 100) -> dict[str, Any]: ...
 
+    def feature_usage_today(self, *, limit: int = 100) -> dict[str, Any]: ...
+
 
 class CollectorMonitorError(RuntimeError):
     """Collector Monitor 模块业务异常基类。"""
@@ -443,6 +445,24 @@ class CollectorMonitorService:
                 "usage": [],
             }
         return await asyncio.to_thread(self.account_repository.usage_today, limit=limit)
+
+    async def feature_usage_today(self, *, limit: int = 100) -> dict[str, Any]:
+        """在线程中读取北京时间当日 MCP 功能调用汇总。"""
+        if self.account_repository is None:
+            return {
+                "source": {
+                    "ready": False,
+                    "error": {
+                        "code": "telemetry_source_unavailable",
+                        "message": "MCP 功能调用数据源不可用",
+                    },
+                },
+                "usage": [],
+            }
+        return await asyncio.to_thread(
+            self.account_repository.feature_usage_today,
+            limit=limit,
+        )
 
     async def probe_once(self) -> dict[str, Any]:
         """独立刷新 Collector 状态，失败不会改变本地队列就绪性。"""

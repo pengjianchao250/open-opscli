@@ -1,4 +1,4 @@
-"""Collector Monitor 账号健康与当日额度的严格只读查询。"""
+"""Collector Monitor 账号健康、额度与功能调用的严格只读查询。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from opscli.collector_monitor.storage.sqlite import (
     connect_read_only_sqlite,
     schema_problems,
 )
+from opscli.shared.collection_storage.config import MySqlSettings
 
 
 # API 和 SQLite 查询共享的最大账号/用户行数，避免页面请求无界扫描。
@@ -29,6 +30,8 @@ _TASK_TABLE = "seller_sprite_task_queue"
 _ACCOUNT_EVENT_TABLE = "seller_sprite_account_events"
 _QUARANTINE_TABLE = "seller_sprite_account_quarantine"
 _QUOTA_TABLE = "mcp_quota_daily"
+_MCP_CALL_TABLE = "mcp_call_events"
+_SERVICE_LABELS = {"external_pnd": "鹰眼"}
 
 # 北京时间日界以 IANA ZoneInfo 为准；精简 Windows 缺少 tzdata 时退回固定 UTC+8。
 try:
@@ -38,13 +41,15 @@ except ZoneInfoNotFoundError:
 
 
 class AccountMonitorRepository:
-    """从 SellerSprite 与 MCP SQLite 文件读取低敏运维摘要。
+    """从 SellerSprite、额度 SQLite 和遥测 MySQL 读取低敏运维摘要。
 
     Args:
         queue_db_path: SellerSprite 任务、账号事件和隔离状态数据库。
         binding_db_path: SellerSprite 专属账号绑定数据库。
         quota_db_path: MCP 每日额度数据库。
         clock: 可选时钟，测试用来冻结北京时间日界和隔离状态。
+        telemetry_mysql: 统一 MCP 遥测 MySQL 连接配置。
+        mysql_connection_factory: 可选连接工厂，仅用于隔离测试。
     """
 
     def __init__(
@@ -54,12 +59,16 @@ class AccountMonitorRepository:
         binding_db_path: str | Path,
         quota_db_path: str | Path,
         clock: Callable[[], datetime] | None = None,
+        telemetry_mysql: MySqlSettings | None = None,
+        mysql_connection_factory: Callable[[MySqlSettings], Any] | None = None,
     ) -> None:
-        """保存三个只读数据源路径，不打开或创建 SQLite 文件。"""
+        """保存只读数据源配置，初始化时不建立数据库连接。"""
         self.queue_db_path = Path(queue_db_path)
         self.binding_db_path = Path(binding_db_path)
         self.quota_db_path = Path(quota_db_path)
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.telemetry_mysql = telemetry_mysql or MySqlSettings()
+        self.mysql_connection_factory = mysql_connection_factory or _connect_mysql
 
     def accounts(self, *, limit: int = 100) -> dict[str, Any]:
         """返回执行账号、绑定用户、占用和最近结果的脱敏摘要。
@@ -206,6 +215,78 @@ class AccountMonitorRepository:
                     "daily_limit": daily_limit,
                     "remaining": max(daily_limit - calls, 0),
                     "reset_at": str(row["reset_at"]),
+                }
+            )
+        return {
+            "day": day,
+            "timezone": "Asia/Shanghai",
+            "source": {"ready": True, "error": None},
+            "usage": usage,
+        }
+
+    def feature_usage_today(self, *, limit: int = 100) -> dict[str, Any]:
+        """按北京时间当日汇总 MCP Tool 调用，并区分执行与代理角色。"""
+        safe_limit = _bounded_limit(limit)
+        local_now = self.clock().astimezone(_SHANGHAI_TZ)
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        local_end = local_start + timedelta(days=1)
+        start_utc = local_start.astimezone(timezone.utc).replace(tzinfo=None)
+        end_utc = local_end.astimezone(timezone.utc).replace(tzinfo=None)
+        day = local_start.strftime("%Y%m%d")
+        if not self.telemetry_mysql.configured:
+            return _feature_usage_unavailable(day)
+
+        connection = None
+        try:
+            connection = self.mysql_connection_factory(self.telemetry_mysql)
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT user_email, service, operation, runtime_role,
+                           COUNT(*) AS calls,
+                           ROUND(AVG(duration_ms)) AS avg_duration_ms,
+                           MAX(duration_ms) AS max_duration_ms,
+                           MAX(occurred_at) AS last_called_at
+                    FROM {_MCP_CALL_TABLE}
+                    WHERE event_type = 'mcp_tool'
+                      AND runtime_role IN ('executor', 'gateway_proxy')
+                      AND occurred_at >= %s
+                      AND occurred_at < %s
+                    GROUP BY user_email, service, operation, runtime_role
+                    ORDER BY calls DESC, last_called_at DESC, service ASC, operation ASC
+                    LIMIT %s
+                    """,
+                    (start_utc, end_utc, safe_limit),
+                )
+                rows = cursor.fetchall()
+        except Exception:
+            return _feature_usage_unavailable(day)
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                except Exception:
+                    pass
+
+        usage = []
+        for row in rows:
+            service = str(row.get("service") or "unknown")
+            user_email = str(row.get("user_email") or "").strip()
+            usage.append(
+                {
+                    "identity": _mask_email(user_email) if user_email else "(unknown)",
+                    "service": service,
+                    "service_label": _SERVICE_LABELS.get(service, service),
+                    "operation": str(row.get("operation") or "unknown"),
+                    "runtime_role": str(row.get("runtime_role") or "unknown"),
+                    "calls": max(0, int(row.get("calls") or 0)),
+                    "avg_duration_ms": _optional_non_negative_int(
+                        row.get("avg_duration_ms")
+                    ),
+                    "max_duration_ms": _optional_non_negative_int(
+                        row.get("max_duration_ms")
+                    ),
+                    "last_called_at": _mysql_utc_iso(row.get("last_called_at")),
                 }
             )
         return {
@@ -534,3 +615,62 @@ def _bounded_limit(value: int) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= _MAX_ROWS:
         raise ValueError(f"limit must be between 1 and {_MAX_ROWS}")
     return value
+
+
+def _connect_mysql(settings: MySqlSettings) -> Any:
+    """使用只读查询所需的有界超时连接统一采集 MySQL。"""
+    import pymysql
+
+    return pymysql.connect(
+        host=settings.host,
+        port=settings.port,
+        user=settings.user,
+        password=settings.password,
+        database=settings.database,
+        charset="utf8mb4",
+        connect_timeout=settings.connect_timeout_seconds,
+        read_timeout=10,
+        write_timeout=10,
+        autocommit=True,
+        cursorclass=pymysql.cursors.DictCursor,
+        ssl_ca=settings.ssl_ca or None,
+        ssl_verify_cert=bool(settings.ssl_ca),
+        ssl_verify_identity=bool(settings.ssl_ca),
+    )
+
+
+def _feature_usage_unavailable(day: str) -> dict[str, Any]:
+    return {
+        "day": day,
+        "timezone": "Asia/Shanghai",
+        "source": {
+            "ready": False,
+            "error": {
+                "code": "telemetry_source_unavailable",
+                "message": "MCP 功能调用数据源不可用",
+            },
+        },
+        "usage": [],
+    }
+
+
+def _optional_non_negative_int(value: Any) -> int | None:
+    try:
+        return max(0, int(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _mysql_utc_iso(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .export_fallback import attach_json_data_fallback, has_file_upload_failure
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 
@@ -118,8 +119,13 @@ async def sif_run(
             timeout=timeout,
             params=parsed_params,
         )
-        result = SifServiceManager(jwt=jw, session_id=sid).run(request)
-        return _ok(decorate_download_payload(result.to_dict()))
+        manager = SifServiceManager(jwt=jw, session_id=sid)
+        result = manager.run(request)
+        payload = result.to_dict()
+        if has_file_upload_failure(payload.get("warnings")):
+            status = manager.job_status(result.job_id, output_dir=output_dir)
+            _attach_sif_json_fallback(payload, status)
+        return _ok(decorate_download_payload(payload))
     except Exception as exc:
         return _err(exc, tool="MCP -> sif_run(...)", call_params=call_params)
 
@@ -133,7 +139,9 @@ async def sif_job_status(
         from opscli.sif.services import SifServiceManager
         from opscli.sif.services.manager import decorate_download_payload
 
-        return _ok(decorate_download_payload(SifServiceManager().job_status(job_id, output_dir=output_dir)))
+        payload = SifServiceManager().job_status(job_id, output_dir=output_dir)
+        _attach_sif_json_fallback(payload, payload)
+        return _ok(decorate_download_payload(payload))
     except Exception as exc:
         return _err(
             exc,
@@ -152,8 +160,16 @@ async def sif_export(
         from opscli.sif.services import SifServiceManager
         from opscli.sif.services.manager import decorate_download_payload
 
-        payload = SifServiceManager().export(job_id, export_key=export_key, output_dir=output_dir)
-        return _ok(_decorate_export_response(payload, decorate_download_payload))
+        manager = SifServiceManager()
+        status = manager.job_status(job_id, output_dir=output_dir)
+        payload = manager.export(job_id, export_key=export_key, output_dir=output_dir)
+        decorated = _decorate_export_response(payload, decorate_download_payload)
+        if isinstance(decorated.get("exports"), dict):
+            _attach_sif_json_fallback(decorated, status)
+        else:
+            wrapper = {"exports": {export_key or "export": decorated}}
+            _attach_sif_json_fallback(wrapper, status)
+        return _ok(decorated)
     except Exception as exc:
         return _err(
             exc,
@@ -182,6 +198,46 @@ def _decorate_export_response(payload: dict[str, Any], decorate_download_payload
     wrapper = {"exports": {"export": payload}}
     decorate_download_payload(wrapper)
     return wrapper["exports"]["export"]
+
+
+def _attach_sif_json_fallback(payload: dict[str, Any], status: dict[str, Any]) -> None:
+    """把 Sif 已落盘业务 JSON 挂到上传失败的具体导出项。"""
+    exports = payload.get("exports")
+    warnings = status.get("warnings")
+    if not isinstance(exports, dict) or not isinstance(warnings, list):
+        return
+    json_data = {
+        key: value
+        for key, value in status.items()
+        if key
+        not in {
+            "exports",
+            "warnings",
+            "download_links",
+            "root_dir",
+            "params_path",
+            "raw_path",
+            "result_path",
+            "requests",
+        }
+    }
+    for export_key, export in exports.items():
+        if not isinstance(export, dict):
+            continue
+        matching_warnings = [
+            warning
+            for warning in warnings
+            if isinstance(warning, dict)
+            and warning.get("stage") == "file_upload"
+            and warning.get("export_key") in {None, export_key}
+        ]
+        attach_json_data_fallback(
+            {
+                "export": export,
+                "data": json_data,
+                "warnings": matching_warnings,
+            }
+        )
 
 
 def _default_time_piece_type(feature: str) -> str:

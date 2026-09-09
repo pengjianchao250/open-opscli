@@ -7,12 +7,79 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from opscli.keepa.domain.models import KeepaScenarioRequest, KeepaScenarioResult
 from opscli.shared.collection_storage.models import (
     CollectionSubmission,
     DataEnvironment,
     ReconciliationBatch,
 )
-from opscli.keepa.domain.models import KeepaScenarioRequest, KeepaScenarioResult
+from opscli.shared.collection_storage.result_cache import (
+    build_cache_key,
+    safe_result_metadata,
+)
+
+KEEPA_CACHE_SCOPE = "shared"
+
+
+def build_keepa_cache_key(request: KeepaScenarioRequest) -> str:
+    """按 Keepa 实际上游参数构造稳定缓存键。"""
+    from opscli.keepa.api.scenarios import get_scenario
+
+    site = (request.site or "US").upper()
+    normalized_params = get_scenario(request.scenario).build_params(
+        params=request.params,
+        site=site,
+    )
+    return build_keepa_cache_key_from_normalized(
+        scenario=request.scenario,
+        site=site,
+        normalized_params=normalized_params,
+        export_format=request.export_format,
+    )
+
+
+def build_keepa_cache_key_from_normalized(
+    *,
+    scenario: str,
+    site: str,
+    normalized_params: dict[str, Any],
+    export_format: str,
+) -> str:
+    """用已落盘的实际上游参数重建与在线请求一致的缓存键。"""
+    return build_cache_key(
+        "keepa",
+        {
+            "scenario": scenario,
+            "site": site.upper(),
+            "params": normalized_params,
+            "export_format": export_format,
+        },
+    )
+
+
+def keepa_cache_identity_from_params(
+    payload: dict[str, Any],
+    *,
+    scenario: str,
+    site: str,
+) -> tuple[str | None, str | None]:
+    """从 params.json 恢复缓存身份，兼容升级前的 Outbox 载荷。"""
+    normalized_params = payload.get("normalized_params")
+    if not isinstance(normalized_params, dict):
+        return None, None
+    request = payload.get("request")
+    request = request if isinstance(request, dict) else {}
+    resolved_scenario = str(request.get("scenario") or scenario).strip()
+    resolved_site = str(request.get("site") or site).strip().upper()
+    if not resolved_scenario or not resolved_site:
+        return None, None
+    cache_key = build_keepa_cache_key_from_normalized(
+        scenario=resolved_scenario,
+        site=resolved_site,
+        normalized_params=normalized_params,
+        export_format=str(request.get("export_format") or "xls"),
+    )
+    return cache_key, KEEPA_CACHE_SCOPE
 
 
 class _StorageRuntime(Protocol):
@@ -54,6 +121,9 @@ class KeepaCollectionSubmitter:
             data_environment=cast(DataEnvironment, environment),
             ingestion_mode="live",
             result_path=result.result_path,
+            cache_key=build_keepa_cache_key(request),
+            cache_scope=KEEPA_CACHE_SCOPE,
+            result_metadata=safe_result_metadata(result.to_dict()),
         )
         return self.runtime.submit(submission)
 
@@ -113,6 +183,12 @@ class KeepaCollectionReconciler:
                 data_environment=self.data_environment,
             ):
                 continue
+            cache_key, cache_scope = _reconciled_cache_identity(
+                result_path,
+                payload,
+                scenario=scenario,
+                site=site,
+            )
             submissions.append(
                 CollectionSubmission(
                     source_system=self.source_system,
@@ -127,6 +203,9 @@ class KeepaCollectionReconciler:
                     ingestion_mode="live",
                     result_path=result_path,
                     completed_at=completed_at.isoformat(timespec="seconds"),
+                    cache_key=cache_key,
+                    cache_scope=cache_scope,
+                    result_metadata=safe_result_metadata(payload),
                 )
             )
         return ReconciliationBatch(tuple(submissions), next_cursor)
@@ -167,3 +246,34 @@ def _read_success_result(path: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _reconciled_cache_identity(
+    result_path: Path,
+    result: dict[str, Any],
+    *,
+    scenario: str,
+    site: str,
+) -> tuple[str | None, str | None]:
+    root_dir = result_path.parent.resolve()
+    params_path = Path(
+        str(result.get("params_path") or root_dir / "params.json")
+    ).expanduser()
+    if not params_path.is_absolute():
+        params_path = root_dir / params_path
+    params_path = params_path.resolve()
+    try:
+        params_path.relative_to(root_dir)
+    except ValueError:
+        return None, None
+    try:
+        payload = json.loads(params_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    return keepa_cache_identity_from_params(
+        payload,
+        scenario=scenario,
+        site=site,
+    )

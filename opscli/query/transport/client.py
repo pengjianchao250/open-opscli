@@ -53,6 +53,10 @@ class QueryClient:
         无状态模式下：只要有 session_id，就优先使用它；如果 jwt 缺失，
         自动用 session_id 向后端换取，不依赖本地 CredentialStore。
         """
+        if self.jwt and not self.session_id:
+            headers = {"Authorization": f"Bearer {self.jwt}"}
+            headers.update(get_mcp_request_headers())
+            return headers, {}
         if self.session_id:
             jwt = self.jwt
             if not jwt:

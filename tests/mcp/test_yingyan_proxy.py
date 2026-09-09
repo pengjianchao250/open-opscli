@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 from fastmcp import Client
 
+from opscli.config import __version__
 from opscli.mcp import server as server_module
 from opscli.mcp.tools import yingyan_proxy
 
@@ -88,8 +89,8 @@ def test_yingyan_proxy_forwards_approved_tool_and_narrow_arguments(monkeypatch):
             return SimpleNamespace(url="https://mcp.example.test/mcp")
 
     class RecordingRemoteClient:
-        def __init__(self, url):
-            calls.append(("remote_client", url))
+        def __init__(self, url, *, headers=None):
+            calls.append(("remote_client", url, headers))
 
         async def call_tool(self, tool_name, arguments):
             calls.append(("call_tool", tool_name, arguments))
@@ -97,6 +98,7 @@ def test_yingyan_proxy_forwards_approved_tool_and_narrow_arguments(monkeypatch):
 
     monkeypatch.setattr(yingyan_proxy, "McpConfigClient", RecordingConfigClient)
     monkeypatch.setattr(yingyan_proxy, "RemoteMcpClient", RecordingRemoteClient)
+    monkeypatch.setattr(yingyan_proxy, "_get_session_id", lambda: "session-test-1")
 
     result = _run(
         yingyan_proxy.ext_pnd_execute_readonly_sql(
@@ -116,7 +118,14 @@ def test_yingyan_proxy_forwards_approved_tool_and_narrow_arguments(monkeypatch):
                 "require_preferred": True,
             },
         ),
-        ("remote_client", "https://mcp.example.test/mcp"),
+        (
+            "remote_client",
+            "https://mcp.example.test/mcp",
+            {
+                "X-Session-Id": "session-test-1",
+                "X-Opscli-Version": __version__,
+            },
+        ),
         (
             "call_tool",
             "ext_pnd_execute_readonly_sql",
@@ -163,8 +172,9 @@ def test_yingyan_proxy_enforces_one_shared_deadline_without_retry(monkeypatch):
             return SimpleNamespace(url="https://mcp.example.test/mcp")
 
     class SlowRemoteClient:
-        def __init__(self, url):
+        def __init__(self, url, *, headers=None):
             self.url = url
+            self.headers = headers
 
         async def call_tool(self, tool_name, arguments):
             nonlocal attempts

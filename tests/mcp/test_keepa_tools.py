@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 from opscli.keepa.domain.models import KeepaExportResult, KeepaScenarioResult
 from opscli.mcp.tools import keepa as keepa_tools
+from opscli.shared.collection_storage.result_cache import CachedCollectionResult
 
 
 def _run(coro):
@@ -191,20 +192,84 @@ def test_keepa_run_accepts_params_json_string(monkeypatch):
     assert result["data"]["warnings"][0]["message"] == "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
 
 
-def test_keepa_run_auto_logins_when_session_missing(monkeypatch):
-    DummyManager.last_request = None
-    DummyManager.init_kwargs = None
-    auth_calls = []
-    auth_pairs = iter([(None, None), ("sid-auto", "jwt-auto")])
+def test_keepa_run_returns_mysql_cache_before_auth(monkeypatch):
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["data_environment"] == "production"
+            assert kwargs["cache_scope"] == "shared"
+            return CachedCollectionResult(
+                source_job_id="keepa-source-job",
+                scenario="product",
+                site="US",
+                row_count=1,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={
+                    "row_count": 1,
+                    "export": {
+                        "filename": "keepa-source-job.xlsx",
+                        "format": "xlsx",
+                        "url": "https://files.example.com/keepa-source-job.xlsx",
+                    },
+                    "warnings": [],
+                },
+                datasets=({
+                    "dataset_code": "main",
+                    "records": [{"payload": {"asin": "B0088PUEPK", "title": "Cached"}}],
+                },),
+            )
 
-    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: next(auth_pairs))
-    monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
     monkeypatch.setattr(
         keepa_tools,
-        "_try_auto_mcp_login",
-        lambda: _async_return(_record_and_return(auth_calls, {"success": True, "data": {"session_id": "sid-auto"}})),
+        "_get_auth_pair",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("缓存命中不得读取认证")),
     )
+
+    result = _run(
+        keepa_tools._keepa_run_impl(
+            scenario="product",
+            site="US",
+            params={"asin": "B0088PUEPK"},
+            cache_repository=CacheRepository(),
+            cache_environment="production",
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["job_id"] == "keepa-source-job"
+    assert result["data"]["data_preview"] == [
+        {"asin": "B0088PUEPK", "title": "Cached"}
+    ]
+    assert result["data"]["export"]["url"].startswith("https://")
+
+
+def test_keepa_run_ensures_shared_ops_credentials(monkeypatch):
+    from opscli.mcp.ops_credentials import OpsCredentialBinding
+
+    DummyManager.last_request = None
+    DummyManager.init_kwargs = None
+    ensure_calls = []
+
+    monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
+    monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
+
+    async def fake_ensure(*, provided_session, provided_jwt, require_jwt):
+        ensure_calls.append(
+            {
+                "provided_session": provided_session,
+                "provided_jwt": provided_jwt,
+                "require_jwt": require_jwt,
+            }
+        )
+        return OpsCredentialBinding(
+            credential_scope="isolated-scope",
+            user_email="user@example.com",
+            session_id="sid-auto",
+            jwt="jwt-auto",
+            refreshed=True,
+        )
+
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", fake_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -215,30 +280,30 @@ def test_keepa_run_auto_logins_when_session_missing(monkeypatch):
     )
 
     assert result["success"] is True
-    assert auth_calls == [{"success": True, "data": {"session_id": "sid-auto"}}]
+    assert ensure_calls == [
+        {
+            "provided_session": None,
+            "provided_jwt": None,
+            "require_jwt": True,
+        }
+    ]
     assert DummyManager.init_kwargs == {"jwt": "jwt-auto", "session_id": "sid-auto"}
     assert DummyManager.last_request.params == {"asin": "B0088PUEPK"}
 
 
-def test_keepa_run_returns_auth_error_when_auto_login_fails(monkeypatch):
+def test_keepa_run_returns_shared_auth_error(monkeypatch):
+    from opscli.mcp.ops_credentials import OpsCredentialBindingError
+
     DummyManager.last_request = None
     DummyManager.init_kwargs = None
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
     monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key=None))
-    monkeypatch.setattr(
-        keepa_tools,
-        "_try_auto_mcp_login",
-        lambda: _async_return(
-            {
-                "success": False,
-                "error": {
-                    "message": "auth_mcp_login 仅适用于 HTTP/SSE 模式（需携带 X-MCP-API-Key）。",
-                },
-            }
-        ),
-    )
+
+    async def failed_ensure(**kwargs):
+        raise OpsCredentialBindingError("自动建立 OPS 登录态失败")
+
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", failed_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -249,8 +314,8 @@ def test_keepa_run_returns_auth_error_when_auto_login_fails(monkeypatch):
     )
 
     assert result["success"] is False
-    assert "无 session_id" in result["error"]["message"]
-    assert "auth_mcp_login" in result["error"]["message"]
+    assert result["error"]["code"] == "OPS_CREDENTIAL_ENSURE_FAILED"
+    assert "自动建立 OPS 登录态失败" in result["error"]["message"]
     assert DummyManager.last_request is None
 
 
@@ -260,15 +325,19 @@ def test_keepa_run_skips_auto_login_when_env_api_key_present(monkeypatch):
     auto_login_called = False
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", DummyManager)
-    monkeypatch.setattr(keepa_tools, "_get_auth_pair", lambda system, session_id, jwt: (None, None))
+    monkeypatch.setattr(
+        keepa_tools,
+        "_get_auth_pair",
+        lambda system, session_id, jwt: (None, None),
+    )
     monkeypatch.setattr(keepa_tools, "_load_keepa_settings", lambda: SimpleNamespace(api_key="env-key"))
 
-    def _unexpected_auto_login():
+    async def _unexpected_ensure(**kwargs):
         nonlocal auto_login_called
         auto_login_called = True
-        return {"success": True, "data": {"session_id": "sid-auto"}}
+        raise AssertionError("环境 Keepa API Key 不应建立 OPS 凭证")
 
-    monkeypatch.setattr(keepa_tools, "_try_auto_mcp_login", _unexpected_auto_login)
+    monkeypatch.setattr(keepa_tools, "ensure_ops_credentials", _unexpected_ensure)
 
     result = _run(
         keepa_tools.keepa_run(
@@ -361,10 +430,17 @@ def test_keepa_job_status_warns_when_export_url_missing(monkeypatch):
             return {
                 "job_id": job_id,
                 "row_count": 1,
+                "data": [{"asin": "B0088PUEPK", "title": "Fallback Product"}],
                 "export": {
                     "path": f"/tmp/{job_id}.xlsx",
                     "filename": f"{job_id}.xlsx",
                 },
+                "warnings": [
+                    {
+                        "stage": "file_upload",
+                        "message": "导出文件上传失败，已保留服务端本地文件",
+                    }
+                ],
             }
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
@@ -375,32 +451,144 @@ def test_keepa_job_status_warns_when_export_url_missing(monkeypatch):
     assert result["data"]["export"]["filename"] == "job-2.xlsx"
     assert "path" not in result["data"]["export"]
     assert not result["data"]["export"].get("url")
-    assert any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
+    assert result["data"]["export"]["json_data"] == [
+        {"asin": "B0088PUEPK", "title": "Fallback Product"}
+    ]
+    assert not any(item["stage"] == "export_url_unavailable" for item in result["data"]["warnings"])
 
 
-def test_keepa_export_fails_when_download_url_missing(monkeypatch):
+def test_keepa_export_returns_json_fallback_when_upload_failed(monkeypatch):
     class NoUrlManager(DummyManager):
         def job_status(self, job_id):
             return {
                 "job_id": job_id,
+                "data": [{"asin": "B0088PUEPK"}],
                 "export": {
                     "path": f"/tmp/{job_id}.xlsx",
                     "filename": f"{job_id}.xlsx",
                 },
+                "warnings": [{"stage": "file_upload", "message": "upload failed"}],
             }
 
     monkeypatch.setattr("opscli.keepa.services.KeepaApiManager", NoUrlManager)
 
     result = _run(keepa_tools.keepa_export("job-2"))
 
+    assert result["success"] is True
+    assert result["data"]["url"] is None
+    assert result["data"]["json_data"] == [{"asin": "B0088PUEPK"}]
+
+
+def test_keepa_history_reads_persisted_rows_by_job_id(monkeypatch):
+    class HistoryRepository:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def query_history_page(self, **kwargs):
+            assert kwargs["source_system"] == "keepa"
+            assert kwargs["source_job_id"] == "job-1"
+            return {
+                "total": 1,
+                "limit": 20,
+                "offset": 0,
+                "has_more": False,
+                "runs": [{
+                    "job_id": "job-1",
+                    "scenario": "product",
+                    "site": "US",
+                    "request_params": {
+                        "normalized_params": {"asin": "B0088PUEPK"},
+                        "account": {"api_key": "secret"},
+                    },
+                    "datasets": [
+                        {
+                            "dataset_code": "main",
+                            "row_count": 1,
+                            "records": [
+                                {"row_number": 1, "payload": {"asin": "B0088PUEPK"}}
+                            ],
+                            "records_omitted": 0,
+                        }
+                    ],
+                }],
+            }
+
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.config.load_storage_settings",
+        lambda runtime_id: SimpleNamespace(enabled=True, mysql=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.mysql_repository.MySqlCollectionRepository",
+        HistoryRepository,
+    )
+
+    result = _run(keepa_tools.keepa_history(job_id="job-1"))
+
+    assert result["success"] is True
+    assert result["data"]["run_count"] == 1
+    assert result["data"]["total"] == 1
+    assert result["data"]["found"] is True
+    assert result["data"]["has_more"] is False
+    assert result["data"]["runs"][0]["request_params"] == {
+        "asin": "B0088PUEPK"
+    }
+    assert "secret" not in str(result)
+
+
+def test_keepa_history_requires_a_history_selector():
+    result = _run(keepa_tools.keepa_history())
+
     assert result["success"] is False
-    assert "没有可下载地址" in result["error"]["message"]
+    assert "至少提供" in result["error"]["message"]
 
 
-def _record_and_return(storage, value):
-    storage.append(value)
-    return value
+def test_keepa_history_normalizes_site_and_scenario_param_aliases(monkeypatch):
+    captured = {}
+
+    class HistoryRepository:
+        def __init__(self, **kwargs):
+            pass
+
+        def query_history_page(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "total": 0,
+                "limit": 10,
+                "offset": 20,
+                "has_more": False,
+                "runs": [],
+            }
+
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.config.load_storage_settings",
+        lambda runtime_id: SimpleNamespace(enabled=True, mysql=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        "opscli.shared.collection_storage.mysql_repository.MySqlCollectionRepository",
+        HistoryRepository,
+    )
+
+    result = _run(
+        keepa_tools.keepa_history(
+            scenario=" PRODUCT-SEARCH ",
+            site=" us ",
+            params={"keyword": "flashlight"},
+            limit=10,
+            offset=20,
+            include_records=False,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["data"]["found"] is False
+    assert captured["scenario"] == "product-search"
+    assert captured["site"] == "US"
+    assert captured["site_aliases"] == ("1",)
+    assert captured["request_params"]["term"] == "flashlight"
+    assert captured["original_request_params"] == {"keyword": "flashlight"}
+    assert captured["include_records"] is False
 
 
-async def _async_return(value):
-    return value
+def test_keepa_history_site_aliases_treat_gb_and_uk_as_one_domain():
+    assert set(keepa_tools._history_site_aliases("UK")) == {"GB", "2"}
+    assert set(keepa_tools._history_site_aliases("GB")) == {"UK", "2"}
