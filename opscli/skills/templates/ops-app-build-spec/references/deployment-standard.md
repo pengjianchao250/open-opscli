@@ -4,7 +4,7 @@
 
 ## 提交前配置检查
 
-- 使用 Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://ops.api.qa.aukeyit.com`。
+- 使用 Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://mcp.ops.aukeyit.com`。
 - `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 必须是纯 origin，不含 `/api`、接口路径、查询参数或末尾 `/`；不得设置代码默认值、按鉴权模式推断环境或拆分 provider 专属变量。
 - 第三方数据鉴权来自每个请求已校验的 `QueryCredentials`，部署配置不得注入共享 API Key、JWT、Session、Cookie 或 viewer ticket。
 - 独立仓库根存在 `app.yaml`，保持 `apiVersion: apps.aukeys/v1`；`app_id`、标题、数据集和可见范围按真实应用维护，且不得包含已废弃的顶层 `name`。应用清单字段以当前模板和平台 schema 为准，不补回旧版运行时声明。

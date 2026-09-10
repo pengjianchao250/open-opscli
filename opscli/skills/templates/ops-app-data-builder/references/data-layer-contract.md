@@ -22,7 +22,7 @@
     "auth_modes": ["viewer", "session", "local"],
     "base_url_env": "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
     "production_base_url": "https://ops.mcp.xenkee.com",
-    "prerelease_base_url": "https://ops.api.qa.aukeyit.com",
+    "prerelease_base_url": "https://mcp.ops.aukeyit.com",
     "submit_endpoint": "POST /api/v1/seller-sprite/jobs",
     "status_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}",
     "result_endpoint": "GET /api/v1/seller-sprite/jobs/{job_id}/result",
@@ -117,7 +117,7 @@ owner_key = owner_user_id
 
 ### 4.3 第三方用户私有原始数据
 
-Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`，但必须按 `owner_user_id` 隔离。站点后端只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 和同一个请求级 `ThirdPartyApiClient`；生产根域名为 `https://ops.mcp.xenkee.com`，预发布根域名为 `https://ops.api.qa.aukeyit.com`，均由部署环境显式注入且不得设默认值。endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。
+Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`，但必须按 `owner_user_id` 隔离。站点后端只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 和同一个请求级 `ThirdPartyApiClient`；生产根域名为 `https://ops.mcp.xenkee.com`，预发布根域名为 `https://mcp.ops.aukeyit.com`，均由部署环境显式注入且不得设默认值。endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。
 
 `ThirdPartyApiClient` 通过 `get_query_credentials()` 复用模板 `QueryCredentials`。`viewer` 重建 `X-Ops-Token` 与可信 `X-User-*`，`session` 重建 `X-Session-Id` 与已有可选 Bearer JWT，`local` 通过 `AuthClient.build_session_headers("ops")` 和 `AuthClient.build_request_auth("ops")` 转换为标准 Session/JWT Header。禁止共享 API Key、Header 盲目透传、Cookie 上送、请求体凭证和模式回退。
 

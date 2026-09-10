@@ -2,7 +2,7 @@
 name: ops-app-data-builder
 description: 用于 Codex 中为已绑定 AppHub 应用的标准模板项目构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未绑定项目、非标准模板、单次查询、普通页面、经营分析和 Dashboard 任务不使用本 Skill。
 metadata:
-  version: 0.1.10
+  version: 0.1.11
 ---
 
 # OPS 应用数据层构建
@@ -170,7 +170,7 @@ frontend/src/types/          与 Pydantic 对齐的前端类型
 
 Keepa 和 SellerSprite 共用一个请求级 `ThirdPartyApiClient`。Client 通过 `Depends(get_query_credentials)` 复用模板已校验的 `QueryCredentials`，不得重写 `backend/core/auth.py`、自行解析第二套身份或盲目透传浏览器 Header。`viewer` 模式只发送 `X-Ops-Token` 与可信 `X-User-Email/Id/Name`；`session` 模式发送 `X-Session-Id` 与已有的可选 Bearer JWT；`local` 模式只在 Client 内通过 `AuthClient.build_session_headers("ops")` 和 `AuthClient.build_request_auth("ops")` 提取标准 Session/JWT Header，不向远端发送 local 标识、Cookie 或其他本机凭证。三种模式身份不完整时快速失败，禁止跨模式回退。
 
-第三方 Client 只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`。生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://ops.api.qa.aukeyit.com`；配置不得有环境默认值，必须是纯 origin，不得包含 `/api`、接口路径、查询参数或末尾 `/`。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得为 Keepa 或 SellerSprite 增设独立 Base URL，也不得读取共享 API Key 或旧变量别名。Keepa 页面运行时只调用 `POST /api/v1/keepa/run`。SellerSprite 使用正式普通 jobs 或 Listing Analysis 专用异步接口，按当前用户保存并复用 `queued/running` 任务的 `job_id`；只有 `succeeded` 的 JSON 结果写入当前用户私有快照。
+第三方 Client 只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`。生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://mcp.ops.aukeyit.com`；配置不得有环境默认值，必须是纯 origin，不得包含 `/api`、接口路径、查询参数或末尾 `/`。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得为 Keepa 或 SellerSprite 增设独立 Base URL，也不得读取共享 API Key 或旧变量别名。Keepa 页面运行时只调用 `POST /api/v1/keepa/run`。SellerSprite 使用正式普通 jobs 或 Listing Analysis 专用异步接口，按当前用户保存并复用 `queued/running` 任务的 `job_id`；只有 `succeeded` 的 JSON 结果写入当前用户私有快照。
 
 用户私有表的创建、列表、读取、更新、删除、索引和唯一约束都必须包含当前 `owner_user_id`。`third_party_source_snapshot` 和 `third_party_async_job` 都使用 `UNIQUE(owner_user_id, provider, request_hash)`；用户身份不进入只描述业务参数的 `request_hash`。
 
@@ -189,7 +189,7 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
 - OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
-- Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient` 和 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://ops.api.qa.aukeyit.com`，未出现默认环境或 provider 专属 Base URL。
+- Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient` 和 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://mcp.ops.aukeyit.com`，未出现默认环境或 provider 专属 Base URL。
 - `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 只包含纯根域名，统一通过 `base_url.rstrip("/") + path` 拼接固定接口路径；不存在重复 `/api/api` 或双斜杠。
 - `ThirdPartyApiClient` 只从已校验的 `QueryCredentials` 重建三模式允许的 Header，不读取共享 API Key，不透传 Cookie，不在模式间回退。
 - `third_party_source_snapshot` 和 `third_party_async_job` 的读写、UPSERT、索引与 pending 复用都包含 `owner_user_id`。

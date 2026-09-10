@@ -1,3 +1,17 @@
+## 2026-09-10 Skills - 调整第三方数据 API 预发布地址
+
+**变更原因**：AppHub 标准数据项目使用的第三方数据 REST 服务已切换预发布入口，原 `https://ops.api.qa.aukeyit.com` 不再作为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 的预发布值。
+
+**改动点**：将 `ops-app-data-builder` 和 `ops-app-build-spec` 当前合同中的预发布 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 统一调整为 `https://mcp.ops.aukeyit.com`，生产值 `https://ops.mcp.xenkee.com` 保持不变；同步更新 Reference、静态评估和契约测试。Skill 版本分别升至 `v0.1.11` 和 `v0.0.16`。未修改第三方 REST 客户端、接口路径、鉴权 Header 或历史 OPS API 示例。
+
+**验证结果**：本次相关契约测试共 `7 passed`，其中 `ops-app-data-builder` 4 项、`ops-app-build-spec` 3 项；两份 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`，发行清单检查随专项测试通过。完整测试文件回归已尝试，但 Windows 临时目录 ACL 在 pytest 清理阶段触发 `PermissionError`；`ops-app-build-spec` 还命中既有且与本次地址调整无关的 `OPSCLI_API_BASE_URL` 旧断言。本次新地址、版本和部署合同相关节点均通过。
+
+**影响范围**：影响预发布环境配置以及后续安装或升级新版 Skill 后创建、更新的标准 AppHub 数据项目；不影响生产环境、数据库结构、前端合同和 `opscli/app` 运行时代码。
+
+**回滚方式**：将预发布地址恢复为 `https://ops.api.qa.aukeyit.com`，回退两份 Skill 版本、Reference、评估和测试改动，并删除本节记录。
+
+---
+
 ## 2026-09-09 App - AppHub 查询接口统一使用 app_id
 
 **变更原因**：AppHub 已将应用详情和 Git 配置接口从 slug 定位统一调整为大小写敏感的五位 `app_id`，现有客户端实现已符合新契约，但测试和当前规范文档仍保留 slug 或 `/by-id/` 旧路径。

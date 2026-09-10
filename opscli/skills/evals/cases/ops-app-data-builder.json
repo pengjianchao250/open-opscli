@@ -46,7 +46,7 @@
     "AuthClient.build_session_headers(\"ops\")",
     "AuthClient.build_request_auth(\"ops\")",
     "https://ops.mcp.xenkee.com",
-    "https://ops.api.qa.aukeyit.com",
+    "https://mcp.ops.aukeyit.com",
     "纯根域名",
     "请求级 `ThirdPartyApiClient`",
     "/api/v1/keepa/run",

@@ -35,7 +35,7 @@
 | 环境 | `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` |
 | --- | --- |
 | 生产 | `https://ops.mcp.xenkee.com` |
-| 预发布 | `https://ops.api.qa.aukeyit.com` |
+| 预发布 | `https://mcp.ops.aukeyit.com` |
 
 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 不得有代码默认值，也不得根据鉴权模式推断环境。该值必须是纯 origin，不得包含 `/api`、接口路径、查询参数或末尾 `/`。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得分别定义 Keepa、SellerSprite Base URL，也不得进入 `VITE_*` 或其他前端构建变量。
 

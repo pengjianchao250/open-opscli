@@ -211,7 +211,7 @@ database:
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
 - Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run`，请求级 `ThirdPartyApiClient` 复用模板 `get_query_credentials()` 解析出的 `viewer/session/local` 身份。
 - SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，按当前 `owner_user_id` 持久化并复用 pending `job_id`，成功 JSON 结果只进入当前用户私有快照。
-- Keepa 和 SellerSprite 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产注入 `https://ops.mcp.xenkee.com`，预发布注入 `https://ops.api.qa.aukeyit.com`，不得设置默认环境、读取共享 API Key 或旧变量别名。
+- Keepa 和 SellerSprite 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产注入 `https://ops.mcp.xenkee.com`，预发布注入 `https://mcp.ops.aukeyit.com`，不得设置默认环境、读取共享 API Key 或旧变量别名。
 - 第三方调用只从已校验的 `QueryCredentials` 重建允许的 Header，不盲目透传浏览器 Header，不把凭证写入请求体、前端、日志、SQLite 或源码，也不在三种模式间回退。
 - `third_party_source_snapshot` 和 `third_party_async_job` 都使用 `UNIQUE(owner_user_id, provider, request_hash)`；XLS/XLSX 和临时下载 URL 不写入 SQLite。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。

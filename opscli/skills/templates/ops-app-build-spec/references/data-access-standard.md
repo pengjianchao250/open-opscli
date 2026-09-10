@@ -88,7 +88,7 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 
 - 开发期通过 `ops-keepa` 验证场景和样本。
 - 页面运行期由站点后端调用正式 `POST /api/v1/keepa/run`；场景列表只用于开发期合同验证。
-- 后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产显式注入 `https://ops.mcp.xenkee.com`，预发布显式注入 `https://ops.api.qa.aukeyit.com`，不得设置环境默认值或读取共享 API Key。
+- 后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产显式注入 `https://ops.mcp.xenkee.com`，预发布显式注入 `https://mcp.ops.aukeyit.com`，不得设置环境默认值或读取共享 API Key。
 - 同时检查 HTTP 状态和响应 `success`；失败不清空当前用户最后有效快照。
 - 成功 JSON 结果通过 `owner_user_id + provider + request_hash` `UPSERT` 为当前用户私有快照。
 
