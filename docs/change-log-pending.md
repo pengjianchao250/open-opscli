@@ -10282,3 +10282,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除 `sites/seller-sprite-lens-prototype`，从 `opscli/api/cors.py` 移除 `4174`，删除对应 CORS 测试并移除本条变更记录。
 
 ---
+# 2026-09-10 AppHub manifest 身份切换为 app_id
+
+**变更原因**：最新 AppHub 模板已删除 `app.yaml.name` 并新增五位 `app_id`；opscli 仍在 `create/init/push` 中把远端 slug 写回顶层 `name`，造成模板合同回退和发布身份双轨。
+**改动点**：`AppManifestStore` 改为同步 `app_id/title` 并在 `create/init` 时删除遗留顶层 `name`；`push` 在任何远端或 Git 操作前严格校验 `app.yaml.app_id` 与 schema v4 binding 一致，且不再静默改写 manifest；AppHub 创建请求中的 `name` 继续作为 slug 字段；同步更新 AppHub 使用指南、建站与数据层 Skill、历史设计稿废止说明和专项测试。
+**验证结果**：AppHub manifest/manager/client/CLI 回归 61 项通过，相关 Skill 与模板克隆合同 17 项通过，最新模板 `bind-apphub-git.py` 单测 39 项通过；修改的 Python 文件通过 `py_compile`。完整 Skill 测试仍有 2 项既有中文编码断言失败，与本次身份合同变更无关。
+**影响范围**：`opscli/app` manifest 与三命令编排、AppHub 相关 Skill/指南/测试；不改变远端创建 API、binding slug、仓库或 Git 凭据合同。
+**回滚方式**：恢复 `AppManifestStore` 的 `name/title` 同步、manager 的 push 同步策略及相应 Skill/测试；该回滚会重新违反 2026-09-09 最新模板合同，不建议执行。
+
+---

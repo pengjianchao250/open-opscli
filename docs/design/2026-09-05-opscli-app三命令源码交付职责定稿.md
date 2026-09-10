@@ -1,5 +1,7 @@
 # opscli app 三命令源码交付职责定稿
 
+> 2026-09-10 合同变更：本文涉及 `app.yaml.name` 的身份同步规则已被 `app.yaml.app_id` 取代；创建 API 的 `name` 仍作为 slug 请求字段保留。本文其他 Git 与交付职责继续有效。
+
 > 日期：2026-09-05  
 > 状态：已确认，按本文完成代码落地  
 > 范围：`opscli/app`、AppHub API 调用边界、Git 源码交付、相关 Skill、测试和使用文档  

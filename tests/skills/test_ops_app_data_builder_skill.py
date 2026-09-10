@@ -81,7 +81,7 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
         "### 0. 模板初始化门禁",
         ".opscli/app.json",
         "binding 必须包含有效 `app_id/slug`",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         "当前本地分支是 `master`",
         "远端存在 `origin/master`",
         "只有 binding 而没有模板代码",

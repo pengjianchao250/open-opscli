@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, MESSAGE_MAX_LENGTH
 from opscli.app.domain.exceptions import AppGitError, AppProjectError
@@ -99,7 +99,10 @@ class AppManager:
     def push(self, path: str | Path = ".", *, message: str) -> dict:
         summary = self._validate_message(message, command="push")
         root = self.binding_store.prepare_root(path)
-        binding, credential_result, git_init_result, _ = self._prepare_repository(root)
+        binding, credential_result, git_init_result, _ = self._prepare_repository(
+            root,
+            manifest_policy="validate",
+        )
         git_result = self.git_service.push_all(
             root,
             repo_url=binding.repo_url,
@@ -126,9 +129,12 @@ class AppManager:
         app_slug: str | None = None,
         app_id: str | None = None,
         rotate_git_credential: bool = False,
+        manifest_policy: Literal["sync", "validate"] = "sync",
     ) -> tuple[SiteBinding, dict[str, Any], dict[str, Any], dict[str, Any]]:
         root.mkdir(parents=True, exist_ok=True)
         binding = self._ensure_binding(root, app_slug=app_slug, app_id=app_id)
+        if manifest_policy == "validate":
+            self.manifest_store.validate_identity(root, binding, required=True)
         app_detail = self.client.get_app(binding.app_id)
         self._verify_detail(binding, app_detail)
         git_config = self.client.get_git_config(binding.app_id)
@@ -146,7 +152,8 @@ class AppManager:
             rotate_git_credential=rotate_git_credential,
         )
         self.binding_store.save(root, binding)
-        self.manifest_store.sync_identity(root, binding)
+        if manifest_policy == "sync":
+            self.manifest_store.sync_identity(root, binding)
         git_result = self.git_service.initialize(
             root,
             repo_url=binding.repo_url,

@@ -35,7 +35,7 @@ metadata:
 ## 必要输入
 
 - 项目根目录和当前 `AGENTS.md`。
-- 根目录 `.opscli/app.json` 和 `app.yaml`；binding 必须包含有效 `app_id/slug`，且 `.opscli/app.json.slug == app.yaml.name`。
+- 根目录 `.opscli/app.json` 和 `app.yaml`；binding 必须包含有效 `app_id/slug`，且 `.opscli/app.json.app_id == app.yaml.app_id`，`app.yaml` 不含顶层 `name`。
 - 已确认的页面业务需求、筛选范围、刷新要求和使用者范围。
 - `docs/ops-app/project-spec.md`；存在时同时读取 assessment、migration-plan、development、deployment 和 data-spec。
 - 标准模板中的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py` 和 `backend/api/v1/query.py`。
@@ -74,7 +74,7 @@ metadata:
 
 1. 根目录存在 `.opscli/app.json`，项目已绑定 AppHub 应用和独立仓库。
 2. 项目存在标准模板拉取后的 `backend/clients/ops_query_client.py`、`backend/core/auth.py`、`backend/services/query_service.py`、`backend/api/v1/query.py` 和 `app.yaml`。
-3. binding 包含有效 `app_id` 和 `slug`，并且 `.opscli/app.json.slug == app.yaml.name`；`.opscli/app.json` 未被 Git 跟踪。
+3. binding 包含有效 `app_id` 和 `slug`，并且 `.opscli/app.json.app_id == app.yaml.app_id`、`app.yaml` 不含顶层 `name`；`.opscli/app.json` 未被 Git 跟踪。
 4. 当前本地分支是 `master`，`origin` 与 `.opscli/app.json.repo_url` 指向同一 AppHub 业务仓库，且远端存在 `origin/master`。
 
 如果目录仍是未初始化的全新空项目、只有 binding 而没有模板代码、缺少标准 QueryGateway 文件、当前分支不是 `master`、`origin` 不是 binding 对应的业务仓库、缺少 `origin/master`，或项目身份不一致，立即停止代码生成并交回 `$ops-app-build-spec`。提示先完成或重新执行 `opscli app create`、`opscli app init` 和项目身份同步；本 Skill 不自行拉取模板、不兼容旧数据层结构，也不生成替代脚手架。

@@ -110,10 +110,10 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     for obsolete in ("create-vue", "assets/app.yaml", "ops-app.config"):
         assert obsolete not in skill
 
-    assert ".opscli/app.json.slug == app.yaml.name" in skill
+    assert ".opscli/app.json.app_id == app.yaml.app_id" in skill
     deployment = _read("references/deployment-standard.md")
     assert ".gitignore` 必须忽略 `.opscli/" in deployment
-    assert "app_id`、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
+    assert "slug、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
     assert skill.index('python "<skill-directory>/scripts/clone_template.py"') < skill.index(
         'opscli app create "<app-name>" --path "<project-directory>" --json'
@@ -298,7 +298,7 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "不得报告“已发布”或“部署成功”",
         "ops-feedback",
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         ".opscli/app.json` 不得被 Git 跟踪或暂存",
         "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
         "https://ops.mcp.xenkee.com",

@@ -1,7 +1,7 @@
 interface:
   display_name: "OPS 应用数据层构建"
   short_description: "为已初始化的 opscli app 站点构建真实业务数据层"
-  default_prompt: "使用 $ops-app-data-builder 为当前标准模板项目构建真实业务数据层，先校验 .opscli/app.json 的 app_id/slug、app.yaml.name 身份一致性、QueryGateway 和 app.yaml 数据集白名单，再判定单次查询、viewer-live、用户私有持久化或经过批准的系统同步；候选来源必须经在线元数据验证后才能标记 verified，并生成后端、前端 API、SQLite 迁移、测试和 data-spec。"
+  default_prompt: "使用 $ops-app-data-builder 为当前标准模板项目构建真实业务数据层，先校验 .opscli/app.json 与 app.yaml 的 app_id 身份一致性、binding slug、QueryGateway 和 app.yaml 数据集白名单，并确认 app.yaml 不含顶层 name，再判定单次查询、viewer-live、用户私有持久化或经过批准的系统同步；候选来源必须经在线元数据验证后才能标记 verified，并生成后端、前端 API、SQLite 迁移、测试和 data-spec。"
 
 policy:
   allow_implicit_invocation: true

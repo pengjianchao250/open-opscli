@@ -1,5 +1,7 @@
 # opscli app 应用身份文件归一化需求确认稿
 
+> 2026-09-10 合同变更：本文关于 `app.yaml.name` 的设计已被最新模板的 `app.yaml.app_id` 身份合同取代。本文仅保留为历史决策记录，不再作为当前实现依据。
+
 > 日期：2026-09-05  
 > 状态：已确认并完成代码落地  
 > 范围：`opscli/app`、`ops-app-build-spec`、`ops-app-data-builder` 及相关测试和使用文档  
