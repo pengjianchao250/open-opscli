@@ -25,4 +25,29 @@ def test_init_forwards_explicit_id_without_reinterpreting_app(monkeypatch) -> No
     monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
     result = CliRunner().invoke(app, ["app", "init", ".", "--app-id", "Ab123", "--app", "sales", "--json"])
     assert result.exit_code == 0
-    assert captured == {"app_id": "Ab123", "app_slug": "sales"}
+    assert captured == {
+        "app_id": "Ab123",
+        "app_slug": "sales",
+        "rotate_git_credential": False,
+    }
+
+
+def test_init_forwards_explicit_credential_rotation(monkeypatch) -> None:
+    captured = {}
+
+    class FakeManager:
+        def init_git(self, path, **kwargs):
+            captured.update(kwargs)
+            return {}
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
+    result = CliRunner().invoke(
+        app,
+        ["app", "init", ".", "--app-id", "Ab123", "--rotate-git-credential", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert captured["rotate_git_credential"] is True

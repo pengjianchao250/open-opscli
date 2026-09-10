@@ -49,16 +49,18 @@ description: AppHub 模板业务项目的开发规范。创建、开发、排错
    opscli app init "<project-directory>" --json
    ```
 
-5. 核对独立 Git 根、`master` 分支和 `origin`，确认 `origin` 不指向统一模板仓库；空远端首次初始化可以尚无 HEAD。确认 `.opscli/app.json.slug == app.yaml.name`，并按部署规范检查 binding。
+5. 核对独立 Git 根、`master` 分支和 `origin`，确认 `origin` 不指向统一模板仓库；首次绑定目标远端必须已有 `git-bind-preflight` 成功证据，正常后续 push 不重复执行空仓库预检。确认 `.opscli/app.json.slug == app.yaml.name`，并按部署规范检查 binding。
 6. 开发前读取目标项目的规则与本轮参考文件，再实现业务需求。
 
 clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连续执行的必需步骤。`create/init` 不负责获取模板。任何一步失败都停止后续开发，业务代码不得推回模板仓库。不得运行项目生成器、手写替代脚手架，或从 Skill 复制应用代码与发布资产。
 
 ## 已有项目与项目约定
 
-应用唯一身份是五位、区分大小写的 `app_id`，名称和 slug 允许重复。已有有效 `.opscli/app.json` 时继续使用原绑定；缺少绑定或旧文件没有真实 ID 时，先核对平台应用 ID，再执行 `opscli app init "<project-directory>" --app-id "<app_id>" --json`。`--app` 仅核对 slug，不能选择应用；无绑定的 init/push 不会按名称恢复或创建。
+应用唯一身份是严格匹配 `^[0-9A-Za-z]{5}$`、区分大小写的 `app_id`。只接受 schema v4 的 `.opscli/app.json`；v1、v2、v3、`site_name/site_id/created_by` 旧字段、非法 ID 或缺失环境标识时立即停止，不迁移、不备份替换。仅在目录完全没有 binding 时，核对平台应用 ID 后执行 `opscli app init "<project-directory>" --app-id "<app_id>" --json`。`--app` 仅核对 slug，不能查询、选择、恢复或创建应用。
 
-创建同名新应用必须使用另一独立目录。创建超时或失败后，在原目录使用相同名称、账号和环境重试 `create`；保留 `.opscli/creation.json` 中的幂等记录，禁止删记录或换键来重试。`app_id` 不写入 `app.yaml`，仓库地址以平台返回的 `repo_url` 为准。
+创建超时或失败后，在原目录使用相同名称、账号和环境重试 `create`；保留 `.opscli/creation.json` 的本地创建意图和并发保护记录，但不得把其中 UUID 作为 `Idempotency-Key` 发送给 AppHub。服务端按同一 owner 和 slug 幂等重入。`app_id` 不写入 `app.yaml`，仓库地址只使用平台返回的 `repo_url`，不得从 slug 拼接。
+
+Git 凭据禁止自动轮换。平台已绑定但本机缺少匹配凭据时停止；只有用户明确接受其他机器旧凭据失效后，才执行 `opscli app init "<project-directory>" --rotate-git-credential --json`。`app push` 不得隐式发送 `rotate=true`。
 
 业务项目绑定自己的远端后，不能只根据 remote 判断模板身份。根目录应有 `app.yaml`、`AGENTS.md`、`docs/apphub-contract.md`、`frontend/`、`backend/app.py` 和 `backend/CLAUDE.md`，运行入口与项目合同一致。合同缺失时读取迁移规范，不在原目录重新初始化或批量覆盖。
 
@@ -156,7 +158,7 @@ database:
 
 禁止在应用代码、环境文件、构建文件或前端配置中重复维护平台身份、公开前缀或发布地址。`app.yaml` 必须位于独立 Git 仓库根目录，发布分支必须为 `master`；模板源目录嵌套在另一个仓库中时先迁出并初始化独立仓库。
 
-首次源码交付前确认根目录存在 `.opscli/app.json`，binding 中具有有效 `app_id` 和 `slug`，且 `.opscli/app.json.slug == app.yaml.name`。`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding，不写入 `app.yaml`；`.gitignore` 必须忽略 `.opscli/`。
+首次源码交付前确认根目录存在 schema v4 的 `.opscli/app.json`，binding 中 `app_id` 严格匹配 `^[0-9A-Za-z]{5}$`，`default_branch` 固定为 `master`，且 `.opscli/app.json.slug == app.yaml.name`。`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding，不写入 `app.yaml`；`.gitignore` 必须忽略 `.opscli/`。
 
 已有项目迁移时按计划补齐根级资产；全新模板缺少这些必需资产时报告模板问题，不静默复制另一套基线：
 

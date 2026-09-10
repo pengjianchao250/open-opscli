@@ -68,15 +68,14 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     )
 
     payload = client.create_app(
-        AppCreateRequest.from_app_name("销售看板", slug="sales-dashboard").to_dict(),
-        idempotency_key="d65c1375-02b1-48ac-a9ea-5859476dbe27",
+        AppCreateRequest.from_app_name("销售看板", slug="sales-dashboard").to_dict()
     )
 
     request = observed["request"]
     assert request.url == "https://apphub.example/api/v1/apps"
     assert request.headers["Authorization"] == "Bearer ops-jwt"
     assert request.headers["X-Opscli-Version"] == __version__
-    assert request.headers["Idempotency-Key"] == "d65c1375-02b1-48ac-a9ea-5859476dbe27"
+    assert "Idempotency-Key" not in request.headers
     assert "x-session-id" not in request.headers
     assert "cookie" not in request.headers
     assert auth.token_aliases == ["ops"]
@@ -196,8 +195,7 @@ def test_http_error_envelope_is_mapped() -> None:
     )
 
     with pytest.raises(AppHubHttpError) as caught:
-        client.create_app(AppCreateRequest.from_app_name("demo").to_dict(),
-                          idempotency_key="d65c1375-02b1-48ac-a9ea-5859476dbe27")
+        client.create_app(AppCreateRequest.from_app_name("demo").to_dict())
 
     assert caught.value.code == "CONFLICT"
     assert caught.value.fix_hint == "rename"
@@ -236,6 +234,38 @@ def test_get_git_config_uses_case_sensitive_app_id_path() -> None:
     assert paths == [
         "/api/v1/apps/Ab123/git-config", "/api/v1/apps/ab123/git-config",
     ]
+
+
+def test_preflight_git_bind_requires_empty_repository() -> None:
+    paths = []
+
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"repository_empty": True})
+
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    assert client.preflight_git_bind("Ab123") == {"repository_empty": True}
+    assert paths == ["/api/v1/apps/Ab123/git-bind-preflight"]
+
+
+def test_preflight_git_bind_rejects_invalid_payload() -> None:
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json={}))
+        ),
+    )
+
+    with pytest.raises(AppHubHttpError) as caught:
+        client.preflight_git_bind("Ab123")
+
+    assert caught.value.code == "APPHUB-PROTOCOL"
 
 
 def test_creation_scope_is_stable_and_separates_environment_and_owner() -> None:

@@ -8,7 +8,7 @@
 - `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 必须是纯 origin，不含 `/api`、接口路径、查询参数或末尾 `/`；不得设置代码默认值、按鉴权模式推断环境或拆分 provider 专属变量。
 - 第三方数据鉴权来自每个请求已校验的 `QueryCredentials`，部署配置不得注入共享 API Key、JWT、Session、Cookie 或 viewer ticket。
 - 独立仓库根存在 `app.yaml`，保持 `apiVersion: apps.aukeys/v1`；名称、标题、数据集和可见范围按真实应用维护。应用清单字段以当前模板和平台 schema 为准，不补回旧版运行时声明。
-- 根目录存在本地 binding `.opscli/app.json`，其中 `app_id` 和 `slug` 有效，且 `.opscli/app.json.slug == app.yaml.name`。`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding。
+- 根目录存在 schema v4 的本地 binding `.opscli/app.json`；`app_id` 严格匹配 `^[0-9A-Za-z]{5}$` 并保留大小写，`default_branch` 只能是 `master`，且 `.opscli/app.json.slug == app.yaml.name`。禁止使用 slug、`id`、`site_id`、目录名或 `app.yaml.name` 回退身份；`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding。
 - `.gitignore` 必须忽略 `.opscli/`，`.opscli/app.json` 不得被 Git 跟踪或暂存；`app.yaml` 留在源码中。
 - 使用 SQLite 时保留 `database.kind: sqlite`、`database.path: /data/app.db`。应用只使用 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。
 - 已初始化的空白 `data/app.db` 是必要模板资产，可以进入 Git 和镜像；本地运行库、真实业务数据、SQLite 伴生文件、`.env`、密钥和本地 binding 不得进入 Git 或构建上下文。不得把写入业务数据后的库当空白模板提交。
@@ -36,9 +36,11 @@
 
 新项目按主 Skill 从统一模板仓库的 `master` 分支安全 clone、清理模板 Git，随后连续执行 `opscli app create`、`opscli app init`。已有正确绑定的项目不重复初始化。空远端首次初始化允许尚无 `master` 或本地 HEAD。
 
-同名应用以 `app_id` 区分；该 ID 固定五位 Base62、大小写敏感。缺少或不可信的 binding 使用 `opscli app init "<project-directory>" --app-id "<app_id>"` 显式恢复，不按 slug 自动选择。绑定中的 `apphub_url` 限定控制面环境，环境不匹配时先切回原环境；另一环境使用独立目录。
+应用只以 `app_id` 区分；该 ID 固定五位 Base62、大小写敏感。目录完全缺少 binding 时使用 `opscli app init "<project-directory>" --app-id "<app_id>"` 显式恢复，不按 slug 自动选择。v1、v2、v3 或含旧字段的 binding 直接停止，不自动迁移、修复或替换。绑定中的 `apphub_url` 限定控制面环境，环境不匹配时先切回原环境；另一环境使用独立目录。
 
-创建请求发送前将 UUID 幂等键、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`；失败后保留记录，在相同目录、名称、账号和环境下重试。主动新建同名应用使用独立目录与新键。此记录与 binding 一起被 `.opscli/` 忽略规则保护，不进入源码。
+创建请求发送前将本地操作 UUID、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`；该 UUID 只用于目录级并发和创建意图保护，不作为 AppHub `Idempotency-Key`。失败后保留记录，在相同目录、名称、账号和环境下重试，由服务端同 owner/slug 幂等重入。此记录与 binding 一起被 `.opscli/` 忽略规则保护，不进入源码。
+
+首次绑定目标 `origin` 前必须取得 `GET /api/v1/apps/{app_id}/git-bind-preflight` 的 `{"repository_empty": true}` 成功证据；远端非空由平台返回 409。正常后续 push 不重复执行空仓库预检。Git 凭据默认不轮换；平台已绑定但本机无匹配凭据时停止，只有用户明确接受其他机器凭据失效后才能执行 `opscli app init "<project-directory>" --rotate-git-credential`。
 
 `opscli app push "<project-directory>" --message "<summary>"` 会整体暂存、提交并普通推送 `HEAD:master`，不执行强制推送。`--message` 必填，用于存在修改时创建 commit。
 

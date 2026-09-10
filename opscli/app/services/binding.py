@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import shutil
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -21,23 +20,15 @@ class BindingStore:
             raise AppProjectError("APP-PATH-INVALID", f"绑定路径不是目录：{root}")
         return root
 
-    def save(self, path: str | Path, binding: SiteBinding, *, recover: bool = False) -> Path:
-        """原子保存绑定；只有显式恢复才允许替换损坏的历史文件。"""
+    def save(self, path: str | Path, binding: SiteBinding) -> Path:
+        """原子保存当前 schema 的绑定，不覆盖损坏或不同应用的历史文件。"""
+        binding = SiteBinding.from_dict(binding.to_dict())
         root = self.prepare_root(path)
         root.mkdir(parents=True, exist_ok=True)
         target = root / BINDING_RELATIVE_PATH
         if target.exists():
-            try:
-                current = self.load(root)
-            except AppProjectError as exc:
-                if not recover or exc.code != "APP-BINDING-INVALID":
-                    raise
-                # 修复前保留原文件，避免丢失历史绑定信息。
-                shutil.copyfile(target, target.with_name(f"app.invalid-{uuid4().hex}.json"))
-                current = None
-            if current is not None and current.app_id != binding.app_id and not (
-                recover and current.apphub_url is None and current.app_id == current.slug
-            ):
+            current = self.load(root)
+            if current.app_id != binding.app_id:
                 raise AppProjectError(
                     "APP-ALREADY-BOUND",
                     f"目录已绑定其他应用：{current.app_name} ({current.app_id})",

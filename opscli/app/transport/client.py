@@ -6,12 +6,11 @@ import hashlib
 import json
 from typing import Any
 from urllib.parse import quote
-from uuid import UUID
 
 import httpx
 
 from opscli.app.domain.constants import APPHUB_API_PREFIX
-from opscli.app.domain.exceptions import AppHubHttpError, AppProjectError
+from opscli.app.domain.exceptions import AppHubHttpError
 from opscli.app.domain.models import validate_app_id
 from opscli.auth import AuthClient
 from opscli.auth.config import get_apphub_url
@@ -50,16 +49,9 @@ class AppHubClient:
         scope = json.dumps([self.api_base_url, str(owner)], separators=(",", ":"))
         return hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
-    def create_app(self, request_payload: dict[str, Any], *, idempotency_key: str) -> dict[str, Any]:
-        """使用调用方已经持久化的 UUID，避免网络重试重复创建。"""
-        try:
-            UUID(idempotency_key)
-        except (ValueError, TypeError, AttributeError) as exc:
-            raise AppProjectError("APP-ARGUMENT", "创建幂等键必须是 UUID。") from exc
-        return self._request_json(
-            "POST", "/apps", json=request_payload,
-            headers={"Idempotency-Key": idempotency_key},
-        )
+    def create_app(self, request_payload: dict[str, Any]) -> dict[str, Any]:
+        """创建应用；重入幂等由 AppHub 按 owner 和 slug 保证。"""
+        return self._request_json("POST", "/apps", json=request_payload)
 
     def get_app(self, app_id: str) -> dict[str, Any]:
         """按大小写敏感的公开 ID 获取唯一应用。"""
@@ -71,6 +63,18 @@ class AppHubClient:
     def get_git_config(self, app_id: str) -> dict[str, Any]:
         """按公开 ID 获取平台保存的仓库绑定，不从 slug 拼接仓库。"""
         return self._request_json("GET", f"/apps/{_segment(validate_app_id(app_id))}/git-config")
+
+    def preflight_git_bind(self, app_id: str) -> dict[str, Any]:
+        """首次绑定目标 origin 前确认平台仓库为空。"""
+        payload = self._request_json(
+            "GET", f"/apps/{_segment(validate_app_id(app_id))}/git-bind-preflight"
+        )
+        if payload.get("repository_empty") is not True:
+            raise AppHubHttpError(
+                "APPHUB-PROTOCOL",
+                "AppHub 返回的 Git 仓库预检结果不合法。",
+            )
+        return payload
 
     def issue_git_credential(self, *, rotate: bool) -> dict[str, Any]:
         return self._request_json("POST", "/git/credentials", json={"rotate": rotate})

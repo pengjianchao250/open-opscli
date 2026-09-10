@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import shutil
 import subprocess
 from pathlib import Path
@@ -34,9 +35,17 @@ class FakeRunner:
         self.responses = responses or {}
         self.calls: list[list[str]] = []
 
-    def run(self, cwd, args, *, check=True, input_text=None):
+    def run(self, cwd, args, *, check=True, input_text=None, env_overrides=None):
         self.calls.append(args)
-        result = self.responses.get(tuple(args), GitCommandResult(0, "", ""))
+        key = tuple(args)
+        result = self.responses.get(key)
+        if result is None and key == ("remote", "get-url", "--push", "--all", "origin"):
+            result = self.responses.get(
+                ("remote", "get-url", "origin"),
+                GitCommandResult(0, "", ""),
+            )
+        if result is None:
+            result = GitCommandResult(0, "", "")
         if check and result.returncode != 0:
             raise AssertionError(f"unexpected checked failure: {args}")
         return result
@@ -44,6 +53,32 @@ class FakeRunner:
 
 def test_parse_git_version() -> None:
     assert _parse_git_version("git version 2.45.2.windows.1") == (2, 45, 2)
+
+
+def test_new_credential_probe_uses_ephemeral_basic_header(tmp_path: Path) -> None:
+    captured = {}
+
+    class CredentialRunner(FakeRunner):
+        def run(self, cwd, args, *, check=True, input_text=None, env_overrides=None):
+            captured["args"] = args
+            captured["env"] = dict(env_overrides or {})
+            return GitCommandResult(0, "", "")
+
+    GitService(runner=CredentialRunner()).probe_remote_branch_with_basic_auth(
+        tmp_path,
+        repo_url="https://gitea.example/apps/demo.git",
+        username="demo-user",
+        token="secret-token",
+    )
+
+    expected = base64.b64encode(b"demo-user:secret-token").decode("ascii")
+    assert captured["args"] == [
+        "ls-remote",
+        "https://gitea.example/apps/demo.git",
+        "refs/heads/master",
+    ]
+    assert f"Authorization: Basic {expected}" in captured["env"].values()
+    assert all("secret-token" not in argument for argument in captured["args"])
 
 
 def test_empty_project_bases_master_on_origin_without_template(tmp_path: Path) -> None:
@@ -77,7 +112,7 @@ def test_empty_project_bases_master_on_origin_without_template(tmp_path: Path) -
     assert not any("template" in call for call in runner.calls)
 
 
-def test_init_prepares_unrelated_history_without_creating_commit(tmp_path: Path) -> None:
+def test_init_rejects_unrelated_history_without_creating_merge(tmp_path: Path) -> None:
     remote_sha = "a" * 40
     local_sha = "b" * 40
     runner = FakeRunner(
@@ -97,20 +132,14 @@ def test_init_prepares_unrelated_history_without_creating_commit(tmp_path: Path)
         }
     )
 
-    GitService(runner=runner).initialize(
-        tmp_path,
-        repo_url="https://gitea.example/apps/demo.git",
-    )
+    with pytest.raises(AppGitError) as caught:
+        GitService(runner=runner).initialize(
+            tmp_path,
+            repo_url="https://gitea.example/apps/demo.git",
+        )
 
-    assert [
-        "merge",
-        "--allow-unrelated-histories",
-        "-s",
-        "ours",
-        "--no-commit",
-        "origin/master",
-    ] in runner.calls
-    assert not any(call and call[0] == "commit" for call in runner.calls)
+    assert caught.value.code == "GIT-003"
+    assert not any(call and call[0] in {"merge", "commit"} for call in runner.calls)
 
 
 def test_init_replaces_template_origin_without_reading_stale_template_master(
@@ -147,6 +176,13 @@ def test_init_replaces_template_origin_without_reading_stale_template_master(
         "remote",
         "set-url",
         "origin",
+        "https://gitea.example/apps/demo.git",
+    ] in runner.calls
+    assert [
+        "config",
+        "--local",
+        "--replace-all",
+        "remote.origin.pushurl",
         "https://gitea.example/apps/demo.git",
     ] in runner.calls
     assert ["update-ref", "-d", "refs/remotes/origin/master"] in runner.calls
@@ -360,6 +396,33 @@ def test_push_rejects_binding_file_that_is_not_ignored(tmp_path: Path) -> None:
 
     assert caught.value.code == "APP-BINDING-TRACKED"
     assert ["add", "-A"] not in runner.calls
+
+
+def test_push_rejects_stale_or_multiple_push_urls(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    runner = FakeRunner(
+        {
+            ("--version",): GitCommandResult(0, "git version 2.45.2", ""),
+            ("remote", "get-url", "origin"): GitCommandResult(
+                0, "https://gitea.example/apps/demo.git", ""
+            ),
+            ("remote", "get-url", "--push", "--all", "origin"): GitCommandResult(
+                0,
+                "https://old.example/apps/demo.git\nhttps://gitea.example/apps/demo.git",
+                "",
+            ),
+        }
+    )
+
+    with pytest.raises(AppGitError) as caught:
+        GitService(runner=runner).push_all(
+            tmp_path,
+            repo_url="https://gitea.example/apps/demo.git",
+            message="提交源码",
+        )
+
+    assert caught.value.code == "GIT-ORIGIN-MISMATCH"
+    assert not any(call and call[0] in {"add", "commit", "push"} for call in runner.calls)
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is required")
