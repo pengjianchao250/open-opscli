@@ -22,7 +22,7 @@ from .helpers import _err, _get_auth_pair, _get_credential_dir, _ok
 
 
 async def amazon_rufus_remote_consent_status(country: str) -> dict:
-    """读取指定国家站点的 Rufus MCP/headless 授权偏好。
+    """读取指定国家站点的 Alexa（原 Rufus）MCP/headless 授权偏好。
 
     Args:
         country: 国家站点代码，如 US、UK、DE、JP
@@ -39,7 +39,7 @@ async def amazon_rufus_remote_consent_status(country: str) -> dict:
 
 
 async def amazon_rufus_remote_consent_set(country: str, allowed: bool) -> dict:
-    """保存指定国家站点的 Rufus MCP/headless 授权偏好。
+    """保存指定国家站点的 Alexa（原 Rufus）MCP/headless 授权偏好。
 
     Args:
         country: 国家站点代码，如 US、UK、DE、JP
@@ -60,7 +60,7 @@ async def amazon_rufus_remote_consent_set(country: str, allowed: bool) -> dict:
 
 
 async def amazon_rufus_login_status(country: str) -> dict:
-    """读取 Rufus 获取前可用的亚马逊 Rufus 登录态脱敏摘要。
+    """读取 Alexa（原 Rufus）获取前可用的亚马逊 Rufus 登录态脱敏摘要。
 
     Args:
         country: 国家站点代码，如 US、UK、DE、JP
@@ -84,7 +84,7 @@ async def amazon_rufus_watch_login(
     launch_if_needed: bool = True,
     close_browser: bool = True,
 ) -> dict:
-    """监听 Amazon 登录页并保存 Rufus streaming 请求种子。
+    """监听 Amazon 登录页并保存 Alexa（原 Rufus）streaming 请求种子。
 
     Args:
         asin: 目标 ASIN
@@ -126,7 +126,7 @@ async def amazon_rufus_logout(
     country: str,
     include_browser_profile: bool = True,
 ) -> dict:
-    """清除指定国家站点的 Amazon/Rufus 登录态摘要。
+    """清除指定国家站点的 Amazon Alexa（原 Rufus）登录态摘要。
 
     Args:
         country: 国家站点代码，如 US、UK、DE、JP
@@ -155,7 +155,13 @@ async def amazon_rufus_get(
     skills_dir: str | None = None,
     timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
 ) -> dict:
-    """获取指定 ASIN 的 Rufus 回答，发布报告并返回本地路径与远端地址。
+    """获取指定 ASIN 的 Alexa（原 Rufus）回答，发布报告并返回本地路径与远端地址。
+
+    Amazon 商品页购物助手 Rufus 已改名为 Alexa，兼容 Alexa/alexa、Rufus/rufus 请求。
+    用户要求 Alexa/Rufus 商品页问答、ASIN 或 Listing 诊断时，先使用
+    ops-amazon-rufus Skill 完成授权、登录态检查和问题编排，再调用本工具。
+    MCP 工具名继续使用 amazon_rufus_*，CLI 继续使用 opscli amazon-rufus。
+    本工具不用于 Alexa/Echo 智能音箱或智能家居控制。
 
     Args:
         asin: 目标 ASIN
@@ -197,7 +203,7 @@ async def amazon_rufus_platform_cookie_save(
     country: str,
     content: str,
 ) -> dict:
-    """通过 OPS 平台 Cookie 接口保存亚马逊 Rufus 登录态 content，不在响应中回显原文。
+    """通过 OPS 平台 Cookie 接口保存 Alexa（原 Rufus）登录态 content，不在响应中回显原文。
 
     Args:
         platform: 平台标识，如 amazon
@@ -230,7 +236,7 @@ async def amazon_rufus_platform_cookie_get(
     country: str,
     include_content: bool = False,
 ) -> dict:
-    """读取 OPS 平台 Cookie 接口 content，默认只返回脱敏摘要。
+    """读取 Alexa（原 Rufus）的 OPS 平台 Cookie 接口 content，默认只返回脱敏摘要。
 
     Args:
         platform: 平台标识，如 amazon
@@ -262,7 +268,7 @@ async def amazon_rufus_curl_save(
     country: str,
     raw_curl: str,
 ) -> dict:
-    """保存浏览器 Copy-as-cURL 状态，不在响应中回显原文。
+    """保存 Alexa（原 Rufus）浏览器 Copy-as-cURL 状态，不在响应中回显原文。
 
     Args:
         asin: 目标 ASIN

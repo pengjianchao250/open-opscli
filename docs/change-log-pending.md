@@ -1,3 +1,67 @@
+## 2026-09-09 App - AppHub 查询接口统一使用 app_id
+
+**变更原因**：AppHub 已将应用详情和 Git 配置接口从 slug 定位统一调整为大小写敏感的五位 `app_id`，现有客户端实现已符合新契约，但测试和当前规范文档仍保留 slug 或 `/by-id/` 旧路径。
+
+**改动点**：更新 `tests/app/test_client.py`，分别校验 `GET /api/v1/apps/{app_id}` 与 `GET /api/v1/apps/{app_id}/git-config` 并保留大小写敏感覆盖；同步更新 AppHub 使用指南、开发规范和 2026-09-05 两份当前定稿文档；为 2026-09-02 两份历史方案增加接口已被取代说明。未改动 release 接口文档，等待 AppHub 单独确认其身份参数契约。
+
+**验证结果**：修改前执行 `python -m pytest tests/app/test_client.py -q -p no:cacheprovider` 为 `1 failed, 8 passed`，失败原因为旧 `/by-id/` 路径断言；修改后专项测试为 `10 passed`，完整 `tests/app` 回归为 `76 passed`。完整回归首次受沙箱临时目录 ACL 限制，改用仓库内专用临时目录并在受控权限下重跑通过。
+
+**影响范围**：仅影响 `opscli app` 的 AppHub 查询接口契约测试和相关文档，不修改运行时代码、binding 格式、CLI 参数、Git 凭据逻辑或 release API。
+
+**回滚方式**：恢复客户端路径测试中的 `/by-id/` 断言及相关文档旧路径，并删除两份历史文档新增的 2026-09-09 废弃说明和本节变更记录。
+
+---
+
+## 2026-09-09 ops-app - 创建应用时省略未填写的 contact
+
+**变更原因**：AppHub 文档将 `contact` 定义为可选字段，但部分已部署服务版本尚未接收该字段；客户端此前固定发送 `contact: null`，会触发服务端 `extra_forbidden` 并阻塞应用创建。
+
+**改动点**：`AppCreateRequest.to_dict()` 仅在调用方显式提供 `contact` 时写入请求体；创建请求测试新增默认省略和显式值保留断言，不过滤其他合同允许的 `null` 字段。
+
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/app/test_client.py -q` 通过，`11 passed`；使用全新可写 `--basetemp` 运行完整 `tests/app`，`77 passed`。修复后的真实 `opscli app create` 重试不再出现 `contact` 的 `YAML-INVALID`，已进入后续用户资料校验阶段。当前虚拟环境未安装 `ruff`，未执行该静态检查。
+
+**影响范围**：仅影响 `opscli app create` 的请求体序列化；默认创建不再发送 `contact`，显式设置时行为保持不变。
+
+**回滚方式**：恢复 `AppCreateRequest.to_dict()` 固定写入 `contact`，并撤销对应测试和本条记录。
+
+---
+
+## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
+
+**变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 改为复用最新模板 `QueryCredentials`，由请求级 `ThirdPartyApiClient` 按 viewer、session、local 重建允许的 Header；删除 `OPSCLI_THIRD_PARTY_DATA_API_KEY` 合同，只保留由部署环境显式注入的 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://ops.api.qa.aukeyit.com`；`third_party_source_snapshot` 和 `third_party_async_job` 改为 `UNIQUE(owner_user_id, provider, request_hash)`；同步更新 Reference、静态评估、需求文档和契约测试。Skill 版本分别升至 `v0.1.10` 和 `v0.0.15`。
+
+**验证结果**：`ops-app-data-builder` 完整契约测试 `11 passed`；`ops-app-build-spec` 完整契约测试 `12 passed, 1 failed`，唯一失败为既有迁移资产 `assets/backend/AGENTS.md` 标题与旧断言不一致，与本次改造无关；本次相关建站测试及安装门禁 `6 passed`；静态 eval 与发行清单检查通过。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；不修改 `opscli/app` 和最新模板仓库，不兼容旧模板项目，也不保留共享 API Key 或跨模式回退。
+
+**回滚方式**：整体回退两份 Skill 的本次版本、Reference、评估和测试改动；不得在新生成项目中局部恢复共享 API Key，以免重新引入跨用户数据复用。
+
+---
+
+
+## 2026-09-08 Skills - 精简 AppHub 前端与源码交付规范
+
+**变更原因**：业务项目持续用 Codex 开发时，需要具体的维护规则；原主文件混有旧部署配置和重复检查，前端缺少明确的职责与数据边界。
+
+**改动点**：`ops-app-build-spec` 升至 v0.0.13，主入口按任务读取 references，补充范围、复用和实际改动检查；前端明确职责、状态、请求、分页、样式与行为验证。部署细节引用实际模板合同，移除旧清单字段、旧资产路径与依赖要求，保留空白模板库和源码推送边界。安装和调用入口由模板项目维护，当前 Skill 不增加每轮加载或规则注入机制。
+
+**验证结果**：`tests/skills/test_ops_app_build_spec_skill.py` 与 `tests/skills/test_ops_app_template_clone.py` 合计 15 通过、3 失败；与改前 13 通过、4 失败相比，主入口数据路由断言已修复，新增引用路径完整性检查通过。剩余 3 项为改前已有的后端红线、opscli 接入及后端规范资产断言失败，未改动或跳过这些测试。Skill 校验、安装完整性与差异检查通过，只读审查无新增实质问题；未提交、推送或部署。
+
+**影响范围**：仅内置 Skill 主文件、前端/部署参考、版本和相关校验；不修改后端规范、克隆脚本、模板项目或用户全局配置。
+
+**回滚方式**：恢复本次 Skill、版本和专项测试差异，无项目或数据迁移。
+## 2026-09-08 Skills - 第三方数据 API 环境变量收窄命名
+
+**变更原因**：原第三方数据 API 根地址与密钥变量当前只服务于站点后端调用 Keepa 与 SellerSprite，但命名过于通用，容易被误解为整个 OPSCLI 平台的公共 API 配置。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 将新项目运行时合同统一改为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`；同步更新数据层合同、运行时路由、静态评估、设计文档和契约测试。新合同不读取旧变量别名，不修改线上 API 使用指南，也不迁移已有数据项目。Skill 版本分别升至 `v0.1.9` 和 `v0.0.14`。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；已有项目继续保持原配置，不提供兼容回退。
+
+**回滚方式**：恢复两份 Skill 及其 Reference、版本、评估、测试和设计文档中的旧变量合同，并删除本节记录。
+
 ## 2026-09-08 AppHub 站点 - 按 ops-app-build-spec 迁移 test-keepa
 
 **变更原因**：`test-keepa` 现有仓库由旧建站流程生成，前端文件位于根目录且缺少统一 AppHub 项目合同；用户确认应使用 `ops-app-build-spec` 进行存量项目迁移。
@@ -388,7 +452,7 @@ all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模�
 
 **改动点**：`ops-app-data-builder` 升级到 `v0.1.4`，明确 OPS 原始及加工结果持久化时按 `owner_user_id` 隔离；Keepa 成功 JSON 原始数据按 `provider + request_hash` 写入站点共享快照；SellerSprite 使用正式异步 REST，保存并复用 pending `job_id`，仅将成功 JSON 结果写入共享快照，XLS/XLSX、二进制和临时下载 URL 不入库；用户查询历史、输入、收藏、备注以及 OPS/第三方加工结果均按用户隔离。同步将 `ops-app-build-spec` 升级到 `v0.0.5`，更新 Reference、静态 eval、发行清单、测试、需求设计和落地计划。
 
-**配置边界**：Keepa 与 SellerSprite 运行时只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 `OPSCLI_SELLER_SPRITE_E2E_*` 别名；Keepa 页面运行时只调用 `POST /api/v1/keepa/run`；不处理第三方额度检查、扣减、归属、账号调度或复杂分布式锁。
+**配置边界**：Keepa 与 SellerSprite 运行时只使用当时约定的通用第三方数据 API 根地址与密钥变量，不引入 SellerSprite E2E 别名；Keepa 页面运行时只调用 `POST /api/v1/keepa/run`；不处理第三方额度检查、扣减、归属、账号调度或复杂分布式锁。
 
 **验证结果**：`tests/skills/test_ops_app_data_builder_skill.py` 通过，`10 passed`；`ops-app-build-spec` 元数据、真实数据路由和安装声明专项测试通过，`3 passed`；两个 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`；`scripts/check_skill_release_manifest.py` 校验通过。
 
@@ -398,7 +462,7 @@ all/cache、组件别名、规划器工具及凭证链路 81 passed。目标模�
 
 **变更原因**：`ops-app-data-builder` 的运行时路由仍把 `/api/v1/keepa/scenarios` 与 `/api/v1/keepa/run` 并列为线上入口，但当前站点运行时只允许调用 `/api/v1/keepa/run`。继续保留 scenarios 会误导站点生成不应存在的运行时代码。
 
-**改动点**：Skill 升级到 `v0.1.3`；Keepa 开发期仍通过 `ops-keepa` 验证场景、参数和少量样本，站点线上运行时只允许后端通过 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 调用 `/api/v1/keepa/run`；同步更新运行时 Reference、落地计划和契约测试，并增加 scenarios 路径零残留断言。
+**改动点**：Skill 升级到 `v0.1.3`；Keepa 开发期仍通过 `ops-keepa` 验证场景、参数和少量样本，站点线上运行时只允许后端通过当时约定的通用第三方数据 API 根地址与密钥变量调用 `/api/v1/keepa/run`；同步更新运行时 Reference、落地计划和契约测试，并增加 scenarios 路径零残留断言。
 
 **影响范围**：只影响 `ops-app-data-builder` 生成 Keepa 站点数据层时的运行时端点选择，不修改 `opscli keepa` CLI/MCP 自身命令面，也不影响 OPS QueryGateway 或 SellerSprite 阻塞策略。
 
@@ -8872,9 +8936,9 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ## 2026-09-04 ops-app-data-builder Skill - 统一 Keepa 与 SellerSprite 线上取数根域名
 
-**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但现有 Skill 只约束两者共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
+**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但当时的 Skill 只约束两者共用一组通用第三方数据 API 根地址与密钥变量，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
 
-**改动点**：`ops-app-data-builder` 明确 `OPSCLI_API_BASE_URL` 的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；`OPSCLI_API_KEY` 继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
+**改动点**：`ops-app-data-builder` 明确当时通用第三方数据 API 根地址变量的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；对应密钥变量继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
 
 **验证结果**：`.venv/Scripts/python.exe -m pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest --basetemp .tmp/pytest-ops-app-data-builder-noconftest` 通过，`10 passed`；`ops-app-data-builder.json` 与 `data/VERSION.json` JSON 解析校验通过。直接加载 `tests/skills/conftest.py` 仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻断，因此沿用既有基线使用 `--noconftest` 验证。
 
@@ -9036,6 +9100,17 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ---
 
+## 2026-09-09 amazon-rufus - 兼容 Alexa 名称触发
+
+**变更原因**：商品页购物助手 Rufus 改名为 Alexa，需要让 Agent 在用户使用新名称时找到原有 Skill 和 MCP 工具。
+
+**改动点**：内置及项目内 ops-amazon-rufus Skill 同步补充 Alexa/Rufus 触发词、名称映射和智能音箱场景边界；9 个 Rufus MCP 工具描述补充 Alexa 名称，获取工具明确引导先使用原 Skill。
+
+**验证结果**：两份 Skill 均通过 quick_validate.py，文件内容逐字节一致；通过本地 MCP Client.list_tools() 确认 9 个工具均暴露 Alexa/Rufus 描述，获取入口包含 ops-amazon-rufus 引导，工具名称未变。`.venv/Scripts/python.exe -X utf8 -m pytest tests/mcp/test_amazon_rufus_tools.py -q` 为 26 passed；`git diff --check` 通过。未运行真实 Amazon 获取或线上 Agent 触发验收。
+
+**影响范围**：仅 Skill 说明和 MCP 工具描述；Skill、CLI、MCP 工具名称及执行逻辑保持兼容。
+
+**回滚方式**：撤销两份 SKILL.md、amazon_rufus.py 中本次说明文字及本条记录。
 ---
 
 ## 2026-09-07 Keepa JSON Lens - 接入 OPS MCP API JavaScript SDK

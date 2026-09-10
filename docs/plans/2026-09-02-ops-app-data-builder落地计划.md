@@ -20,7 +20,7 @@
 10. OPS 运行期统一复用模板 `QueryGateway`，不生成或引用 `opscli.app.sdk.OpsClient`。
 11. 真实 OPS 数据集必须进入 `app.yaml.opscli.datasets` 白名单，测试统一使用 FakeGateway 和 dependency override。
 12. OPS 持久化数据和用户二次加工结果按 `owner_user_id` 隔离。
-13. Keepa 和 SellerSprite 共享 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 E2E 配置别名。
+13. Keepa 和 SellerSprite 共享 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不兼容旧变量别名。
 14. 第三方 JSON 原始数据、SellerSprite 任务状态和用户私有结果分表。
 
 ## 2. 职责分层
@@ -78,7 +78,7 @@ ops-app-data-builder
 ### Keepa
 
 - 开发期使用 `ops-keepa` 验证场景和样本。
-- 运行期由站点后端使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY` 调用正式 Keepa REST 端点。
+- 运行期由站点后端使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY` 调用正式 Keepa REST 端点。
 - 站点运行时只调用正式 `/api/v1/keepa/run`，不调用 scenarios，也不猜测任务轮询或下载端点。
 - 同时检查 HTTP 状态和 `success`；同步并发成功结果通过 `provider + request_hash` `UPSERT` 为一条共享快照。
 

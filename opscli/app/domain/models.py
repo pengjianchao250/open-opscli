@@ -6,12 +6,46 @@ import hashlib
 import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any
+from urllib.parse import urlsplit
 
 from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, GIT_DEFAULT_BRANCH
 from opscli.app.domain.exceptions import AppProjectError
 
 _SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_VALID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
+
+
+def validate_app_id(value: Any, *, code: str = "APP-BINDING-INVALID") -> str:
+    """校验公开应用 ID，保留大小写且不把名称或数字转换为身份。"""
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9]{5}", value) is None:
+        raise AppProjectError(code, "应用 app_id 必须是五位大小写字母数字，请按应用 ID 重新绑定。")
+    return value
+
+
+def validate_repo_url(value: Any, *, code: str = "APP-BINDING-INVALID") -> str:
+    """只接受不携带凭据、查询参数或片段的 HTTP(S) 仓库地址。"""
+    if not isinstance(value, str) or not value.strip():
+        raise AppProjectError(code, "应用仓库地址不能为空。")
+    repo_url = value.strip()
+    parsed = urlsplit(repo_url)
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or not parsed.path.strip("/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise AppProjectError(code, "应用仓库地址必须是不含凭据、查询参数或片段的 HTTP(S) URL。")
+    return repo_url
+
+
+def validate_default_branch(value: Any, *, code: str = "APP-BINDING-INVALID") -> str:
+    """AppHub 源码交付分支固定为 master。"""
+    if value != GIT_DEFAULT_BRANCH:
+        raise AppProjectError(code, "应用默认分支必须是 master。")
+    return GIT_DEFAULT_BRANCH
 
 
 @dataclass(frozen=True)
@@ -41,18 +75,21 @@ class AppCreateRequest:
         return cls.from_app_name(site_name)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "apiVersion": "apps.aukeys/v1",
             "name": self.name,
             "title": self.title,
             "description": self.description,
-            "contact": self.contact,
             "resources": {"cpu": None, "memory": None},
             "database": {"kind": "sqlite", "path": "/data/app.db"},
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
         }
+        # contact 未填写时省略字段，兼容尚未接收该可选字段的 AppHub 服务版本。
+        if self.contact is not None:
+            payload["contact"] = self.contact
+        return payload
 
 
 @dataclass(frozen=True)
@@ -69,6 +106,8 @@ class SiteBinding:
     owner_email: str | None = None
     created_at: str | None = None
     schema_version: int = BINDING_SCHEMA_VERSION
+    # 控制面环境参与目录绑定，防止两个环境偶然生成相同公开 ID。
+    apphub_url: str | None = None
 
     @property
     def site_name(self) -> str:
@@ -97,17 +136,20 @@ class SiteBinding:
         app_name: str,
         payload: dict[str, Any],
     ) -> "SiteBinding":
+        """只接受服务端明确返回的公开 ID，不用 slug 补齐身份。"""
         slug = _required_text(payload, "slug")
-        repo_url = _required_text(payload, "repo_url")
-        app_id = _optional_text(
-            payload.get("app_id") or payload.get("id") or payload.get("site_id")
-        ) or slug
+        repo_url = validate_repo_url(payload.get("repo_url"), code="APPHUB-PROTOCOL")
+        app_id = validate_app_id(payload.get("app_id"), code="APPHUB-PROTOCOL")
+        default_branch = validate_default_branch(
+            payload.get("default_branch") or GIT_DEFAULT_BRANCH,
+            code="APPHUB-PROTOCOL",
+        )
         return cls(
             app_id=app_id,
             app_name=str(payload.get("title") or payload.get("site_name") or app_name),
             slug=slug,
             repo_url=repo_url,
-            default_branch=str(payload.get("default_branch") or GIT_DEFAULT_BRANCH),
+            default_branch=default_branch,
             git_username=_optional_text(
                 payload.get("git_username")
                 or _nested_value(payload, "git_credential", "username")
@@ -115,49 +157,54 @@ class SiteBinding:
             owner_user_id=_optional_text(payload.get("owner_user_id")),
             owner_email=_optional_text(payload.get("owner_email") or payload.get("owner")),
             created_at=_optional_text(payload.get("created_at")),
+            apphub_url=_optional_text(payload.get("apphub_url")),
         )
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "SiteBinding":
+        """只读取当前 schema 且字段完整的本地绑定。"""
         try:
             source_version = int(payload.get("schema_version", 1))
         except (TypeError, ValueError) as exc:
             raise AppProjectError("APP-BINDING-INVALID", "应用绑定版本格式错误。") from exc
-        if source_version not in (1, 2, BINDING_SCHEMA_VERSION):
+        if source_version != BINDING_SCHEMA_VERSION:
             raise AppProjectError(
                 "APP-BINDING-VERSION",
-                f"不支持的应用绑定版本：{source_version}",
+                f"只支持 schema v{BINDING_SCHEMA_VERSION} 的应用绑定，当前为 v{source_version}。",
+            )
+        legacy_fields = {"site_name", "site_id", "created_by"}.intersection(payload)
+        if legacy_fields:
+            legacy_names = ", ".join(sorted(legacy_fields))
+            raise AppProjectError(
+                "APP-BINDING-INVALID",
+                f"应用绑定包含旧字段：{legacy_names}。",
             )
         try:
-            app_id = payload.get("app_id") or payload.get("site_id")
-            app_name = _optional_text(
-                payload.get("app_name") or payload.get("site_name")
-            )
+            app_id = validate_app_id(payload.get("app_id"))
+            app_name = _optional_text(payload.get("app_name"))
             slug = _optional_text(payload.get("slug"))
-            repo_url = _optional_text(payload.get("repo_url"))
-            if app_name is None or slug is None or repo_url is None:
+            repo_url = validate_repo_url(payload.get("repo_url"))
+            apphub_url = _optional_text(payload.get("apphub_url"))
+            if app_name is None or slug is None or apphub_url is None:
                 raise ValueError("missing required binding fields")
             binding = cls(
                 schema_version=source_version,
-                app_id=str(app_id),
+                app_id=app_id,
                 app_name=app_name,
                 slug=slug,
                 repo_url=repo_url,
-                default_branch=str(payload.get("default_branch") or GIT_DEFAULT_BRANCH),
+                default_branch=validate_default_branch(payload.get("default_branch")),
                 git_username=_optional_text(payload.get("git_username")),
                 owner_user_id=_optional_text(payload.get("owner_user_id")),
-                owner_email=_optional_text(
-                    payload.get("owner_email") or payload.get("created_by")
-                ),
+                owner_email=_optional_text(payload.get("owner_email")),
                 created_at=_optional_text(payload.get("created_at")),
+                apphub_url=apphub_url,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise AppProjectError(
                 "APP-BINDING-INVALID",
                 "应用绑定文件字段不完整或格式错误。",
             ) from exc
-        if not binding.app_id or binding.app_id == "None":
-            raise AppProjectError("APP-BINDING-INVALID", "应用绑定缺少 app_id/site_id。")
         if not _SLUG_VALID_RE.fullmatch(binding.slug):
             raise AppProjectError("APP-BINDING-INVALID", "应用绑定 slug 格式错误。")
         return binding

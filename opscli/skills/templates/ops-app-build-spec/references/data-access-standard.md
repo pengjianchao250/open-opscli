@@ -23,7 +23,7 @@
 - 前端直连、浏览器密钥、用户身份自报、CLI 子进程或 MCP 运行时依赖。
 - 现有 FastAPI client/service/repository/schema/API 和 SQLite 迁移。
 - 项目是否实际提供经过批准的 OPS 应用运行时适配器。
-- SellerSprite 是否使用正式异步 REST，是否保存 pending `job_id`，是否把任务状态和用户加工结果混入共享快照。
+- SellerSprite 是否使用正式异步 REST，是否按当前 `owner_user_id` 保存并复用 pending `job_id`，是否存在跨用户任务或结果复用。
 
 不读取或输出真实凭证、Cookie、完整鉴权头和业务数据文件。
 
@@ -37,6 +37,8 @@
 → 传递项目根目录、页面需求和已确认范围
 → ops-app-data-builder 验证合同并生成数据层
 ```
+
+页面、API 或数据库需要持续取数时，由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步。缺少批准的系统运行时适配器时，固定同步必须标记为 `blocked`，不得复用访问者身份建立共享数据。
 
 `ops-app-build-spec` 不选择或猜测数据集、字段、聚合、筛选、第三方场景或运行时方法签名，也不复制数据 Skill 的规则。
 
@@ -56,15 +58,29 @@
 - 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - 前端不得持有 API Key、JWT、Cookie 或完整鉴权头。
 - 跨来源组合和二次加工在 service 完成。
-- SQLite 分开保存第三方共享原始数据、SellerSprite 异步任务和带 `owner_user_id` 的用户私有结果。
+- SQLite 分开保存第三方原始数据、SellerSprite 异步任务和用户加工结果，三类记录都按可信 `owner_user_id` 隔离。
 - 网络调用不得放在 SQLite 写事务内。
+
+### 第三方身份转发
+
+Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `get_query_credentials()` 返回的 `QueryCredentials`：
+
+| 模式 | 向第三方数据服务发送的 Header |
+| --- | --- |
+| `viewer` | `X-Ops-Token`、可信的 `X-User-Email`、`X-User-Id`、`X-User-Name` |
+| `session` | `X-Session-Id`、已有的可选 `Authorization: Bearer <ops-jwt>` |
+| `local` | 通过 `AuthClient.build_session_headers("ops")` 和 `AuthClient.build_request_auth("ops")` 提取的 `X-Session-Id` 与可选 Bearer JWT |
+
+- Client 只从已校验的 `QueryCredentials` 重建允许的 Header，不盲目透传浏览器 Header。
+- local 只在站点后端存在，远端不接收 local 标识、Cookie 或其他本机凭证。
+- 身份不完整时快速失败，不允许在 `viewer/session/local` 间回退，也不使用共享 Secret 兜底。
 
 ## 5. 数据源基线
 
 ### OPS
 
 - 开发期通过 `ops-dataset-query` 或 `ops-query-wizard` 验证真实合同。
-- 运行期复用当前项目实际提供的 OPS 应用运行时适配器和 `x-ops-token` 受信通道。
+- 运行期复用模板 `get_query_credentials()` 和 `get_query_gateway()`；身份优先级固定为 `viewer > session > local > 401`。
 - 默认按访问者实时取数（`viewer-live`），不把未隔离结果写入共享 SQLite。
 - 找不到真实适配器时阻止生成正式调用，不猜导入路径。
 
@@ -72,16 +88,16 @@
 
 - 开发期通过 `ops-keepa` 验证场景和样本。
 - 页面运行期由站点后端调用正式 `POST /api/v1/keepa/run`；场景列表只用于开发期合同验证。
-- 后端 Secret 使用 `OPSCLI_API_BASE_URL` 和 `OPSCLI_API_KEY`；不得进入 `VITE_*`。
-- 同时检查 HTTP 状态和响应 `success`；失败不清空最后有效共享快照。
-- 多用户同步并发查询可以分别执行，成功 JSON 结果通过 `provider + request_hash` `UPSERT` 为一条共享快照。
+- 后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产显式注入 `https://ops.mcp.xenkee.com`，预发布显式注入 `https://ops.api.qa.aukeyit.com`，不得设置环境默认值或读取共享 API Key。
+- 同时检查 HTTP 状态和响应 `success`；失败不清空当前用户最后有效快照。
+- 成功 JSON 结果通过 `owner_user_id + provider + request_hash` `UPSERT` 为当前用户私有快照。
 
 ### SellerSprite
 
 - 开发期通过 `ops-seller-sprite` 验证合同。
-- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端 Secret 与 Keepa 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`。
-- 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务复用原 `job_id`，不得重复提交。
-- 只有成功 JSON 结果进入第三方共享快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
+- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端配置与 Keepa 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`。
+- 按当前 `owner_user_id` 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务只复用该用户原 `job_id`，不得跨用户复用或重复提交。
+- 只有成功 JSON 结果进入当前用户私有快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
 - 用户查询历史、输入、收藏、备注和二次加工结果写入带 `owner_user_id` 的用户私有表。
 - 不调用 quota 接口参与站点业务流程，不处理额度检查、扣减、归属或账号调度。
 
@@ -93,7 +109,7 @@
 - `docs/ops-app/project-spec.md`：数据层摘要和前后端边界。
 - `docs/ops-app/migration-plan.md`：接口、加工和存储映射。
 - `docs/ops-app/development.md`：Mock、联调和安全环境变量。
-- `docs/ops-app/deployment.md`：第三方 Secret、SQLite 持久化和运行时前置条件。
+- `docs/ops-app/deployment.md`：生产/预发布第三方 Base URL、SQLite 持久化和运行时前置条件。
 
 第一阶段不增加运行时数据 YAML。
 
@@ -104,10 +120,10 @@
 - OPS 身份不来自请求体，viewer 数据未写入未隔离共享库。
 - Mock、测试替身和本地回退不得被描述成线上真实接入。
 - OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
-- Keepa 只使用正式同步 REST 和后端 Secret，HTTP 200 业务失败不会覆盖有效快照。
-- SellerSprite 使用正式异步 REST，pending `job_id` 被复用，终态和 HTTP 202 映射正确。
-- 第三方 JSON 原始数据、异步任务和用户私有加工结果分表；XLS/XLSX 和临时下载 URL 不进入 SQLite。
-- 只使用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，没有 `OPSCLI_SELLER_SPRITE_E2E_*` 别名。
+- Keepa 只使用正式同步 REST 和当前请求身份，HTTP 200 业务失败不会覆盖当前用户有效快照。
+- SellerSprite 使用正式异步 REST，pending `job_id` 按 `owner_user_id` 复用，终态和 HTTP 202 映射正确。
+- 第三方 JSON 原始数据、异步任务和用户加工结果分表且都按 `owner_user_id` 隔离；XLS/XLSX 和临时下载 URL 不进入 SQLite。
+- 只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产/预发布显式注入；不兼容旧变量别名、共享 API Key 或模式回退。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。

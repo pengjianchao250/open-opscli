@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 from urllib.parse import quote
 
@@ -9,6 +11,7 @@ import httpx
 
 from opscli.app.domain.constants import APPHUB_API_PREFIX
 from opscli.app.domain.exceptions import AppHubHttpError
+from opscli.app.domain.models import validate_app_id
 from opscli.auth import AuthClient
 from opscli.auth.config import get_apphub_url
 from opscli.config import __version__
@@ -34,17 +37,44 @@ class AppHubClient:
         if self._owns_client:
             self.http.close()
 
+    def creation_scope(self) -> str:
+        """以控制面地址和已登录主体隔离本地创建重试，不保存个人信息。"""
+        if self.auth_client is None:
+            self.auth_client = AuthClient()
+        profile = self.auth_client.get_me()
+        data = profile.get("data", profile)
+        owner = data.get("id") if isinstance(data, dict) else None
+        if isinstance(owner, bool) or not isinstance(owner, (str, int)) or not str(owner).strip():
+            raise AppHubHttpError("APPHUB-PROTOCOL", "当前用户响应缺少稳定用户 ID。")
+        scope = json.dumps([self.api_base_url, str(owner)], separators=(",", ":"))
+        return hashlib.sha256(scope.encode("utf-8")).hexdigest()
+
     def create_app(self, request_payload: dict[str, Any]) -> dict[str, Any]:
+        """创建应用；重入幂等由 AppHub 按 owner 和 slug 保证。"""
         return self._request_json("POST", "/apps", json=request_payload)
 
-    def get_app(self, slug: str) -> dict[str, Any]:
-        return self._request_json("GET", f"/apps/{_segment(slug)}")
+    def get_app(self, app_id: str) -> dict[str, Any]:
+        """按大小写敏感的公开 ID 获取唯一应用。"""
+        return self._request_json("GET", f"/apps/{_segment(validate_app_id(app_id))}")
 
     def list_accessible_apps(self) -> dict[str, Any]:
         return self._request_json("GET", "/accessible-apps")
 
-    def get_git_config(self, slug: str) -> dict[str, Any]:
-        return self._request_json("GET", f"/apps/{_segment(slug)}/git-config")
+    def get_git_config(self, app_id: str) -> dict[str, Any]:
+        """按公开 ID 获取平台保存的仓库绑定，不从 slug 拼接仓库。"""
+        return self._request_json("GET", f"/apps/{_segment(validate_app_id(app_id))}/git-config")
+
+    def preflight_git_bind(self, app_id: str) -> dict[str, Any]:
+        """首次绑定目标 origin 前确认平台仓库为空。"""
+        payload = self._request_json(
+            "GET", f"/apps/{_segment(validate_app_id(app_id))}/git-bind-preflight"
+        )
+        if payload.get("repository_empty") is not True:
+            raise AppHubHttpError(
+                "APPHUB-PROTOCOL",
+                "AppHub 返回的 Git 仓库预检结果不合法。",
+            )
+        return payload
 
     def issue_git_credential(self, *, rotate: bool) -> dict[str, Any]:
         return self._request_json("POST", "/git/credentials", json={"rotate": rotate})
@@ -55,7 +85,7 @@ class AppHubClient:
             request = self.http.build_request(
                 method,
                 self._url(path),
-                headers=self._headers(has_json="json" in kwargs),
+                headers={**self._headers(has_json="json" in kwargs), **kwargs.pop("headers", {})},
                 **kwargs,
             )
             request.headers.pop("Cookie", None)
