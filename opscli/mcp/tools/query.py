@@ -777,7 +777,9 @@ async def query_plan(
     Args:
         request:          用户查询原文（自然语言）。
         requested_fields: 可选，用户点名字段列表（可传 JSON 字符串）。
-        top_n:            可选，选表候选上限。
+        top_n:            可选，选表时返回的数据集候选数上限，**不是结果行数**。
+                          「前10名」「top5」这类行数诉求直接写在 request 原文里，由规划器
+                          解析进模板的 limit/orderBy；不要用本参数表达行数。
         session_id:       可选，OAuth 授权后的 Session ID（为空则自动加载）。
         jwt:              可选，已有 JWT（为空则自动加载）。
     """
@@ -862,6 +864,10 @@ async def query_flow(
 
     【反馈边界】仅在本工具意外失败时提交一次 feedback_submit；0 行、需要澄清、
     认证未就绪和用户取消都不是反馈事件，成功查询不自动提交反馈。
+
+    【参数边界】本工具没有 top_n 参数，误传会直接参数校验失败（实测 Agent 把 query_plan 的
+    top_n 当成"前N名"传进来）。「前N名」写在 request 原文里由规划器解析；确需显式指定
+    返回行数时用 limit。
 
     Args:
         request:          用户查询原文（自然语言）。
