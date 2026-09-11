@@ -40,7 +40,42 @@ def _build(filters):
 )
 def test_symbol_operators_are_normalized(symbol: str, expected: str):
     """八种符号写法都要归一为服务端语义操作符。"""
-    assert _build([{"field": "date_id", "operator": symbol, "value": "x"}])[0]["operator"] == expected
+    # 用数值作值：字符串单值 ne 还会继续改写为单元素 not_in，由下方专门的用例覆盖
+    assert _build([{"field": "date_id", "operator": symbol, "value": 1}])[0]["operator"] == expected
+
+
+@pytest.mark.parametrize("symbol", ["!=", "<>", "neq", "notEquals", "ne"])
+def test_string_single_exclusion_is_sent_as_single_element_not_in(symbol: str):
+    """字符串单值排除必须以单元素 not_in 下发。
+
+    事故形态：「近7天各平台的销售额，剔除亚马逊VC」规划出 platform_name != Amazon VC，
+    simple 接口却只返回 Amazon VC 一行。实测该接口的 ne 在平台、销售小组、大组、
+    渠道、品牌、品类、SPU 上都会反转，单元素 not_in 在同批字段上全部正确。
+    """
+    filters = _build([{"field": "platform_name", "operator": symbol, "value": "Amazon VC"}])
+    assert filters == [{"field": "platform_name", "operator": "not_in", "value": ["Amazon VC"]}]
+
+
+def test_numeric_single_exclusion_keeps_ne():
+    """数值单值排除保持 ne：服务端把数值字面量 not_in [0] 判成 0 行，而数值 ne 正确。"""
+    filters = _build([{"field": "order_qty", "operator": "!=", "value": 0}])
+    assert filters == [{"field": "order_qty", "operator": "ne", "value": 0}]
+
+
+def test_nested_string_exclusion_is_rewritten_once():
+    """嵌套条件里的字符串排除同样改写，重复归一不会把列表再包一层。
+
+    build_simple 在 validate_fields=True 时会先后两次调用归一，必须幂等。
+    """
+    manager = _manager()
+    filters = [{"operator": "AND", "conditions": [
+        {"field": "team_name", "operator": "!=", "value": "一部-B组"},
+    ]}]
+    manager._validate_simple_filter_operators(filters)
+    manager._validate_simple_filter_operators(filters)
+    assert filters[0]["conditions"][0] == {
+        "field": "team_name", "operator": "not_in", "value": ["一部-B组"],
+    }
 
 
 def test_semantic_operators_pass_through():

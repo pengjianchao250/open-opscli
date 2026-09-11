@@ -702,7 +702,11 @@ def test_run_query_template_drops_null_keys():
 
 
 def test_run_query_template_normalizes_single_exclusion_for_backend():
-    """规划合同保留 != 语义，执行边界必须发后端支持的 ne 且不污染合同。"""
+    """规划合同保留 != 语义，执行边界把字符串单值排除改发单元素 not_in 且不污染合同。
+
+    simple 接口的 ne 在平台等字段上会反转成只返回被排除的值，
+    单元素 not_in 是实测正确的等价写法。
+    """
     captured: dict = {}
 
     def _fake_post(payload):
@@ -723,8 +727,12 @@ def test_run_query_template_normalizes_single_exclusion_for_backend():
 
     qm.run_query_template(ref)
 
-    assert captured["payload"]["filters"][0]["operator"] == "ne"
-    assert ref["query_template"]["filters"][0]["operator"] == "!="
+    assert captured["payload"]["filters"][0] == {
+        "field": "dept_name", "operator": "not_in", "value": ["范泰克-体系外"],
+    }
+    assert ref["query_template"]["filters"][0] == {
+        "field": "dept_name", "operator": "!=", "value": "范泰克-体系外",
+    }
 
 
 def test_extract_enum_values_dedup():
