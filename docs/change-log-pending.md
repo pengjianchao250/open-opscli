@@ -10319,3 +10319,14 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：Agent 对西柚请求的工具选择和内置 Skill 发版范围；不修改 xydc Provider、旧网页通道或正式 OpenAPI 行为。
 **回滚方式**：回退 `ops-xiyou` Skill、版本文件、模板发版清单、对应测试和本条记录。
 ---
+## 2026-09-11 Keepa - MCP API 额度等待与稳定错误码
+
+**变更原因**：Keepa 额度不足时，`wait=true` 只等待一次 refill 后就继续请求，等待后额度仍不足会把失败转成泛化错误，站点难以判断是否应稍后重试。
+
+**改动点**：等待 refill 后重新执行额度预检查；非 `force` 请求在额度仍不足时返回 `KEEPA_QUOTA_INSUFFICIENT`、额度快照字段和 `retry_after_seconds`，不再发起 Keepa 业务请求；Keepa REST API 对额度不足和限流返回 HTTP 429，并设置 `Retry-After`；Keepa 上游 401/403/429 及额度类响应映射为稳定错误码。
+
+**验证结果**：Keepa 管理器与 REST API 回归 `40 passed`；Keepa/MCP 相关回归 `144 passed`；目标模块 `compileall` 通过。
+
+**影响范围**：仅影响 `opscli/keepa` 与 `/api/v1/keepa/run` 的错误响应；成功请求、`force=true` 行为和其他 Keepa 场景参数保持不变。
+
+**回滚方式**：恢复 Keepa 异常映射、额度二次预检查、Keepa REST 状态映射及对应测试和本条记录。
