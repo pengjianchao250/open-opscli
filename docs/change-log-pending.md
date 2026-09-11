@@ -10282,3 +10282,21 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除 `sites/seller-sprite-lens-prototype`，从 `opscli/api/cors.py` 移除 `4174`，删除对应 CORS 测试并移除本条变更记录。
 
 ---
+
+## 2026-09-09 西柚 MCP - 接入多账号试用通道
+
+**变更原因**：西柚 OpenAPI VIP 尚未开通，需要先通过固定远端 MCP 验证数据能力，并在单个试用账号周额度明确耗尽时自动切换备用账号。
+**改动点**：扩展 API Credential Provider 白名单，新增固定 Bearer 认证的 xydc MCP Provider、首批四个测试中 MCP Tool、共享西柚日限额迁移、契约测试和接入设计说明；现有西柚网页爬虫与鹰眼 PND 路径保持不变。
+**验证结果**：xydc Provider、API Credential、Tool 注册和 quota 定向回归 `61 passed`；排除仓库既有 Shopify 收集错误后的 MCP 全量回归 `501 passed`；目标模块 `compileall` 与 `git diff --check` 通过。两枚本地 Bearer Token 分别真实调用 `get_asin_info`，均返回 `status=200`、`cost_credits=1`；首次冒烟发现并修复整数状态码误判，诊断和复验本轮共消耗 5 Credits。更大范围旧西柚网页测试有 6 个预存失败，与本次新增 Provider 无关。
+**影响范围**：新增 `ext_xydc_*` 测试工具及 `xydc_mcp`/`xydc_openapi` 凭据类型；不启用旧 `xiyou_run`，不修改正式 OpenAPI 和网页通道行为。
+**回滚方式**：回退 xydc Provider、MCP Tool 注册、凭据白名单、限额迁移、测试、设计文档及本条记录。
+---
+
+## 2026-09-10 ops-xiyou Skill - 增加 xydc MCP 测试通道路由
+
+**变更原因**：原 `ops-xiyou` Skill 默认引用未注册到通用 MCP 的旧 `xiyou_*` Tool，无法正确引导 Agent 使用已接入的四个 `ext_xydc_*` 测试工具，也缺少 Credit 消耗、多账号切换和重试边界说明。
+**改动点**：将 xydc MCP 试用通道设为显式西柚请求的首选路径，补充四个 Tool 的意图和参数合同、Credit 与失败处理、结果来源字段及旧网页 CLI 补充路径；Skill 版本升至 `v1.1.0`，并在 source、wheel、binary、binary_full 产物中以 `experimental` 级别发布；新增 Skill 身份、路由、发布和安装契约测试。
+**验证结果**：Skill Creator `quick_validate.py` 在 Python UTF-8 模式下通过；`test_packaging.py` 与 `test_ops_xiyou_skill.py` 共 14 项通过；xydc Tool/Provider 定向回归 14 项通过；目标 Python 文件 `compileall` 通过；`git diff --check` 通过。校验器首次受 Windows 默认 GBK 读取 UTF-8 中文影响，改用 `python -X utf8` 后正常通过；一次并行 pytest 启动触发本地捕获器关闭异常，串行禁用捕获复验通过。
+**影响范围**：Agent 对西柚请求的工具选择和内置 Skill 发版范围；不修改 xydc Provider、旧网页通道或正式 OpenAPI 行为。
+**回滚方式**：回退 `ops-xiyou` Skill、版本文件、模板发版清单、对应测试和本条记录。
+---

@@ -336,12 +336,12 @@
       "reason": "新增 Skill，尚未进入公开发版产物"
     },
     "ops-xiyou": {
-      "source": false,
-      "wheel": false,
-      "binary": false,
-      "binary_full": false,
-      "tier": "internal",
-      "reason": "新增 Skill，尚未进入公开发版产物"
+      "source": true,
+      "wheel": true,
+      "binary": true,
+      "binary_full": true,
+      "tier": "experimental",
+      "reason": "覆盖 xydc MCP 试用通道，旧西柚网页通道保留为补充"
     }
   }
 }
