@@ -9576,3 +9576,335 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：回滚本条涉及的 `CLAUDE.md`、`query_plan.py`、ops-dataset-query 模板文档/版本和新增回归测试。
 ---
+
+## 2026-09-09 query 规划器 - 领导视角全量审计修复（10 项缺陷）
+
+**变更原因**：以领导汇报视角对 78 个授权数据集做自然语言组合规划审计（414 条用例），暴露 10 处会产出「看起来正常、实际口径错误」结果的缺陷，其中多数静默无提示。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - `_GROUP_DIMENSION_RE` 移除 `各大` 前缀，改为在比对时同时试「大X」与「X」；修复「各大组」被切成「组」而误判 `dimension_not_in_dataset`（24 个含大组维度的数据集受影响）。
+  - `_selected_fields` 的维度/指标互吞增加 `_is_swallowed` 区间守卫；修复「各平台的平台库存」静默丢掉平台分组。
+  - 新增 `_unmatched_measure_terms` 与对应门禁；修复「各X的Y」中 Y 不在数据集时静默下发零指标模板。
+  - 新增 `_platform_scope.polarity_conflict_slots` 与 `ask_user_for_platform_filter_polarity`；平台同值正负冲突改为 `component_filter_polarity_conflict` 澄清，不再给出与事实相反的阻断文案。
+  - 新增 `excluded_enum_resolution` 与模板 `!=`/`not_in` 下发；修复纯排除平台请求被整体阻断。
+  - `_value_already_consumed` 增加 `match_kind`，精确整值命中不再被更短的预留词撤下；新增 `_drop_cross_field_swallowed_filters` 与 `_platform_literals_consumed`。修复「排除一部-B组」被拆成排除整个一部 + 整个 B 组，以及平台词被同名销售小组二次消费。
+- `opscli/query/services/planner/dataset_guidance.py`
+  - 新增 `_base_name_only_field_names`，精确完整标签命中时压制其他字段的去括号基名匹配与全局别名映射；修复「销售额」同时选中「销售额(原币)」导致 TopN 排序被丢弃。
+  - 新增 `_ordered_date_fields`，主日期锚点优先 `date_id`；修复 20/78 数据集把「近7天」锚到试算时间/创建时间等流程时间戳。
+- `opscli/query/services/planner/time_scope.py`：新增相对年季度解析，修复「今年第一季度／今年Q1／去年第四季度／第2季度」被解析成年初至今。
+- `opscli/query/services/planner/agent_query_planner.py`：新增 `_permission_enum_component_candidates`，权限枚举意图直接选组件表；修复「列出当前可见的部门」落到业务表后被后端以「必须指定时间范围」100% 拒绝。
+- `opscli/query/services/planner/resources/query_plan.schema.json`：补 `excluded_platform_values`。
+- 新增 `scripts/qa_planner_leadership_audit.py`：领导视角全量审计脚本（数据集矩阵 + 语义矩阵 + 回归位）。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed（修复前后一致，无回归）。
+- `scripts/qa_planner_leadership_audit.py`：修复前 392 例 13 失败；修复后 414 例 414 通过（含 21 条本轮缺陷回归位）。
+- 枚举链路端到端实测：部门 25 个值、销售小组 680 个值正常返回（修复前固定报错 0 行）。
+
+**影响范围**：全部自然语言规划路径的时间锚点、季度解析、指标选择、维度保留、组件筛选极性与权限枚举选表。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/` 并删除 `scripts/qa_planner_leadership_audit.py`。
+---
+
+## 2026-09-09 query 规划器 - 暴力/交叉/对抗测试修复（第二批 13 项缺陷）
+
+**变更原因**：在领导视角矩阵全绿后，以测试工程师视角追加不变量暴力、蜕变、差分、对抗与边界四类测试（1201 条），暴露出第一轮矩阵覆盖不到的 13 处缺陷，其中 1 处为 P0（品牌枚举「/」污染导致查询恒 0 行）。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - `_MEANINGFUL_ENUM_RE`：反查跳过纯标点枚举值，修复品牌值「/」命中任何含斜杠表述并注入 `brand_name='/'`（后端接受，返回 0 行）。
+  - `_selected_field_labels_consumed`：预留本次已选字段标签占用的文本，修复「各美国或非美的关税」被抠出 `country_name=美国`。
+  - `_effective_negated_spans` + `_guidance_field_labels`：否定区间起点落在字段标签内部时不生效，修复「周转天数(不含在途)和总周转天数」丢掉后一个指标、「各美国或非美的X」丢掉全部指标。
+  - `_is_swallowed_by_union`：短维度标签被多个长标签区间并集覆盖时剔除，修复「各销售小组…的销售额」多出未点名的「销售」维度。
+  - 免系词复合值前瞻增加助词/连词排除，修复「各公司SKU的管理费用-网络费」把指标名当 SKU 值。
+  - `_component_label_is_shadowed` 改按并集判定并接收已选字段标签，修复「销售小组一部-B组」被「销售」抢匹配、「各父公司SKU」吞掉前文。
+  - `_candidate_overlaps_consumed_span`：候选与已消费文本区间相交即撤下，修复「各品牌的物流部承担金额」把指标名读成部门值。
+  - `_mask_grouping_label_mentions`：值抽取前等长遮蔽「各X／按X／group by X」中的标签，修复「各事业部每天的…」「各产品名称和各销售小组的…」被误判为筛选值。
+- `opscli/query/services/planner/time_scope.py`
+  - `parse()` 入口 NFKC 归一，修复全角数字「近７天」退回默认近 30 天。
+  - `_SINGLE_DATE_RE` 并前置于自然月分支，修复「2026年8月15日」被解析成整个 8 月。
+- 新增 `scripts/qa_planner_stress_audit.py`：不变量暴力 + 蜕变 + 差分 + 对抗 + 边界矩阵。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed（每次改动后复跑，无回归）。
+- `scripts/qa_planner_stress_audit.py`：1201 条，三个不同随机种子各跑一轮，不变量违例 0、蜕变/差分关系违例 0。
+- `scripts/qa_planner_leadership_audit.py`：439 条全通过（含 49 条缺陷回归位）。
+- 报告：`docs/analysis/规划器全量测试报告-20260909.md`、`docs/analysis/规划器缺陷分析与修复报告-20260909.md`。
+
+**影响范围**：组件筛选值抽取、字段标签遮蔽与吞并判定、否定语境判定、时间解析入口。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/` 并删除两个 QA 脚本与两份报告。
+---
+
+## 2026-09-09 query 规划器 - 收尾修复（第三批 3 项缺陷）
+
+**变更原因**：第二批修复后追加随机种子复跑，从剩余澄清消息里再定位到 3 处误报澄清，均为合法请求被拒。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - `_unmatched_group_dimension_terms`：增加未截断前缀比对与单字标签等值命中。修复维度标签自身含「的」（`目的国`/`目的国家`/`最终目的仓`）被停用词从标签内部切成「目」，以及单字标签（花名册的`岗`）被两侧长度门槛漏掉，两者都会误报 `dimension_not_in_dataset`。
+  - `_resolve_component_filters`：在组件解析前按本数据集字段标签整体遮蔽分组表述。修复「各开发小组」中的短别名「小组」成为后置列表抽取锚点，把「上季度各品类、各开发」读成销售小组多值列表。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed。
+- `pytest tests/skills/ -q`：8 failed / 250 passed；`pytest tests/mcp/ -q --ignore=tests/mcp/test_shopify_tools.py`：2 failed / 475 passed。均与修复前基线一致，无新增失败。
+- `scripts/qa_planner_leadership_audit.py`：444 条全通过（含 51 条缺陷回归位）。
+- `scripts/qa_planner_stress_audit.py`：多随机种子复跑，不变量与关系违例均为 0。
+
+**影响范围**：分组维度门禁的分词判定、组件筛选值抽取的标签锚点。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py`。
+---
+
+## 2026-09-09 query 规划器 - 初级业务视角全字段矩阵修复（第四批 10 项缺陷）
+
+**变更原因**：以初级业务用户视角追加全字段覆盖矩阵（78 个数据集 × 3312 个字段，逐字段点名 + 组合形态）、业务术语矩阵、口语时间矩阵与口吻蜕变矩阵，暴露出前三批矩阵覆盖不到的 10 处缺陷。多数为静默丢弃用户诉求。
+
+**改动点**：
+- `opscli/query/services/planner/field_semantics.py`
+  - 新增 `COLLOQUIAL_METRIC_PATTERNS` 与 `colloquial_metric_fields()`：按句式识别「卖了多少钱／卖了多少个／有多少单」等口语量化问法。修复此类请求以 planned 下发零指标模板，查询成功却只返回一列维度名。
+  - `FIELD_QUERY_TERMS` 扩充为业务习惯叫法：销量增 `销售量/销售件数/出单量/成交量`，销售额增 `营业额/成交额/GMV`，广告费增 `广告支出/广告成本/投放费用`，采购成本增 `进货成本`。刻意不收录 `流水`、`利润额`、`推广费` 等口径不唯一的说法，保持澄清。
+  - `_BROAD_SALES_METRIC_RE` 增「卖得最好／最多／最差／最少」：归入宽泛销售意图后带齐三项核心销售指标并触发"排序指标未唯一确定"强制披露，取代原先的零指标清单。
+  - `requested_canonical_fields` 的派生指标分支增加 protected 校验：数据集自带 `毛利率`、`SP广告占比` 等完整口径字段时不再拆成分子分母，修复这类字段被判「当前数据集没有请求的指标」。
+- `opscli/query/services/planner/dataset_guidance.py`：销售人员维度改为「原文未点名人员维度即不参选」，修复「各平台的销售量」把 `team_username` 当维度选入且一个指标都不剩。
+- `opscli/query/services/planner/query_plan.py`
+  - `_INTERROGATIVE_VALUES` 与 `_is_interrogative_value`：疑问代词不得当筛选值。
+  - `_query_without_component_filter_labels` 系词后跟疑问代词时不遮蔽字段标签，修复「销售额排前5的平台是哪些」丢掉平台分组、退化成一行合计。
+  - `_LIMIT_RE` 增「哪N个」形态，修复「哪5个平台销售额最高」排序照常下发而行数丢失。
+  - `_unmatched_group_dimension_terms` 增分组词后整段原文的标签前缀比对，修复标签含斜杠/括号（`新/老品(物控编码)`）被截断成单字后误判维度不存在。
+- `opscli/query/services/planner/time_scope.py`
+  - 新增「前天／大前天」单日分支（须先于「昨天」判定）。
+  - `_COMPARE_PREV_RE` 增「上个周期／跟上／和上」，修复「跟上个周期比怎么样」不下发 dataComparison。
+- 新增 `scripts/qa_planner_field_coverage.py`：全字段覆盖 + 字段组合形态 + 业务术语 + 口语时间 + 初级口吻蜕变 + 模糊输入六个矩阵。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed，无回归。
+- 全字段矩阵：3312/3312 通过（修复前 6 例失败）。
+- 业务术语 + 口语时间 + 初级口吻 + 模糊输入：110 条全通过（修复前 8 处缺陷）。
+- 领导视角矩阵：461 条全通过（含 68 条缺陷回归位）。
+- 暴力/蜕变/差分/对抗矩阵：925 条，不变量与关系违例 0；业务请求被误澄清的条数由每千条约 26 条降至约 8 条。
+
+**影响范围**：口语指标识别、业务术语别名、销售人员维度判定、疑问代词处理、行数解析、分组维度门禁、单日与环比时间解析。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/` 并删除 `scripts/qa_planner_field_coverage.py`。
+---
+
+## 2026-09-09 query 规划器 - 初级业务视角收尾（第五批 2 项）
+
+**变更原因**：全字段矩阵复跑后，从剩余澄清里再定位到 2 处过度澄清，均为合法请求被拒。
+
+**改动点**：
+- `opscli/query/services/planner/agent_query_planner.py`：新增 `_enumeration_question`，用户已显式写出组件数据集名时，「…有哪些／列出…」即可作为枚举意图放行，不再要求补「可选/可用」；业务指标否决门禁仍优先生效。
+- `opscli/query/services/planner/query_plan.py`：`_requested_metric_terms` 纳入口语量化词，修复「各平台的卖了多少钱」指标已正确选中却被点名度量门禁误报澄清。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed。
+- 领导视角矩阵：461 条全通过（含 74 条缺陷回归位）。
+- 暴力/蜕变/差分/对抗矩阵：787 条，违例 0。
+- 全字段矩阵：6486 条（78/78 数据集、3312/3312 字段全覆盖）全通过。
+
+**影响范围**：组件数据集的枚举意图判定、点名度量门禁的词表。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/agent_query_planner.py opscli/query/services/planner/query_plan.py`。
+---
+
+## 2026-09-09 query 规划器 - 特性交叉兼容复测修复（第六批 3 项缺陷）
+
+**变更原因**：前五批修复涉及十余条互相重叠的代码路径，单独验证不足以证明它们能同时成立。新增特性交叉矩阵：把每条修复抽象成可组合的语言片段，按两两 / 三重 / 四重叠加成请求，要求所有片段的预期同时出现在同一份合同里。首轮 1783 条暴露 3 处真实缺陷（另 8 处为断言自身问题，已修正断言）。
+
+**改动点**：
+- `opscli/query/services/planner/time_scope.py`
+  - 新增 `mask_comparison_clause()` 并在主周期解析前遮蔽对比子句。修复「近7天各平台的销售额，同比去年同期」中的「去年」命中自然年分支，主周期整个变成去年全年、对比期变成前年全年——用户要的近 7 天一天都没查到，且状态为 planned 无任何提示。该缺陷影响全部带「同比去年同期」的请求。
+- `opscli/query/services/planner/query_plan.py`
+  - 新增 `_ORDER_SUFFIX_RE` 与 `_match_ordered_field_by_suffix()`：支持「X最高/最多/最少的前N个」这种不带「按」的排序说法。修复多指标共存时该说法既不排序也不限行，Top N 静默失效。
+  - `_MEASURE_AFTER_GROUP_RE` 的 X 段禁止跨标点，并新增 `_ROW_COUNT_MEASURE_RE` 排除纯行数表述。修复「各平台卖了多少钱，取最高的前5个」把后半句的「前5个」当成被点名指标，明明指标已选中却报「当前数据集没有请求的指标」。
+  - `execution_ref.excluded_platform_values` 改为无条件投影。修复存在正向平台范围时被排除的平台词未登记归属，「亚马逊SC…排除TikTok和Temu」多出一条 `team_name != Tiktok`（当前账号确有同名销售小组）。
+- `opscli/query/services/planner/resources/query_plan.schema.json`：同步 `excluded_platform_values` 描述。
+- 新增 `scripts/qa_planner_interaction_audit.py`：38 个特性片段的两两 / 三重 / 四重交叉矩阵 + 21 条高风险冲突专项用例。
+
+**验证结果**：
+- `pytest tests/query/ -q`：745 passed，无回归。
+- 特性交叉矩阵：两两 493 条全通过；冲突专项 21 条全通过。
+- 领导视角矩阵：475 条全通过（含 82 条缺陷回归位）。
+- 业务术语 / 口语时间 / 初级口吻 / 模糊输入：110 条全通过。
+
+**影响范围**：同比请求的主周期解析、Top N 排序字段解析、点名度量门禁的取词窗口、平台排除值的文本归属。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/` 并删除 `scripts/qa_planner_interaction_audit.py`。
+---
+
+## 2026-09-10 query 规划器 - 交叉复测收尾（第七批 2 项缺陷）
+
+**变更原因**：交叉矩阵在并发跑批时暴露一类降级风险——组件枚举偶发返回空（调用未抛异常，既有阻断路径不触发）时，复合筛选值「一部-B组」没有更长的值来抑制片段，模板静默变成 dept_name=一部 AND large_team_name=B组，范围放大几十倍且合同仍是 planned、措辞笃定。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - `_auto_enum_component_values` 内部重试一次，收窄代理/组件服务抖动窗口。
+  - 新增 `_clarify_hyphen_split_filters`：两个组件筛选值在原文里被一个连字符直接连成一段时转澄清并撤下模板。用户不会用连字符连接两个独立筛选，因此该形态一定是复合值被拆开，fail-closed 优于放行语义已变的模板。
+- 新增 `tests/query/planner/test_hyphen_split_filter_guard.py`：三条用例分别覆盖枚举正常、枚举返回空、以及用「和」并列的两个独立筛选。
+
+**验证结果**：
+- `pytest tests/query/ -q`：748 passed（新增 3 条）。
+- 特性交叉矩阵：1802 条，仅 1 条因枚举抖动进入澄清，即本次新增守卫的预期行为（修复前为静默下发错误筛选）。
+- 领导视角矩阵 475 条、全字段矩阵 6486 条、暴力矩阵 787 条、术语与口语矩阵 110 条：全部通过。
+- `tests/skills/` 8 失败、`tests/mcp/` 2 失败与 1 个模块导入错误均为既有基线，计数未变。
+- CLI 端到端：同比请求返回正确的 7 天窗口与 last/diff/pct 对比列；多指标 Top 5 与口语 Top 5 均返回 5 行。
+
+**影响范围**：组件枚举调用的重试策略、复合筛选值降级时的 fail-closed 行为。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py` 并删除新增测试文件。
+---
+
+## 2026-09-10 query 规划器 - 近义词/同义词与综合报表复测修复（第八批 9 项缺陷）
+
+**变更原因**：新增近义词/同义词矩阵、专业场景矩阵与行为快照兼容校验；同时用户反馈了真实用例——「查询8月份的综合数据情况，包括库存、广告、销售、退款数据」规划器始终不命中库存字段。两条线合并修复。
+
+**改动点**：
+- `opscli/query/services/planner/time_scope.py`
+  - `_NEGATED_SPAN_RE` 增「剔除/过滤掉/不包含/不包括/不选/不看/不查」。**修复极性反转**：此前「剔除亚马逊VC」被读成 `platform_name = Amazon VC`，返回的恰好是用户要求排除的那部分数据。刻意不收「移除」——真实标签里有「平台移除数量」「仓租(平台移除费)」。
+- `opscli/query/services/planner/query_plan.py`
+  - 新增 `_POSTFIX_EXCLUSION_RE` 与后置排除解析：「亚马逊VC除外」「TikTok以外」此前同样被读成只看该平台；正向槽位识别同步挖空该窗口，避免误判极性冲突。
+  - `_resolve_platform_enum` 对解析结果排序：IN/NOT_IN 列表顺序无语义，确定性排序让同一请求的规划结果与 `plan_integrity` 摘要可复现。
+  - `_LIMIT_RE` 增「最高/最多/最少/最低 + 的N个」形态，修复「销售额最多的5个平台」行数丢失。
+  - `_is_broad_sales_dimension_false_positive` 与 `_field_score` 判据对齐：只有原文点名人员维度才保留「销售」。修复「包括库存、广告、销售、退款数据」把销售人员当成维度、返回一份姓名清单且零指标。
+  - 新增 `_unmatched_enumerated_metric_terms` 与列举式指标门禁：「包括A、B、C数据」「需要包含以下指标：…」里某一类完全落空时转澄清并点名是哪一类。修复用户反馈的库存类静默消失。
+  - `_GENERIC_MEASURE_WORDS`：「各平台的数据/情况」里的泛指名词不再被当成被点名指标，修复指标已全部选中却报「当前数据集没有请求的指标」。
+- `opscli/query/services/planner/field_semantics.py`
+  - `FIELD_QUERY_TERMS` 补「销售总额/销售数量/毛利润/广告投入」等稳定叫法。
+  - 新增 `DIMENSION_QUERY_TERMS` 与 `dimension_alias_fields()`：维度侧叫法（事业部 → 部门）单独维护，不参与点名指标完整性校验；数据集自带同名完整标签时（部分数据集的 `org_name` 就叫「事业部」）别名让位，避免凭空多出一个分组维度。
+  - `COLLOQUIAL_METRIC_PATTERNS` 增「广告花了多少/广告投了多少」。
+- `opscli/query/services/planner/dataset_guidance.py`：在字段选择层兑现维度别名，并对本数据集已有同名标签的情况让位。
+- 新增 `scripts/qa_planner_synonym_scenario_audit.py`：同义词矩阵（指标/维度/时间/筛选/排除/排序/对比/趋势/动作词）+ 专业场景矩阵（三种视角 30 条）+ 多类目综合报表矩阵 + **行为快照兼容校验**（`--snapshot` / `--compare`）。
+
+**验证结果**：
+- `pytest tests/query/ -q`：748 passed。
+- 同义词 + 场景 + 综合报表矩阵：193 条全通过，同义词组模板一致性 0 违例。
+- 行为快照：60 条兼容语料，连续两次比对行为变化 0 条（排序确定化后可复现）。
+- 领导视角矩阵 490 条（含 97 条回归位）、暴力矩阵 649 条、交叉矩阵两两+冲突 514 条：全部通过。
+- 用户反馈用例端到端实测：模糊类目请求转澄清并点名落空类目；改用具体口径后返回 31 天、四个指标含总库存。
+
+**影响范围**：排除极性词表与后置排除、平台值排序确定性、行数说法、销售人员维度判定、列举式指标门禁、维度别名。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/` 并删除 `scripts/qa_planner_synonym_scenario_audit.py`。
+---
+
+## 2026-09-10 query 规划器 - 多值组合与枚举分页修复（第九批 4 项缺陷）
+
+**变更原因**：用户提出「项目二部和项目六部分别销售情况」「亚马逊和TEMU」这类多值组合场景；测试中同时定位到一个此前被误判为"服务抖动"的真实缺陷——组件枚举分页截断。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - **枚举分页截断（根因级）**：`_auto_enum_component_values` 改为自适应扩页——首页取满即视为可能被截断，按放大上限（5000）再取一次。当前账号销售小组有 681 个授权值而默认只取 500 个，落在首页之外的值一律校验不过，且服务端返回顺序不保证稳定，表现为「一部-B组」时好时坏。修复后并发 24 次全部稳定命中（修复前 13/33）。此前观察到的"枚举抖动"绝大部分即由此产生。
+  - 新增 `_coordinated_department_values`：识别「九部和一部」「项目二部、项目六部」这类并列列举，交由授权枚举一次匹配全部值；`_department_literals_consumed` 同步预留全部值。修复此前只锁第一个值、剩下的漏给销售小组做主段反查，导致「项目六部」被判成"销售小组没有唯一等值成员"并抛出 8 个「项目六部-X组」候选。
+  - 新增 `_group_by_separately_requested_filters`：原文含「分别/各自/分开」且存在多值筛选时，把被筛选字段补成分组维度。修复「项目二部和项目六部分别的销售额」只返回两个部门合计的一行数据。
+  - `_unmatched_group_dimension_terms` 跳过「各自」被切出的单字「自」。
+  - 组件多值列表排序确定化，与平台值一致。
+- 新增 `scripts/qa_planner_synonym_scenario_audit.py` 的 `multi_value` 矩阵（17 条）。
+
+**验证结果**：
+- `pytest tests/query/ -q`：748 passed。
+- 同义词 + 场景 + 综合报表 + 多值矩阵：210 条全通过。
+- 领导视角矩阵 498 条（含 105 条回归位）全通过。
+- 特性交叉矩阵 1802 条全通过（修复前因分页截断有 33 条进入 fail-closed 澄清）。
+- 暴力/蜕变/差分/对抗矩阵 649 条，违例 0。
+- 行为快照 60 条：连续比对行为变化 0 条。
+
+**影响范围**：组件枚举取值完整性、并列多值筛选、"分别"语义的分组补全、多值列表顺序确定性。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py`。
+---
+
+## 2026-09-10 query 规划器 - 多值组合举一反三修复（第十批 4 项缺陷）
+
+**变更原因**：把「项目二部和项目六部」「亚马逊和TEMU」的多值组合举一反三到国家、销售小组、大组等其他组件字段，又暴露 4 处缺陷，其中 1 处会让查询稳定返回 0 行。
+
+**改动点**（均在 `opscli/query/services/planner/query_plan.py`）：
+- 新增 `_exact_value_in_other_component`：主段命中（原文「A组」只命中销售小组「A组-A1组」这类值的前缀）时，如果该文本恰是另一个组件字段的完整授权值（大组里就有「A组」），让位给后续字段。修复「A组和B组分别的销售额」被判成"销售小组 A组 没有唯一等值成员"，大组根本没机会解析。
+- `_drop_cross_field_swallowed_filters` 支持多值：按「、」拆回单个值再算区间。修复「一部-A组和一部-B组」额外多出 `dept_name = 一部`——若两个小组分属不同部门，这条多出来的条件会把其中一个小组整体排除。
+- 新增 `_coordinated_unmatched_siblings` 与披露：无标签并列列举里有值未授权时，与带标签多值列表同一口径——按授权交集查询并如实披露未纳入的值。修复「一部-A组和二部-A组」静默只查一部-A组、领导会把单个小组的数字当两个小组合计汇报。
+- 新增 `_drop_filters_inside_unmatched_siblings`：撤下只是"未授权兄弟值"内部片段的单值筛选。修复「二部-A组和一部-A组」把 二部-A组 开头的「二部」漏成部门筛选，模板变成 dept=二部 AND team=一部-A组 两个互斥条件，**查询稳定返回 0 行**。用私有暂存键在组件解析阶段内传递，离开前删除，不进入对外合同。
+
+**验证结果**：
+- `pytest tests/query/ -q`：748 passed。
+- 同义词/场景/综合报表/多值矩阵：220 条全通过（多值矩阵扩到 27 条，覆盖部门、平台、国家、销售小组、大组）。
+- 领导视角矩阵：502 条全通过（含 109 条回归位）。
+- 暴力/蜕变/差分/对抗矩阵：649 条，违例 0。
+- 行为快照 60 条：行为变化 0 条。
+
+**遗留观察（未修复）**：跨字段并列（「九部和一部-A组」，一个部门加一个销售小组）按 AND 组合，结果通常为空；查询模板没有跨字段 OR 能力，建议后续识别到跨字段并列时转澄清。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py`。
+---
+
+## 2026-09-10 query 执行器 - 字符串单值排除改发单元素 not_in（规避后端 ne 结果反转）
+
+**变更原因**：同义词复测做端到端执行时发现，「近7天各平台的销售额，剔除亚马逊VC」规划出的模板是正确的 `platform_name != Amazon VC`，服务端却只返回 Amazon VC 一行，结果与用户意图完全相反。直连 simple 接口逐字段实测：`ne` 在平台、销售小组、大组、渠道、品牌、品类、SPU 上都会反转成"只返回被排除的值"，在部门、国家、销售、开发上正确；同条件的单元素字符串 `not_in` 在全部 11 个字段、日期字符串、数值字段传字符串数字时都正确；数值字面量 `not_in [0]` 会被判成 0 行，而数值 `ne` 正确。完整查询接口（querySpec.where）的 `ne` 没有此问题。
+
+**改动点**：
+- `opscli/query/services/manager.py` 的 `_validate_simple_filter_operators`：归一出 `ne` 且值为字符串时，改写为 `{"operator": "not_in", "value": [原值]}`；数值、布尔、列表值保持 `ne`。该方法只服务 simple 查询的发送路径（`build_simple` / `build_simple_and_run` / `run_query_template`），规划合同里的 `!=` 不变（执行前深拷贝），完整查询路径不经过这里。改写后算子已是 `not_in`，重复调用不会二次包装。
+- `tests/query/test_filter_operator_normalization.py`：符号归一参数化用例改用数值作值；新增字符串排除改发单元素 `not_in`（5 种写法）、数值排除保持 `ne`、嵌套条件改写且幂等三条用例。
+- `tests/query/planner/test_entry.py`：执行边界用例改为断言下发单元素 `not_in`、规划合同仍为 `!=`。
+
+**验证结果**：
+- `pytest tests/query/test_filter_operator_normalization.py tests/query/planner/test_entry.py -q`：49 passed。
+- 端到端（QA 环境真实执行）：剔除/排除/不看亚马逊VC、排除一部-B组、排除 B组、排除 ALLEWIE 等 16 条请求，返回结果中均不再出现被排除的值，行数与"全量减一"一致。
+
+**影响范围**：所有经 simple 接口下发的字符串单值排除条件（规划器一体化执行、`opscli query simple`、MCP `query_simple` / `query_flow`）。需向后端反馈 simple 接口 `ne` 在权限相关字段上的反转缺陷，后端修复后可去掉该改写。
+
+**回滚方式**：删除 `_validate_simple_filter_operators` 中「字符串单值不等于改写为单元素 not_in」分支，并还原两份测试文件的对应断言。
+---
+
+## 2026-09-10 query 规划器 - 排除、限定与专业口径同义词复测修复（第十一批 20 项缺陷）
+
+**变更原因**：以领导汇报、专业测试、菜鸟运营三种口吻对排除、限定两类说法做同义词横向复测（6 个字段 × 20 种排除说法，另 5 个字段 × 20 种限定说法，再加 38 条多场景组合），首轮排除类只通过 44/120：口语排除词被反转成包含、品类裸值排除被静默丢弃、分句点名的第二个部门被丢弃、全角逗号子句被当成列表等。另发现第十批自适应扩页按去重后的条数判断取满，品类枚举被截断；专业口径一组（广告缩写、经营汇报时间口径）又暴露「CPC」静默零指标、「TACOS」被替换成 ACOS、「CTR」误报缺失、MTD/YTD/上半年/近N个季度不识别。
+
+**改动点**：
+- `opscli/query/services/planner/query_plan.py`
+  - 新增共享排除词表 `_EXCLUSION_SYNONYM_VERBS`（扣除/刨除/排掉/拿掉/除去/抛开/不算/不计…）与 `_COMPONENT_EXCLUSION_VERBS`，接入前缀排除、取消排除、字段后接排除词、排除宾语抽取；不并入 `time_scope` 的共享否定词表，避免「扣除退款后的销售额」把销售额标签判成否定语境。
+  - `_COMPONENT_EXCLUSION_AROUND_RE` 增「除X外」「除了X」「X以外/之外」三种写法，遇「还/也」加合句式不触发；`_COMPONENT_NEW_CLAUSE` 增「只看/仅看/只要/只查/只保留」截断排除区间。
+  - `_platform_scope` 接入同义排除前缀与环绕排除区间，并剔除只在「包括…在内」里出现的平台。
+  - `_labeled_value_match` 支持「字段 + 排除动作 + 值」；`_query_without_component_filter_labels` 同步遮蔽这类筛选左值，「各/每/按/分」前缀保留分组、不切进更长的完整字段标签（「平台移除数量」）；新增 `_is_non_value_candidate` 排除「拆分/细分/展开/明细」等展示类动作词。
+  - 规格表新增 `targeted_lookup`（品类、平台类目）：`_unclaimed_exclusion_targets` 定向核对被明确排除的裸值（整值命中落筛选，片段近似转澄清），`_postfix_label_value_candidates` 支持「家居品类」这类后置标签单值（整值命中才采用）。
+  - `_coordinated_department_values` 更名 `_mentioned_department_values` 并去掉并列限制，分句点名的部门交枚举反查逐值判极性；并列部门未授权值纳入授权交集披露；正向点名值全部未授权时 fail-closed 澄清；新增 `_is_department_quantifier` 排除「一部分」。
+  - `_INCLUSIVE_MENTION_RE`：「包括X在内」不构成筛选；`_ENUMERATED_METRIC_INTRO_RE` 前置否定不触发、跳过含「在内」的列举项。
+  - `_postfixed_labeled_list_values`：首项剥时间/动词噪声、子句动词开头的不算列表、去掉项尾自带标签。
+  - 零命中澄清的近似成员补反向包含（「家具类」提示「家具」）。
+  - `_auto_enum_component_values` 只保留异常重试一次；移除 `_resolve_enum_component_filter` 的外层重复扩页。
+  - 定向核对的排除宾语与后置标签单值合并处理，排除宾语极性按来源判为排除（半角逗号截断排除区间时不误判），定向列表不套用标签列表的整体排除规则。
+  - 度量门禁 `_unmatched_measure_terms` 接收本次已选字段：度量词包含标签（带修饰词）按英文单词边界判定，是标签片段时须落到已选字段才算认得，否则按片段名澄清并列近似字段；完整性门禁按说法而不是物理字段名核对。
+- `opscli/query/services/planner/entry.py`：enum_fn 按服务端原始行数判断取满后放大到 `_ENUM_EXPANDED_LIMIT` 重取；抽出 `_enum_rows`。
+- `opscli/query/services/planner/field_semantics.py`：`has_standalone_term_occurrence` 增英文/数字单词边界；`FIELD_QUERY_TERMS` 增 CTR（clicks_percent / ads_clicks_percent / click_rate），CVR 因跨口径不唯一不收。
+- `opscli/query/services/planner/time_scope.py`：新增近半年、上/下半年（含年份词，先于自然年）、近N个季度（按 N×90 天）、月初至今/MTD/本月至今（止于今天，先于整月口径），YTD/年初至今、QTD/季初至今、WTD/周初至今接到既有口径。
+- 测试：新增 `tests/query/planner/test_exclusion_synonyms.py`（59 条）、`tests/query/planner/test_component_enum_paging.py`（4 条）、`tests/query/planner/test_professional_terms.py`（31 条）。
+- 审计脚本：`scripts/qa_planner_synonym_scenario_audit.py` 排除同义词组扩到 4 组 39 种说法，多值矩阵补 6 条，时间同义词补 MTD/QTD/上半年/近半年四组并扩充本周、今年两组，指标同义词补 CTR。
+- 审计脚本：`scripts/qa_planner_interaction_audit.py`、`scripts/qa_planner_field_coverage.py` 改为逐条写盘后释放完整合同，并新增 `--resume` 断点续跑（跳过结果文件里已完成的用例、追加写入；汇总与口吻一致性检查改为跑完后从结果文件全量统计），输出内容与顺序不变；原先 1800～6500 份合同全部驻留内存，本机开着其他应用、交换空间接近耗尽时整条验证链连续三次被系统低内存结束。
+
+**验证结果**：
+- `pytest tests/query/ -q`：849 passed；`tests/mcp`（跳过 shopify）2 failed / 475 passed、`tests/skills`（跳过 test_packaging）8 failed / 242 passed，失败清单与基线一致。
+- 横向探测：排除类 120/120、限定类 100/100、多场景 38/38；专业口径 34 条（时间 18、指标缩写 16）全部按预期解析或澄清。
+- 端到端（QA 真实执行）16/16：被排除值均不出现在结果中，「排除九部，只看十一部」「排除美国只看加拿大」各返回 1 行。
+- 行为快照 60 条：行为变化 0 条（最终代码跨零点复跑时 46 条仅相对日期顺延一天，回退一天后与基线逐字段一致）。
+- 领导视角矩阵：502 条全部通过（最终代码，与上一轮逐条对比状态变化 0）
+- 同义词/场景/综合报表/多值矩阵：273 条，失败 0、同义词组不一致 0（新增 53 条排除/时间/指标同义说法；与上一轮共有的 220 条状态变化 0）
+- 暴力/蜕变/差分/对抗矩阵：649 条，不变量违例 0、关系违例 0，与上一轮逐条对比状态变化 0
+- 特性交叉兼容矩阵：1802 条全部通过（断点续跑分 2 段完成，与上一轮逐条对比状态变化 0）
+- 全字段覆盖矩阵：6486 条，失败 0、口吻不一致组 0（断点续跑分 16 段完成）；逐条对比上一轮拦下 4 条「平台移除数量」回退，修复后含排除类动词的 24 条定向重跑全部通过
+
+**影响范围**：组件与平台筛选的排除/包含极性判定、品类与平台类目裸值识别、部门多值解析、后置标签列表抽取、组件枚举分页、英文字段词匹配、度量与完整性门禁、时间口径解析。规划合同结构不变，未新增对外字段。
+
+**回滚方式**：`git checkout -- opscli/query/services/planner/query_plan.py opscli/query/services/planner/entry.py opscli/query/services/planner/field_semantics.py opscli/query/services/planner/time_scope.py`，并删除三份新增测试文件（注意：这会同时回退本次会话更早批次在这些文件里的未提交修复，建议按本条改动点逐项撤销）。
+---
+
+## 2026-09-10 mcp query 工具 - 说明 top_n 不是结果行数
+
+**变更原因**：用户复测「查询8月份的综合数据情况，包括库存、广告、销售、退款数据」时，Agent 把 `query_plan` 的 `top_n`（选表候选数上限）当成"前N名"传给了没有该参数的 `query_flow`，首次调用直接参数校验失败。
+
+**改动点**：`opscli/mcp/tools/query.py` 仅改工具说明——`query_plan` 的 `top_n` 注明是数据集候选数上限、不是结果行数；`query_flow` 增「参数边界」一段，说明本工具没有 `top_n`，「前N名」写在 request 原文里由规划器解析，显式行数用 `limit`。不改签名与行为。
+
+**验证结果**：`pytest tests/mcp -q --ignore=tests/mcp/test_shopify_tools.py`：2 failed / 475 passed，失败清单与基线一致（seller_sprite_proxy 1、seller_sprite_tools 1）。
+
+**影响范围**：仅 MCP 工具说明文字（Agent 读取的 docstring）。
+
+**回滚方式**：还原 `query_plan` 的 `top_n` 参数说明与 `query_flow` 的「参数边界」段落。
+---
