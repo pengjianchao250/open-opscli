@@ -10293,6 +10293,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ---
 
+## 2026-09-09 ops-feedback-query - 补齐 Windows 时区数据运行依赖
+
+**变更原因**：Windows 的 Python 运行环境未提供 IANA 时区数据库，反馈日报初始化 `Asia/Shanghai` 时抛出 `ZoneInfoNotFoundError`，导致自动化无法领取或生成日报。
+**改动点**：在项目运行依赖中增加 `tzdata`，并更新 `uv.lock`，使 Windows 与精简运行时可加载 IANA 时区数据。
+**验证结果**：`uv add tzdata` 成功同步依赖；后续将通过 `ZoneInfo('Asia/Shanghai')` 与反馈日报领取命令验证。
+**影响范围**：仅 Python 运行环境的时区数据可用性；反馈分类、统计及通知逻辑不变。
+**回滚方式**：从 `pyproject.toml` 移除 `tzdata` 并更新锁文件；Windows 或精简环境将重新依赖外部系统时区数据库。
+---
+
 ## 2026-09-09 西柚 MCP - 接入多账号试用通道
 
 **变更原因**：西柚 OpenAPI VIP 尚未开通，需要先通过固定远端 MCP 验证数据能力，并在单个试用账号周额度明确耗尽时自动切换备用账号。
