@@ -158,6 +158,7 @@ class AppManager:
             root,
             repo_url=binding.repo_url,
             branch=binding.default_branch,
+            credential_username=binding.git_username,
         )
         return binding, credential_result, git_result, app_detail
 
@@ -228,6 +229,7 @@ class AppManager:
         *,
         rotate_git_credential: bool,
     ) -> tuple[SiteBinding, dict[str, Any]]:
+        """验证本机凭据，必要时按平台状态签发或显式轮换。"""
         username = _optional_text(git_config.get("username")) or binding.git_username
         bound = bool(git_config.get("bound"))
         if not rotate_git_credential:
@@ -236,6 +238,7 @@ class AppManager:
                     root,
                     repo_url=binding.repo_url,
                     branch=binding.default_branch,
+                    repository_not_found_is_auth=True,
                 )
             except AppGitError as exc:
                 if exc.code != "GIT-002":

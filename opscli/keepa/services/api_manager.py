@@ -27,7 +27,7 @@ from opscli.keepa.category_formatter import (
 )
 from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
-from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError
+from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError, KeepaQuotaError
 from opscli.keepa.domain.models import (
     KeepaExportResult,
     KeepaScenarioRequest,
@@ -184,13 +184,30 @@ class KeepaApiManager:
                             reserve_tokens=reserve_tokens,
                         ),
                     )
-                    raise KeepaConfigError(
-                        "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。"
-                    )
+                    raise _quota_error(quota_warning)
                 if request.wait:
-                    await _wait_for_refill(client, before_quota, warnings)
-                    before_status = await _safe_token_status(client, warnings)
+                    before_status = await _wait_for_refill(client, before_quota, warnings)
                     before_quota = extract_quota(before_status)
+                    refreshed_warning = _build_quota_warning(
+                        before_quota=before_quota,
+                        estimated_tokens=estimated_tokens,
+                        reserve_tokens=reserve_tokens,
+                    )
+                    if refreshed_warning and not request.force:
+                        warnings.append(refreshed_warning)
+                        _write_json(
+                            params_path,
+                            _params_payload(
+                                request=request,
+                                scenario=scenario.to_public_dict(),
+                                normalized_params=normalized_params,
+                                account=credential.to_public_dict(),
+                                estimated_tokens=estimated_tokens,
+                                reserve_tokens=reserve_tokens,
+                                before_quota=before_quota,
+                            ),
+                        )
+                        raise _quota_error(refreshed_warning)
 
             _write_json(
                 params_path,
@@ -591,14 +608,14 @@ async def _wait_for_refill(
     client: KeepaApiClient,
     before_quota: dict[str, Any],
     warnings: list[dict[str, Any]],
-) -> None:
+) -> dict[str, Any]:
     refill_in = before_quota.get("refillIn")
     try:
         wait_seconds = max(0.0, float(refill_in) / 1000.0 + 1.0)
     except (TypeError, ValueError):
         wait_seconds = 0.0
     if wait_seconds <= 0:
-        return
+        return await client.token_status()
     warnings.append(
         {
             "stage": "quota_wait",
@@ -607,7 +624,19 @@ async def _wait_for_refill(
         }
     )
     await asyncio.sleep(wait_seconds)
-    await client.token_status()
+    return await client.token_status()
+
+
+def _quota_error(quota_warning: dict[str, Any]) -> KeepaQuotaError:
+    """把额度预检查结果转换为稳定、可重试的 Keepa 错误。"""
+    return KeepaQuotaError(
+        "Keepa 当前可用额度不足，请稍后重试；如果持续卡住，请联系运营人员处理。",
+        tokens_left=quota_warning.get("tokens_left"),
+        estimated_tokens=quota_warning.get("estimated_tokens"),
+        reserve_tokens=quota_warning.get("reserve_tokens"),
+        refill_in_ms=quota_warning.get("refill_in_ms"),
+        refill_rate=quota_warning.get("refill_rate"),
+    )
 
 
 def _params_payload(

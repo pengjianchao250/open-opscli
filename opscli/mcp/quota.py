@@ -27,6 +27,13 @@ SELLER_SPRITE_ACCESS_TOOLS = frozenset(
         "seller_sprite_listing_analysis_submit",
     }
 )
+XYDC_QUOTA_TOOL_NAMES = (
+    "ext_xydc_get_asin_info",
+    "ext_xydc_get_asin_traffic",
+    "ext_xydc_get_keyword_info",
+    "ext_xydc_get_keyword_asin_analysis",
+)
+XYDC_QUOTA_MIGRATION_ID = "20260909_xydc_trial_tools"
 try:
     BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 except ZoneInfoNotFoundError:
@@ -388,6 +395,15 @@ class SQLiteQuotaStore:
             self._insert_default_policies(conn)
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS mcp_quota_migrations (
+                migration_id TEXT NOT NULL PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )
+            """
+        )
+        self._apply_xydc_policy_migration(conn)
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS mcp_quota_daily (
                 service TEXT NOT NULL,
                 day TEXT NOT NULL,
@@ -443,6 +459,41 @@ class SQLiteQuotaStore:
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
+        )
+
+    def _apply_xydc_policy_migration(self, conn: sqlite3.Connection) -> None:
+        """为已有 SQLite 库一次性补入西柚策略，且不覆盖运维配置。"""
+        row = conn.execute(
+            "SELECT migration_id FROM mcp_quota_migrations WHERE migration_id = ?",
+            (XYDC_QUOTA_MIGRATION_ID,),
+        ).fetchone()
+        if row is not None:
+            return
+
+        now = _updated_at_iso(datetime.now(UTC))
+        policies = default_quota_policies()
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO mcp_quota_policy (
+                tool_name, service, daily_limit, enabled, timezone, created_at, updated_at
+            )
+            VALUES (?, ?, ?, 1, ?, ?, ?)
+            """,
+            [
+                (
+                    tool_name,
+                    policies[tool_name].service,
+                    policies[tool_name].daily_limit,
+                    policies[tool_name].timezone,
+                    now,
+                    now,
+                )
+                for tool_name in XYDC_QUOTA_TOOL_NAMES
+            ],
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO mcp_quota_migrations (migration_id, applied_at) VALUES (?, ?)",
+            (XYDC_QUOTA_MIGRATION_ID, now),
         )
 
     def _read_or_create_record(
@@ -744,6 +795,14 @@ def default_quota_policies() -> dict[str, QuotaPolicy]:
             service="seller_sprite",
             daily_limit=5,
         ),
+        **{
+            tool_name: QuotaPolicy(
+                tool_name=tool_name,
+                service="xiyou",
+                daily_limit=10,
+            )
+            for tool_name in XYDC_QUOTA_TOOL_NAMES
+        },
         # 预留后续服务接入点：xiyou_run / sif_run 暂不启用。
     }
 

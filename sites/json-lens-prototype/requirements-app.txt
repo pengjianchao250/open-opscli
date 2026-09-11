@@ -1,5 +1,0 @@
-# Web 框架与本应用直接导入的运行时依赖。
-fastapi==0.141.1
-starlette==1.6.0
-uvicorn[standard]==0.52.4
-pydantic==2.13.5

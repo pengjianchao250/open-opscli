@@ -40,6 +40,16 @@
 
 ---
 
+## 2026-09-09 App - AppHub 绑定改用 app_id 查询
+
+**变更原因**：AppHub 最新模板已使用顶层 `app_id`，线上应用 `test-keepa` 可通过 ID `1kKLO` 访问，但 `opscli app push` 仍使用 slug 请求应用详情和 Git 配置，导致已有应用返回 `NOT_FOUND`，并向新版清单注入旧版 `name` 字段。
+**改动点**：已绑定应用改用 binding 的 `app_id` 获取应用详情和 Git 配置；从可访问应用恢复 binding 时优先使用响应中的应用 ID；清单同步兼容新版 `app_id/title`，并移除混入的旧版顶层 `name`；补充 manager 与 manifest 回归测试。
+**验证结果**：`tests/app/test_manager.py`、`test_manifest.py`、`test_client.py` 专项回归 `23 passed`，目标文件 `compileall` 与 `git diff --check` 通过；使用 `test-keepa / 1kKLO` 实际 binding 执行 `opscli app push` 成功，远端 `master` 更新到 `462020678f747c938c66ed68849cde22921bce90`。
+**影响范围**：`opscli app create/init/push` 的应用身份解析和 `app.yaml` 身份同步；旧版 `name/title` 清单继续兼容。
+**回滚方式**：回退 `opscli/app/services/manager.py`、`opscli/app/services/manifest.py` 及对应测试和本条记录。
+
+---
+
 ## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
 
 **变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。
@@ -11032,6 +11042,47 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除 `sites/seller-sprite-lens-prototype`，从 `opscli/api/cors.py` 移除 `4174`，删除对应 CORS 测试并移除本条变更记录。
 
 ---
+
+## 2026-09-09 ops-feedback-query - 补齐 Windows 时区数据运行依赖
+
+**变更原因**：Windows 的 Python 运行环境未提供 IANA 时区数据库，反馈日报初始化 `Asia/Shanghai` 时抛出 `ZoneInfoNotFoundError`，导致自动化无法领取或生成日报。
+**改动点**：在项目运行依赖中增加 `tzdata`，并更新 `uv.lock`，使 Windows 与精简运行时可加载 IANA 时区数据。
+**验证结果**：`uv add tzdata` 成功同步依赖；后续将通过 `ZoneInfo('Asia/Shanghai')` 与反馈日报领取命令验证。
+**影响范围**：仅 Python 运行环境的时区数据可用性；反馈分类、统计及通知逻辑不变。
+**回滚方式**：从 `pyproject.toml` 移除 `tzdata` 并更新锁文件；Windows 或精简环境将重新依赖外部系统时区数据库。
+---
+
+## 2026-09-09 西柚 MCP - 接入多账号试用通道
+
+**变更原因**：西柚 OpenAPI VIP 尚未开通，需要先通过固定远端 MCP 验证数据能力，并在单个试用账号周额度明确耗尽时自动切换备用账号。
+**改动点**：扩展 API Credential Provider 白名单，新增固定 Bearer 认证的 xydc MCP Provider、首批四个测试中 MCP Tool、共享西柚日限额迁移、契约测试和接入设计说明；现有西柚网页爬虫与鹰眼 PND 路径保持不变。
+**验证结果**：xydc Provider、API Credential、Tool 注册和 quota 定向回归 `61 passed`；排除仓库既有 Shopify 收集错误后的 MCP 全量回归 `501 passed`；目标模块 `compileall` 与 `git diff --check` 通过。两枚本地 Bearer Token 分别真实调用 `get_asin_info`，均返回 `status=200`、`cost_credits=1`；首次冒烟发现并修复整数状态码误判，诊断和复验本轮共消耗 5 Credits。更大范围旧西柚网页测试有 6 个预存失败，与本次新增 Provider 无关。
+**影响范围**：新增 `ext_xydc_*` 测试工具及 `xydc_mcp`/`xydc_openapi` 凭据类型；不启用旧 `xiyou_run`，不修改正式 OpenAPI 和网页通道行为。
+**回滚方式**：回退 xydc Provider、MCP Tool 注册、凭据白名单、限额迁移、测试、设计文档及本条记录。
+---
+
+## 2026-09-10 ops-xiyou Skill - 增加 xydc MCP 测试通道路由
+
+**变更原因**：原 `ops-xiyou` Skill 默认引用未注册到通用 MCP 的旧 `xiyou_*` Tool，无法正确引导 Agent 使用已接入的四个 `ext_xydc_*` 测试工具，也缺少 Credit 消耗、多账号切换和重试边界说明。
+**改动点**：将 xydc MCP 试用通道设为显式西柚请求的首选路径，补充四个 Tool 的意图和参数合同、Credit 与失败处理、结果来源字段及旧网页 CLI 补充路径；Skill 版本升至 `v1.1.0`，并在 source、wheel、binary、binary_full 产物中以 `experimental` 级别发布；新增 Skill 身份、路由、发布和安装契约测试。
+**验证结果**：Skill Creator `quick_validate.py` 在 Python UTF-8 模式下通过；`test_packaging.py` 与 `test_ops_xiyou_skill.py` 共 14 项通过；xydc Tool/Provider 定向回归 14 项通过；目标 Python 文件 `compileall` 通过；`git diff --check` 通过。校验器首次受 Windows 默认 GBK 读取 UTF-8 中文影响，改用 `python -X utf8` 后正常通过；一次并行 pytest 启动触发本地捕获器关闭异常，串行禁用捕获复验通过。
+**影响范围**：Agent 对西柚请求的工具选择和内置 Skill 发版范围；不修改 xydc Provider、旧网页通道或正式 OpenAPI 行为。
+**回滚方式**：回退 `ops-xiyou` Skill、版本文件、模板发版清单、对应测试和本条记录。
+---
+## 2026-09-11 Keepa - MCP API 额度等待与稳定错误码
+
+**变更原因**：Keepa 额度不足时，`wait=true` 只等待一次 refill 后就继续请求，等待后额度仍不足会把失败转成泛化错误，站点难以判断是否应稍后重试。
+
+**改动点**：等待 refill 后重新执行额度预检查；非 `force` 请求在额度仍不足时返回 `KEEPA_QUOTA_INSUFFICIENT`、额度快照字段和 `retry_after_seconds`，不再发起 Keepa 业务请求；Keepa REST API 对额度不足和限流返回 HTTP 429，并设置 `Retry-After`；Keepa 上游 401/403/429 及额度类响应映射为稳定错误码。
+
+**验证结果**：Keepa 管理器与 REST API 回归 `40 passed`；Keepa/MCP 相关回归 `144 passed`；目标模块 `compileall` 通过。
+
+**影响范围**：仅影响 `opscli/keepa` 与 `/api/v1/keepa/run` 的错误响应；成功请求、`force=true` 行为和其他 Keepa 场景参数保持不变。
+
+**回滚方式**：恢复 Keepa 异常映射、额度二次预检查、Keepa REST 状态映射及对应测试和本条记录。
+
+---
+
 # 2026-09-10 AppHub manifest 身份切换为 app_id
 
 **变更原因**：最新 AppHub 模板已删除 `app.yaml.name` 并新增五位 `app_id`；opscli 仍在 `create/init/push` 中把远端 slug 写回顶层 `name`，造成模板合同回退和发布身份双轨。
@@ -11417,4 +11468,13 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅 MCP 工具说明文字（Agent 读取的 docstring）。
 
 **回滚方式**：还原 `query_plan` 的 `top_n` 参数说明与 `query_flow` 的「参数边界」段落。
+---
+
+## 2026-09-11 Git - 合并远端最新 release
+
+**变更原因**：将 `origin/release` 的最新提交合并到 `feature/sellersprite`，解决双方在 AppHub manifest 合同和变更日志上的并行修改冲突。
+**改动点**：保留 release 的 `app_id` 严格 manifest 合同与校验测试，同时保留功能分支的私有仓库 Git 凭据兼容逻辑及 SellerSprite、Keepa、西柚相关改动；完整合并双方变更记录。
+**验证结果**：App manifest、manager、gitops 定向回归 `66 passed`，完整 `tests/app` 回归 `106 passed`；Keepa/Xiyou 相关回归 `134 passed`；合并后的三个 App Python 模块通过 `py_compile`；`git diff --check` 通过且不存在未解决文件。
+**影响范围**：当前功能分支与 `origin/release` 的合并结果，重点涉及 AppHub manifest、Git 凭据和规划器相关更新。
+**回滚方式**：在尚未推送时回退本次 merge commit；已推送后使用 revert 撤销该 merge commit。
 ---
