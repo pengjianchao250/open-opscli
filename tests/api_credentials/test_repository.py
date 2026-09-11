@@ -111,6 +111,7 @@ def test_schema_models_provider_accounts_credentials_runtime_and_audit():
 def test_provider_whitelist_accepts_xydc_trial_and_future_openapi_channels():
     assert "xydc_mcp" in SUPPORTED_PROVIDERS
     assert "xydc_openapi" in SUPPORTED_PROVIDERS
+    assert "keepa" in SUPPORTED_PROVIDERS
 
 
 def test_list_accounts_reads_multiple_plaintext_accounts_but_public_output_is_masked():

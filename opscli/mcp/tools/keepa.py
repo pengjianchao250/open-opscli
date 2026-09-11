@@ -24,7 +24,6 @@ from opscli.keepa.api.scenarios import (
     telemetry_dimensions as _keepa_telemetry_dimensions,
 )
 from opscli.keepa.summary import KEEPA_SUMMARY_ROW_LIMIT, summarize_rows
-from opscli.mcp.ops_credentials import ensure_ops_credentials
 from opscli.mcp.quota import get_quota_limiter
 from opscli.shared.collection_storage.result_cache import (
     CacheMode,
@@ -51,13 +50,6 @@ def _get_current_mcp_user_email() -> str | None:
     from opscli.mcp.context import get_current_user_email
 
     return get_current_user_email()
-
-
-def _load_keepa_settings():
-    """读取 Keepa 运行配置。"""
-    from opscli.keepa.config import load_settings
-
-    return load_settings()
 
 
 async def keepa_spec_must_read() -> dict:
@@ -135,8 +127,8 @@ async def keepa_run(
 ) -> dict:
     """执行 Keepa 场景并保存请求参数、原始响应、规范化结果和 XLSX/JSON 导出。
 
-    如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
-    若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
+    Keepa API Key 默认从 MySQL 凭据池领取；session_id / jwt 仅用于可选的导出上传。
+    若凭据池不可用但设置了 OPSCLI_KEEPA_API_KEY，也可使用本地兜底 Key 执行。
     """
     return await _keepa_run_impl(
         scenario=scenario,
@@ -232,21 +224,16 @@ async def _keepa_run_impl(
             mark_cache_hit()
             return response
 
-        keepa_settings = _load_keepa_settings()
-        if keepa_settings.api_key:
-            sid, jw = _get_auth_pair("ops", session_id, jwt)
-        else:
-            binding = await ensure_ops_credentials(
-                provided_session=session_id,
-                provided_jwt=jwt,
-                require_jwt=True,
-            )
-            sid, jw = binding.session_id, binding.jwt
+        sid, jw = _get_auth_pair("ops", session_id, jwt)
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
         result = await KeepaApiManager(**manager_kwargs).run(request)
-        public_result = _public_api_result(result.to_dict()) if api_mode else _public_result(result.to_dict())
+        public_result = (
+            _public_api_result(result.to_dict())
+            if api_mode
+            else _public_result(result.to_dict())
+        )
         return _ok(public_result)
     except ValueError as exc:
         _log_keepa_failure(exc, call_params, started_at)

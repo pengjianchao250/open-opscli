@@ -50,15 +50,15 @@ $headers = @{
 }
 ```
 
-### 1.3 OPS 凭据自动保障
+### 1.3 OPS 凭据与 Keepa 账号池
 
-REST 认证与 MCP API Key 已分离。Keepa 直接使用当前 AppHub 请求的 OPS Token/Session；只有 Session、没有 JWT 时，服务端按需换取 OPS JWT。凭据只在请求上下文中使用，不写入 MCP API Key 隔离目录。
+REST 认证与 MCP API Key 已分离。Keepa API Key 默认从 MySQL `api_credentials` 凭据池领取，不再通过当前 AppHub 用户的 OPS Token/Session 拉取集成账号。请求中的 OPS Token/Session 只用于用户身份治理和可选的导出文件上传。
 
 SellerSprite 由通用 REST 网关代理到 Collector。浏览器仍只提交 AppHub 登录态；网关与 Collector 之间使用权限受限文件 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 中的内部 Key，并转发已验证用户身份和任务级 Session/JWT。浏览器不得接触该内部 Key。
 
 REST 请求体不接受 `session_id`、`jwt`、`output_dir` 等内部字段，也不会在响应中返回 Session 或 JWT。`auth_mcp_login` 仅属于 MCP 客户端流程，不是 REST 前置步骤。
 
-若线上服务配置了 `OPSCLI_KEEPA_API_KEY`，Keepa 可不依赖用户 OPS 凭据直接执行；身份、额度与审计仍使用 AppHub principal。
+`OPSCLI_KEEPA_API_KEY` 仅作为 MySQL 凭据池不可用时的本地调试兜底。线上应在 `keepa` Provider 下配置主备账号，由服务端负责优先级选择、失败切换、额度状态和冷却时间回写；身份、每日调用额度与审计仍使用 AppHub principal。
 
 ## 2. 通用返回合同
 
@@ -675,7 +675,7 @@ if ($response.data.state -eq "succeeded") {
 | --- | --- |
 | `authentication_required` | 当前请求没有有效 AppHub 用户身份 |
 | `OPS_CREDENTIAL_ENSURE_FAILED` | 服务端自动建立 OPS Session/JWT 失败，可用预热接口复现并诊断 |
-| `KEEPA_CONFIG_ERROR` | Keepa 参数或服务端集成账号配置问题；新版会在访问 Keepa 前先修复 OPS 凭据 |
+| `KEEPA_CONFIG_ERROR` | Keepa 参数、MySQL 凭据池配置或可用账号缺失 |
 | `KEEPA_API_ERROR` | Keepa 上游请求失败 |
 | `COLLECTOR_MCP_CONFIG_MISSING` | 卖家精灵 Collector 配置缺失 |
 | `COLLECTOR_MCP_UNAVAILABLE` | Collector 不可用 |

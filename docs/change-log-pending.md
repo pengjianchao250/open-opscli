@@ -1,3 +1,17 @@
+## 2026-09-11 Keepa - 账号来源迁移到 MySQL 凭据池
+
+**变更原因**：Keepa 仍通过 OPS 集成账号接口获取单个 API Key，账号来源与 Google Trends、Canopy、scrape.do 等凭据池模块不一致，也无法在鉴权失效或额度不足时自动切换备用账号。
+
+**改动点**：将 Keepa API Key Provider 改为从 MySQL `api_credentials` 凭据池领取 `keepa` 账号，保留 `OPSCLI_KEEPA_API_KEY` 作为池不可用时的本地兜底；凭据模型增加账号 ID 和密钥版本，401/403 自动标记失效并切换账号，额度不足或限流记录剩余额度和 refill 冷却时间后切换账号，成功请求回写额度状态；Keepa MCP 不再为获取账号强制建立 OPS 登录态，Session/JWT 仅保留给可选文件上传；同步更新管理 CLI、使用指南，并将 `ops-keepa` Skill 升级到 `v0.0.4`。
+
+**验证结果**：Keepa、API 凭据池、MCP Keepa Tool 和 REST App 定向回归 `184 passed`；Keepa/发行清单相关 Skill 回归 `11 passed, 296 deselected`；`compileall`、Skill 版本 JSON 解析和 `git diff --check` 通过。当前虚拟环境未安装 Ruff，因此未执行 Ruff 检查。
+
+**影响范围**：Keepa MCP/REST/内部 Manager 的账号来源、主备切换和运行状态回写；公开场景参数与成功响应合同不变。上线前需要在凭据池中创建至少一个 `keepa` Provider 账号。
+
+**回滚方式**：恢复 Keepa OPS 集成账号 Provider、MCP OPS 凭据前置逻辑、凭据池白名单和对应文档。
+
+---
+
 ## 2026-09-10 Skills - 调整第三方数据 API 预发布地址
 
 **变更原因**：AppHub 标准数据项目使用的第三方数据 REST 服务已切换预发布入口，原 `https://ops.api.qa.aukeyit.com` 不再作为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 的预发布值。

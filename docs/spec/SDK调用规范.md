@@ -286,5 +286,6 @@ class XxxClient:
 | amazon | `AmazonOpsClient` / `AmazonManager` | ops | 仅 `auth_client` 注入 | |
 | amazon_rufus | `RufusManager`（完整路径） | ops | 同上 | 平台侧走浏览器 state |
 | app | `AppManager`（包根可导）/ `AppHubClient`（完整路径） | session headers | 同上 | 创建应用、初始化 Git、推送源码；运行时 `OpsClient` 走 `x-ops-token` |
-| keepa / seller_sprite / google_trends / xiyou / sif / scrape_do | 见 §6.1 | 间接 ops | 账号拉取走 ops | 平台凭证独立 |
+| keepa | 见 §6.1 | 可选 ops | API Key 从 MySQL 凭据池领取 | ops 仅用于可选文件上传 |
+| seller_sprite / google_trends / xiyou / sif / scrape_do | 见 §6.1 | 间接 ops | 按各模块账号 Provider 获取 | 平台凭证独立 |
 | notify | `send_wecom_markdown` | 无 | — | webhook 显式传参 |

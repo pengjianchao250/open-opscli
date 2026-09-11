@@ -68,9 +68,9 @@ visibility: internal
 
 ## 认证与额度
 
-- 如果当前宿主是通过远端 MCP `api_key` 直接连接 `keepa_*` tools，首次执行前应先完成 `auth_mcp_login`；不要把“已拿到 MCP `api_key`”误当成“已经具备 `keepa_run` 所需的 OPS 登录态”。
-- 出现 `无 session_id：请完成授权登录，或传入有效的 session_id`、`未授权`、`请先登录` 这类提示时，优先补做 `auth_mcp_login` 并重试；不要先归因为 Keepa token、场景参数或导出逻辑问题。
-- Keepa API Key 由后端读取：优先 OPS integration account `platform=keepa`，本地兜底为 `OPSCLI_KEEPA_API_KEY`。
+- Keepa API Key 由后端 MySQL 凭据池读取，普通 `keepa_run` 不再依赖用户 OPS 登录态；本地调试可用 `OPSCLI_KEEPA_API_KEY` 兜底。
+- 凭据池会按优先级和最近使用时间选择账号；401/403、额度不足或限流时由后端记录账号状态并尝试备用账号，不要让用户手工选择 Keepa 账号。
+- OPS Session/JWT 只用于可选的导出文件上传。上传失败时按返回的 JSON 数据兜底处理，不要把它误判为 Keepa 查询失败。
 - 用户执行前想确认今天还能查几次时，调用 `keepa_quota_status`；该工具不消耗调用次数。
 - `keepa_run` 响应顶层的 `quota` 是 MCP 每日调用额度，可以向用户展示；Keepa API token 余额仍由系统内部管理。
 - `keepa_run` 会做额度预检；额度不足或等待卡住时，只回复用户稍后重试或联系运营人员。
