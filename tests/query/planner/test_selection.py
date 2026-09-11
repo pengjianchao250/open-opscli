@@ -165,6 +165,28 @@ def test_specialized_business_hint_beats_instant_dataset(query, expected_alias):
     )
 
 
+def test_unspecified_dataset_uses_default_when_shipping_dataset_also_covers_query():
+    """未点名数据集时，普通销售请求不得因文本打分改选同样覆盖字段的发货表。"""
+    adapter = MetadataAdapter(_specialized_dataset_payload())
+    cards = agent_query_planner.load_authorized_cards(adapter)
+    selection = agent_query_planner.plan_query(
+        (
+            "查询部门等于十一部在2026年8月1日至2026年8月31日的收入情况；"
+            "仅按部门筛选，不筛选销售小组；收入按销售额口径。"
+        ),
+        cards,
+        _rules(),
+    )
+
+    assert selection["planner_status"] == "candidate_ready"
+    assert selection["dataset_candidates"][0]["dataset_alias"] == "ds_instant"
+    assert selection["default_dataset_recommendation"] == {
+        "kind": "instant_comprehensive",
+        "confirmation_required": False,
+        "auto_selected": True,
+    }
+
+
 # ── 领域覆盖判定的字段证据回退（生产 dataset_constraints 误判）────────────────
 #
 # 背景：数据集的 profile["domains"] 只由 description 文本匹配 description_patterns
