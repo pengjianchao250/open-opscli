@@ -206,6 +206,19 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             )
         return JSONResponse(_redact(await service.usage_today(limit=limit)))
 
+    async def feature_usage_today(request: Request) -> Any:
+        """返回北京时间当日 MCP Tool 功能调用摘要。"""
+        try:
+            limit = _only_limit(request.query_params, default=100)
+        except ValueError as exc:
+            return JSONResponse(
+                {"error": {"code": "invalid_query", "message": str(exc)}},
+                status_code=400,
+            )
+        return JSONResponse(
+            _redact(await service.feature_usage_today(limit=limit))
+        )
+
     async def manual_probe(target: str, *, api_key: str | None = None) -> Any:
         """执行固定目标的手动探测并映射并发与冷却状态。"""
         try:
@@ -498,6 +511,11 @@ def create_app(service: Any, *, manage_polling: bool = True) -> Any:
             Route("/api/v1/incidents", incidents, methods=["GET"]),
             Route("/api/v1/accounts", accounts, methods=["GET"]),
             Route("/api/v1/usage/today", usage_today, methods=["GET"]),
+            Route(
+                "/api/v1/usage/tools/today",
+                feature_usage_today,
+                methods=["GET"],
+            ),
             Route("/api/v1/probes/collector", probe_collector, methods=["POST"]),
             Route("/api/v1/probes/queue-source", probe_queue_source, methods=["POST"]),
             Route(

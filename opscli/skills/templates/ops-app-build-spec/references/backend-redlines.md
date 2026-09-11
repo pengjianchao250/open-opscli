@@ -1,8 +1,12 @@
 # 后端红线总表
 
-本表合并 `docs/开发指南/AI开发通用规范` 的 26 条铁律、`FastAPI后端开发通用规范.md` 附录 D 的 21 条红线和 `SQLite数据库使用通用规范.md` 的硬性规则，去重后统一编号。违反任一条评审直接打回，已合入的须回滚。
+本表合并 `docs/开发指南/` 下的 AI 通用规则、`FastAPI后端开发通用规范.md` 附录 D 的红线和 `SQLite数据库使用通用规范.md` 的硬性规则，去重后统一编号。违反任一条评审直接打回，已合入的须回滚。
 
-效力层级：项目 `backend/CLAUDE.md` 是唯一入口，写红线与项目特化信息；通用条款冲突时以 `backend/docs/开发指南/` 下的全文为准；`AGENTS.md` 只做引用指向。
+本文件是普通后端开发、前后端合同变更和后端评审的强制入口。
+
+当前 AppHub 基线以 `backend/app.py`、`docs/apphub-contract.md`、实际路由、Pydantic Schema 和生成的 OpenAPI 为准。路由只做鉴权、参数校验、协议转换和事务收口；单个 FastAPI 进程托管 API 和前端构建产物；依赖沿用目标项目现有依赖清单；AppHub SQLite 应用保持单写实例。OPS 只使用模板已有的 viewer、session 或 local 网关。用户未授权时不得安装依赖、启动服务、写数据库、提交、推送或部署。
+
+效力层级：项目 `backend/CLAUDE.md` 是唯一入口，写红线与项目特化信息；通用条款冲突时以根目录 `docs/开发指南/` 下的全文为准；`AGENTS.md` 只做引用指向。
 
 ## 一、执行纪律
 
@@ -43,7 +47,7 @@
 | 28 | fire-and-forget 任务必须用集合持有引用；禁止裸 `create_task`。 | FastAPI §10.2 |
 | 29 | 后台任务失败判定基于真实活性信号，不得仅按记录年龄。 | FastAPI §10.3 |
 | 30 | 配置统一走 Settings，禁止业务代码 `os.getenv`；新配置项三处同步；`.env` 禁止同名变量重复定义；新特性带默认关闭的开关。 | FastAPI §8 |
-| 31 | 代码 import 的三方包必须写进 `pyproject.toml` 并注明用途与版本约束理由；核心框架钉死精确版本；禁止依赖 git 分支。 | FastAPI §1.2 §9 |
+| 31 | 代码 import 的三方包必须写进目标项目现有依赖清单并注明用途与版本约束理由；核心框架钉死精确版本；禁止依赖 git 分支。 | FastAPI §1.2 §9 |
 | 32 | 生产关闭 `/docs`、`/redoc` 或加鉴权；CORS 显式白名单，禁止 `*` 与 `allow_credentials=True` 同时使用；内部接口独立密钥鉴权且不暴露公网。 | FastAPI §13 |
 
 ## 三、定时任务
@@ -77,7 +81,7 @@
 | 47 | 库文件路径只来自配置且是绝对路径；落在持久卷；禁止镜像层、代码目录、`/tmp`、网络文件系统。 | SQLite §1.1 |
 | 48 | 每个连接注入 PRAGMA 基线（WAL、`foreign_keys=ON`、`busy_timeout`），SQLAlchemy 下挂 `connect` 事件。 | SQLite §1.2 §1.5 |
 | 49 | 写事务以 `BEGIN IMMEDIATE` 开始；事务要短；禁止事务内网络调用。 | SQLite §1.3 §4.2 |
-| 50 | 任何时刻只能有一个写者；Compose 固定单副本；禁止多实例同时写同一库。 | SQLite §5 |
+| 50 | 任何时刻只能有一个写者；AppHub SQLite 应用保持单写实例；禁止多实例同时写同一库。 | SQLite §5 |
 | 51 | 禁止 `async def` 中直接调同步 `sqlite3`；写路径串行化。 | SQLite §6 |
 | 52 | 金额用 `INTEGER` 最小单位，禁止 `REAL`；时间统一 UTC 且只用一种表示；禁止 `VARCHAR(n)`、`DECIMAL`、`DATETIME`、`BOOLEAN` 类型名。 | SQLite §2.2 §2.3 |
 | 53 | 禁止应用代码 `CREATE TABLE IF NOT EXISTS`；`init_database()` 只做建目录、连通性校验、执行迁移。 | SQLite §1.4 §3.1 |
@@ -90,8 +94,18 @@
 
 | # | 红线 | 全文出处 |
 | --- | --- | --- |
-| 58 | 服务端一律显式传入 `session_id` / `jwt` 构造 Manager，每请求构造；禁止模块级单例、禁止缓存 `ExplicitCredentials`。 | OPSCLI_SDK调用规范 §1.1 §3.2 §4.2 |
+| 58 | OPS 业务通过模板已有的 viewer、session 或 local 网关按请求注入；禁止自行构造 Manager、模块级凭证单例或缓存 `ExplicitCredentials`。 | OPSCLI_SDK调用规范 §1.1 §3.2 §4.2 |
 | 59 | 禁止手拼 `Authorization` 头、直接读取 `credentials.bin` 或 Keychain、硬编码 token、用环境变量偷传 JWT。 | OPSCLI_SDK调用规范 §1.3 §4.2 |
 | 60 | 凭证不落盘、不写日志、不进异常文本；定位时只用前 6 位摘要。 | OPSCLI_SDK调用规范 §7.2 |
 | 61 | 按 `AuthError` / `QueryError` 等模块基类捕获并保留 code；`NotAuthenticatedError` 只提示登录或改为显式传参，禁止自动重试登录。 | OPSCLI_SDK调用规范 §7.2 |
 | 62 | 调用 opscli REST 必须检查 `success` 字段；401 永不重试；查询 payload 禁止手写 `userEmail`、`from.table`、`from.permission`。 | OPSCLI_API调用规范 §3 §4 |
+
+## 七、AppHub 第三方取数
+
+| # | 红线 | 全文出处 |
+| --- | --- | --- |
+| 63 | Keepa、SellerSprite 只使用请求级 `ThirdPartyApiClient`，通过 `Depends(get_query_credentials)` 复用模板已校验的 `QueryCredentials`；禁止重写模板鉴权或缓存跨请求凭证。 | data-access-standard §4 |
+| 64 | `viewer` 只发送 `X-Ops-Token` 与可信 `X-User-*`，`session` 只发送 `X-Session-Id` 与已有可选 Bearer JWT，`local` 只通过 `AuthClient` 标准方法转换为 Session/JWT Header；禁止盲目透传 Header、Cookie、请求体凭证和模式回退。 | data-access-standard §4 |
+| 65 | 第三方服务只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产与预发布由部署环境显式注入；禁止默认环境、共享 API Key、provider 专属 Base URL 和旧变量回退。 | data-access-standard §5 |
+| 66 | `third_party_source_snapshot` 与 `third_party_async_job` 的读写、索引、UPSERT 和 pending 复用必须包含 `owner_user_id`，唯一键固定为 `UNIQUE(owner_user_id, provider, request_hash)`。 | data-access-standard §5 |
+| 67 | SellerSprite HTTP 202 只表示受理；`queued/running` 继续轮询，`succeeded` 读取 JSON，`failed/cancelled` 停止；Listing Analysis 禁止提交到普通 jobs。 | data-access-standard §5 |

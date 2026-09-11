@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from opscli.app.domain.exceptions import AppProjectError
+from opscli.app.domain.exceptions import AppGitError, AppProjectError
 from opscli.app.domain.models import SiteBinding
 from opscli.app.services.binding import BindingStore
 from opscli.app.services.manager import AppManager
@@ -22,10 +22,16 @@ class FakeClient:
         self.closed = False
         self.create_payloads: list[dict] = []
         self.issue_calls: list[bool] = []
+        self.preflight_calls: list[str] = []
         self.accessible_calls = 0
+        self.detail_calls: list[str] = []
+        self.git_calls: list[str] = []
+        self.scope = "qa-owner-1"
+        self.api_base_url = "https://apphub.example/api/v1"
+        self.created_by_slug: dict[str, dict] = {}
         self.apps = {
-            "sales-dashboard": {
-                "app_id": "app-1",
+            "Ab123": {
+                "app_id": "Ab123",
                 "slug": "sales-dashboard",
                 "title": "销售看板",
                 "status": "active",
@@ -36,22 +42,28 @@ class FakeClient:
         }
         self.accessible_slugs = ["sales-dashboard"]
 
+    def creation_scope(self) -> str:
+        """模拟稳定的账号与环境作用域。"""
+        return self.scope
+
     def create_app(self, request_payload: dict) -> dict:
         self.create_payloads.append(request_payload)
         slug = request_payload["name"]
+        if slug in self.created_by_slug:
+            return self.created_by_slug[slug]
         detail = {
-            "app_id": f"app-{len(self.apps) + 1}",
+            "app_id": f"Ab{len(self.apps) + 1:03}",
             "slug": slug,
             "title": request_payload["title"],
             "status": "registered",
-            "repo_url": _repo_url(slug),
+            "repo_url": _repo_url(f"repo-{len(self.apps) + 1}"),
             "current_version": None,
             "url": None,
         }
-        self.apps[slug] = detail
+        self.apps[detail["app_id"]] = detail
         if slug not in self.accessible_slugs:
             self.accessible_slugs.append(slug)
-        return {
+        response = {
             **detail,
             "git_username": "owner",
             "git_credential": {
@@ -60,31 +72,40 @@ class FakeClient:
                 "token_hint": "12345678",
             },
         }
+        self.created_by_slug[slug] = response
+        return response
 
     def list_accessible_apps(self) -> dict:
         self.accessible_calls += 1
         return {
             "apps": [
                 {
-                    "app_id": self.apps[slug]["app_id"],
-                    "slug": slug,
-                    "title": self.apps[slug]["title"],
-                    "status": self.apps[slug]["status"],
+                    "app_id": detail["app_id"],
+                    "slug": detail["slug"],
+                    "title": detail["title"],
+                    "status": detail["status"],
                 }
-                for slug in self.accessible_slugs
+                for detail in self.apps.values()
             ]
         }
 
-    def get_app(self, slug: str) -> dict:
-        return dict(self.apps[slug])
+    def get_app(self, app_id: str) -> dict:
+        self.detail_calls.append(app_id)
+        return dict(self.apps[app_id])
 
-    def get_git_config(self, slug: str) -> dict:
+    def get_git_config(self, app_id: str) -> dict:
+        self.git_calls.append(app_id)
         return {
-            "repo_url": _repo_url(slug),
+            "app_id": app_id,
+            "repo_url": self.apps[app_id]["repo_url"],
             "default_branch": "master",
             "username": "owner",
             "bound": True,
         }
+
+    def preflight_git_bind(self, app_id: str) -> dict:
+        self.preflight_calls.append(app_id)
+        return {"repository_empty": True}
 
     def issue_git_credential(self, *, rotate: bool) -> dict:
         self.issue_calls.append(rotate)
@@ -110,13 +131,31 @@ class FakeCredentialStore:
 
 
 class FakeGit:
-    def __init__(self, *, pushed: bool = True) -> None:
+    def __init__(self, *, pushed: bool = True, credential_valid: bool = True) -> None:
         self.init_calls: list[tuple[Path, dict]] = []
         self.push_calls: list[tuple[Path, dict]] = []
+        self.probe_calls: list[tuple[Path, dict]] = []
+        self.auth_probe_calls: list[tuple[Path, dict]] = []
+        self.initialized_roots: set[Path] = set()
         self.pushed = pushed
+        self.credential_valid = credential_valid
+
+    def origin_matches(self, root, **kwargs):
+        return root in self.initialized_roots
+
+    def probe_remote_branch(self, root, **kwargs):
+        self.probe_calls.append((root, kwargs))
+        if not self.credential_valid:
+            raise AppGitError("GIT-002", "invalid credential")
+        return "a" * 40
+
+    def probe_remote_branch_with_basic_auth(self, root, **kwargs):
+        self.auth_probe_calls.append((root, kwargs))
+        return "a" * 40
 
     def initialize(self, root, **kwargs):
         self.init_calls.append((root, kwargs))
+        self.initialized_roots.add(root)
         return {
             "git_created": len(self.init_calls) == 1,
             "remote_branch": "master",
@@ -144,9 +183,9 @@ def _manager(
     )
 
 
-def _write_manifest(root: Path, *, name: str = "template-app", title: str = "示例应用") -> None:
+def _write_manifest(root: Path, *, app_id: str = "Tm123", title: str = "示例应用") -> None:
     (root / "app.yaml").write_text(
-        f"apiVersion: apps.aukeys/v1\nname: {name}\ntitle: {title}\nruntime: fastapi\n",
+        f"apiVersion: apps.aukeys/v1\napp_id: {app_id}\ntitle: {title}\nruntime: fastapi\n",
         encoding="utf-8",
     )
 
@@ -161,6 +200,7 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     result = manager.create_app("新看板", path=tmp_path)
 
     assert len(client.create_payloads) == 1
+
     payload = client.create_payloads[0]
     assert payload["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert "runtime" not in payload
@@ -172,11 +212,12 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     binding_payload = json.loads(
         (tmp_path / ".opscli" / "app.json").read_text(encoding="utf-8")
     )
-    assert binding_payload["schema_version"] == 3
+    assert binding_payload["schema_version"] == 4
     assert "template_repo_url" not in binding_payload
     assert result["app_name"] == "新看板"
     manifest = (tmp_path / "app.yaml").read_text(encoding="utf-8")
-    assert f'name: "{result["slug"]}"' in manifest
+    assert f'app_id: "{result["app_id"]}"' in manifest
+    assert "\nname:" not in manifest
     assert 'title: "新看板"' in manifest
     assert "runtime: fastapi" in manifest
 
@@ -197,10 +238,11 @@ def test_create_default_path_reuses_existing_binding(
     BindingStore().save(
         root,
         SiteBinding(
-            app_id="app-1",
+            app_id="Ab123",
             app_name="销售看板",
             slug="sales-dashboard",
             repo_url=_repo_url("sales-dashboard"),
+            apphub_url="https://apphub.example/api/v1",
         ),
     )
     _write_manifest(root)
@@ -210,9 +252,10 @@ def test_create_default_path_reuses_existing_binding(
     result = _manager(client, FakeGit()).create_app("sales-dashboard")
 
     assert client.create_payloads == []
-    assert result["app_id"] == "app-1"
+    assert result["app_id"] == "Ab123"
     manifest = (root / "app.yaml").read_text(encoding="utf-8")
-    assert 'name: "sales-dashboard"' in manifest
+    assert 'app_id: "Ab123"' in manifest
+    assert "\nname:" not in manifest
     assert 'title: "销售看板"' in manifest
 
 
@@ -222,9 +265,9 @@ def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> 
     client = FakeClient()
     git = FakeGit()
 
-    result = _manager(client, git).init_git(app_root)
+    result = _manager(client, git).init_git(app_root, app_id="Ab123")
 
-    assert client.accessible_calls == 1
+    assert client.accessible_calls == 0
     assert client.create_payloads == []
     assert result["slug"] == "sales-dashboard"
     assert git.init_calls[0][1] == {
@@ -232,10 +275,11 @@ def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> 
         "branch": "master",
     }
     assert result["default_branch"] == "master"
-    assert BindingStore().load(app_root).schema_version == 3
+    assert BindingStore().load(app_root).schema_version == 4
+    assert client.preflight_calls == ["Ab123"]
 
 
-def test_init_discovers_application_identity_from_app_yaml(tmp_path: Path) -> None:
+def test_init_requires_id_even_when_app_yaml_matches(tmp_path: Path) -> None:
     app_root = tmp_path / "local-worktree"
     app_root.mkdir()
     (app_root / "app.yaml").write_text(
@@ -245,14 +289,16 @@ def test_init_discovers_application_identity_from_app_yaml(tmp_path: Path) -> No
     client = FakeClient()
     git = FakeGit()
 
-    result = _manager(client, git).init_git(app_root)
+    with pytest.raises(AppProjectError, match="未绑定"):
+        _manager(client, git).init_git(app_root)
 
     assert client.create_payloads == []
-    assert result["slug"] == "sales-dashboard"
-    assert result["app_name"] == "销售看板"
+    assert client.detail_calls == []
+    assert client.accessible_calls == 0
+    assert git.init_calls == []
 
 
-def test_init_creates_application_when_no_remote_match(tmp_path: Path) -> None:
+def test_init_without_binding_does_not_create(tmp_path: Path) -> None:
     app_root = tmp_path / "inventory-dashboard"
     app_root.mkdir()
     client = FakeClient()
@@ -260,26 +306,24 @@ def test_init_creates_application_when_no_remote_match(tmp_path: Path) -> None:
     git = FakeGit()
     credentials = FakeCredentialStore()
 
-    result = _manager(client, git, credentials).init_git(app_root)
+    with pytest.raises(AppProjectError, match="未绑定"):
+        _manager(client, git, credentials).init_git(app_root, app_slug="inventory-dashboard")
 
-    assert client.create_payloads[0]["name"] == "inventory-dashboard"
-    assert result["slug"] == "inventory-dashboard"
-    assert client.issue_calls == [True]
-    assert credentials.saved[0]["token"] == "rotated-secret"
-    assert git.init_calls[0][1] == {
-        "repo_url": _repo_url("inventory-dashboard"),
-        "branch": "master",
-    }
+    assert client.create_payloads == []
+    assert client.accessible_calls == 0
+    assert client.issue_calls == []
+    assert credentials.saved == []
+    assert git.init_calls == []
 
 
-def test_init_migrates_legacy_binding_without_template_fields(tmp_path: Path) -> None:
+def test_init_rejects_legacy_binding_even_with_explicit_id(tmp_path: Path) -> None:
     target = tmp_path / ".opscli" / "app.json"
     target.parent.mkdir()
     target.write_text(
         json.dumps(
             {
                 "schema_version": 2,
-                "app_id": "app-1",
+                "app_id": "Ab123",
                 "site_name": "销售看板",
                 "slug": "sales-dashboard",
                 "repo_url": "https://gitea.example/legacy/apphub.git",
@@ -291,38 +335,383 @@ def test_init_migrates_legacy_binding_without_template_fields(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    _manager(FakeClient(), FakeGit()).init_git(tmp_path)
+    client = FakeClient()
+    git = FakeGit()
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).init_git(tmp_path, app_id="Ab123")
 
-    migrated = json.loads(target.read_text(encoding="utf-8"))
-    assert migrated["schema_version"] == 3
-    assert migrated["repo_url"] == _repo_url("sales-dashboard")
-    assert "template_repo_url" not in migrated
-    assert "template_branch" not in migrated
+    assert caught.value.code == "APP-BINDING-VERSION"
+    assert client.detail_calls == []
+    assert git.init_calls == []
 
 
 def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     BindingStore().save(
         tmp_path,
         SiteBinding(
-            app_id="app-1",
+            app_id="Ab123",
             app_name="销售看板",
             slug="sales-dashboard",
             repo_url=_repo_url("sales-dashboard"),
             git_username="owner",
+            apphub_url="https://apphub.example/api/v1",
         ),
     )
+    _write_manifest(tmp_path, app_id="Ab123", title="本地标题")
     client = FakeClient()
     git = FakeGit()
+    git.initialized_roots.add(tmp_path)
     credentials = FakeCredentialStore()
 
     result = _manager(client, git, credentials).push(tmp_path, message="优化首页")
 
-    assert client.issue_calls == [True]
-    assert credentials.saved[0]["token"] == "rotated-secret"
-    assert result["credential_refreshed"] is True
-    assert result["credential_rotated"] is True
+    assert client.issue_calls == []
+    assert client.preflight_calls == []
+    assert credentials.saved == []
+    assert result["credential_refreshed"] is False
+    assert result["credential_rotated"] is False
     assert git.push_calls[0][1]["message"] == "优化首页"
     assert git.push_calls[0][1]["branch"] == "master"
     assert "release_id" not in result
     assert "version" not in result
     assert result["message"] == "源码已推送到远端仓库。"
+    assert "title: 本地标题" in (tmp_path / "app.yaml").read_text(encoding="utf-8")
+
+
+def test_push_never_rotates_invalid_bound_credential(tmp_path: Path) -> None:
+    BindingStore().save(
+        tmp_path,
+        SiteBinding(
+            app_id="Ab123",
+            app_name="销售看板",
+            slug="sales-dashboard",
+            repo_url=_repo_url("sales-dashboard"),
+            git_username="owner",
+            apphub_url="https://apphub.example/api/v1",
+        ),
+    )
+    _write_manifest(tmp_path, app_id="Ab123")
+    client = FakeClient()
+    git = FakeGit(credential_valid=False)
+    git.initialized_roots.add(tmp_path)
+
+    with pytest.raises(AppGitError) as caught:
+        _manager(client, git).push(tmp_path, message="优化首页")
+
+    assert caught.value.code == "GIT-CREDENTIAL-ROTATION-REQUIRED"
+    assert client.issue_calls == []
+    assert git.push_calls == []
+
+
+def test_init_rotates_credential_only_when_explicit(tmp_path: Path) -> None:
+    client = FakeClient()
+    git = FakeGit(credential_valid=False)
+    credentials = FakeCredentialStore()
+
+    result = _manager(client, git, credentials).init_git(
+        tmp_path,
+        app_id="Ab123",
+        rotate_git_credential=True,
+    )
+
+    assert client.issue_calls == [True]
+    assert credentials.saved[0]["token"] == "rotated-secret"
+    assert git.auth_probe_calls[0][1]["token"] == "rotated-secret"
+    assert result["credential_refreshed"] is True
+    assert result["credential_rotated"] is True
+
+
+def test_preflight_failure_keeps_binding_manifest_and_git_unchanged(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.preflight_git_bind = lambda app_id: (_ for _ in ()).throw(
+        AppProjectError("GIT-BIND-CONFLICT", "remote is not empty")
+    )
+    git = FakeGit()
+    credentials = FakeCredentialStore()
+    _write_manifest(tmp_path)
+    manifest_before = (tmp_path / "app.yaml").read_bytes()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git, credentials).init_git(tmp_path, app_id="Ab123")
+
+    assert caught.value.code == "GIT-BIND-CONFLICT"
+    assert not BindingStore().is_bound(tmp_path)
+    assert (tmp_path / "app.yaml").read_bytes() == manifest_before
+    assert credentials.saved == []
+    assert git.init_calls == []
+
+
+def test_issued_credential_failure_keeps_local_project_unchanged(tmp_path: Path) -> None:
+    client = FakeClient()
+    git = FakeGit(credential_valid=False)
+    credentials = FakeCredentialStore()
+
+    def fail_auth_probe(root, **kwargs):
+        raise AppGitError("GIT-002", "issued credential rejected")
+
+    git.probe_remote_branch_with_basic_auth = fail_auth_probe
+    _write_manifest(tmp_path)
+    manifest_before = (tmp_path / "app.yaml").read_bytes()
+
+    with pytest.raises(AppGitError) as caught:
+        _manager(client, git, credentials).init_git(
+            tmp_path,
+            app_id="Ab123",
+            rotate_git_credential=True,
+        )
+
+    assert caught.value.code == "GIT-002"
+    assert not BindingStore().is_bound(tmp_path)
+    assert (tmp_path / "app.yaml").read_bytes() == manifest_before
+    assert credentials.saved == []
+    assert git.init_calls == []
+
+
+def test_same_slug_and_case_sensitive_ids_keep_repositories_separate(tmp_path: Path) -> None:
+    """同名应用只按 ID 读写，大小写不同也不能共享仓库。"""
+    client = FakeClient()
+    client.apps["ab123"] = {
+        **client.apps["Ab123"], "app_id": "ab123", "repo_url": _repo_url("second-repo"),
+    }
+    git = FakeGit()
+    manager = _manager(client, git)
+    for index, app_id in enumerate(("Ab123", "ab123")):
+        # Windows 目录不区分大小写，使用独立目录验证 ID 大小写隔离。
+        root = tmp_path / f"project-{index}"
+        root.mkdir()
+        _write_manifest(root)
+        manager.init_git(root, app_id=app_id)
+        manager.push(root, message=f"修改 {app_id}")
+        assert BindingStore().load(root).app_id == app_id
+    assert [call[1]["repo_url"] for call in git.push_calls] == [
+        _repo_url("sales-dashboard"), _repo_url("second-repo"),
+    ]
+    assert set(client.detail_calls) == {"Ab123", "ab123"}
+    assert client.git_calls == ["Ab123", "Ab123", "ab123", "ab123"]
+    assert client.accessible_calls == 0
+
+
+@pytest.mark.parametrize("remote_id", [None, "wrong", "ab123"])
+def test_wrong_or_missing_remote_id_never_changes_local_state(tmp_path: Path, remote_id) -> None:
+    """返回缺 ID 或另一 ID 时，在修改文件、凭据和 Git 前拒绝。"""
+    client = FakeClient()
+    binding = SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+        apphub_url=client.api_base_url
+    )
+    target = BindingStore().save(tmp_path, binding)
+    before = target.read_bytes()
+    _write_manifest(tmp_path, app_id="Ab123")
+    manifest = (tmp_path / "app.yaml").read_bytes()
+    client.apps["Ab123"]["app_id"] = remote_id
+    git = FakeGit()
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="修改")
+    assert caught.value.code == "APPHUB-PROTOCOL"
+    assert target.read_bytes() == before
+    assert (tmp_path / "app.yaml").read_bytes() == manifest
+    assert git.init_calls == git.push_calls == client.git_calls == []
+
+
+def test_push_missing_binding_does_not_contact_remote(tmp_path: Path) -> None:
+    """push 缺绑定时不得隐式登记应用。"""
+    client = FakeClient()
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, FakeGit()).push(tmp_path, message="修改")
+    assert caught.value.code == "APP-NOT-BOUND"
+    assert client.detail_calls == client.create_payloads == []
+
+
+def test_push_requires_manifest_before_remote_or_git(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="修改")
+
+    assert caught.value.code == "APP-MANIFEST-NOT-FOUND"
+    assert client.detail_calls == client.git_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+@pytest.mark.parametrize(
+    ("content", "code"),
+    (
+        ("apiVersion: apps.aukeys/v1\napp_id: Cd456\n", "APP-IDENTITY-MISMATCH"),
+        (
+            "apiVersion: apps.aukeys/v1\napp_id: Ab123\nname: sales-dashboard\n",
+            "APP-MANIFEST-LEGACY-NAME",
+        ),
+    ),
+)
+def test_push_rejects_invalid_manifest_before_remote_or_git(
+    tmp_path: Path,
+    content: str,
+    code: str,
+) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    (tmp_path / "app.yaml").write_text(content, encoding="utf-8")
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="修改")
+
+    assert caught.value.code == code
+    assert client.detail_calls == client.git_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_create_timeout_reuses_local_intent_and_server_slug_idempotency(tmp_path: Path) -> None:
+    """本地 UUID 仅保护创建意图，服务端按 owner 和 slug 幂等重入。"""
+    client = FakeClient()
+    original = client.create_app
+    observed_keys = []
+
+    def timeout_after_create(payload):
+        state = json.loads(
+            (tmp_path / ".opscli" / "creation.json").read_text(encoding="utf-8")
+        )
+        observed_keys.append(state["key"])
+        original(payload)
+        raise TimeoutError("响应丢失")
+
+    client.create_app = timeout_after_create
+    with pytest.raises(TimeoutError):
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    client.create_app = original
+    result = _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    assert len(client.apps) == 2
+    state = json.loads((tmp_path / ".opscli" / "creation.json").read_text(encoding="utf-8"))
+    assert observed_keys == [state["key"]]
+    assert state["completed"] is True
+    assert state["app_id"] == result["app_id"]
+    assert "secret" not in json.dumps(state)
+
+
+@pytest.mark.parametrize("changed", ["request", "scope"])
+def test_pending_create_rejects_changed_request_or_scope(tmp_path: Path, changed: str) -> None:
+    """失败创建的请求内容、账号或环境变化时不能复用键发送。"""
+    client = FakeClient()
+    def fail(payload):
+        raise TimeoutError("发送失败")
+    client.create_app = fail
+    with pytest.raises(TimeoutError):
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    if changed == "scope":
+        client.scope = "production-owner-2"
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, FakeGit()).create_app("不同名称" if changed == "request" else "新应用", path=tmp_path)
+    assert caught.value.code == "APP-CREATE-CONFLICT"
+
+
+def test_new_directories_same_slug_reenter_same_server_application(tmp_path: Path) -> None:
+    """不同目录有独立本地意图，但同 owner/slug 由服务端返回同一应用。"""
+    client = FakeClient()
+    manager = _manager(client, FakeGit())
+    a = manager.create_app("同名应用", path=tmp_path / "a")
+    b = manager.create_app("同名应用", path=tmp_path / "b")
+    assert a["slug"] == b["slug"]
+    assert a["app_id"] == b["app_id"]
+    assert a["repo_url"] == b["repo_url"]
+    state_a = json.loads((tmp_path / "a" / ".opscli" / "creation.json").read_text())
+    state_b = json.loads((tmp_path / "b" / ".opscli" / "creation.json").read_text())
+    assert state_a["key"] != state_b["key"]
+
+
+@pytest.mark.parametrize("legacy_id", [None, "sales-dashboard", "sales"])
+def test_explicit_id_does_not_replace_untrusted_binding(tmp_path: Path, legacy_id) -> None:
+    """只要 binding 文件存在且非法，即使显式提供 ID 也必须停止。"""
+    client = FakeClient()
+    payload = SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+        apphub_url=client.api_base_url
+    ).to_dict()
+    payload["app_id"] = legacy_id
+    payload["site_id"] = "legacy-id"
+    if legacy_id == "sales":
+        payload["slug"] = "sales"
+    target = tmp_path / ".opscli" / "app.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    manager = _manager(client, FakeGit())
+    with pytest.raises(AppProjectError):
+        manager.init_git(tmp_path)
+    assert client.detail_calls == []
+    with pytest.raises(AppProjectError):
+        manager.init_git(tmp_path, app_id="Ab123")
+    assert client.detail_calls == []
+
+
+def test_bound_project_rejects_another_environment_before_network(tmp_path: Path) -> None:
+    """同一公开 ID 出现在另一控制面时，不覆盖原仓库。"""
+    client = FakeClient()
+    manager = _manager(client, FakeGit())
+    manager.init_git(tmp_path, app_id="Ab123")
+    client.api_base_url = "https://production.example/api/v1"
+    client.detail_calls.clear()
+    with pytest.raises(AppProjectError) as caught:
+        manager.init_git(tmp_path, app_id="Ab123")
+    assert caught.value.code == "APP-BINDING-ENVIRONMENT"
+    assert client.detail_calls == []
+
+
+def test_binding_without_environment_is_rejected_before_network(tmp_path: Path) -> None:
+    """schema v4 缺少环境标识时立即停止，不允许显式恢复覆盖。"""
+    client = FakeClient()
+    payload = SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).to_dict()
+    target = tmp_path / ".opscli" / "app.json"
+    target.parent.mkdir()
+    target.write_text(json.dumps(payload), encoding="utf-8")
+    manager = _manager(client, FakeGit())
+    with pytest.raises(AppProjectError) as caught:
+        manager.init_git(tmp_path, app_id="Ab123")
+    assert caught.value.code == "APP-BINDING-INVALID"
+    assert client.git_calls == []
+
+
+def test_completed_creation_does_not_recreate_after_binding_loss(tmp_path: Path) -> None:
+    """已完成意图丢失绑定时仍拒绝新建，保留明确恢复的 ID。"""
+    client = FakeClient()
+    manager = _manager(client, FakeGit())
+    result = manager.create_app("新应用", path=tmp_path)
+    binding_path = tmp_path / ".opscli" / "app.json"
+    binding_path.rename(binding_path.with_suffix(".backup"))
+    with pytest.raises(AppProjectError) as caught:
+        manager.create_app("新应用", path=tmp_path)
+    assert caught.value.code == "APP-NOT-BOUND"
+    assert result["app_id"] in str(caught.value)
+    assert len(client.create_payloads) == 1
+
+
+@pytest.mark.parametrize("config_id", [None, "ab123"])
+def test_git_config_requires_matching_id_before_local_changes(tmp_path: Path, config_id) -> None:
+    """Git 配置缺失 ID 或指向另一应用时不写绑定、不碰仓库。"""
+    client = FakeClient()
+    original = client.get_git_config
+    client.get_git_config = lambda app_id: {**original(app_id), "app_id": config_id}
+    git = FakeGit()
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).init_git(tmp_path, app_id="Ab123")
+    assert caught.value.code == "APPHUB-PROTOCOL"
+    assert not BindingStore().is_bound(tmp_path)
+    assert git.init_calls == []
+
+
+def test_confirmed_id_equal_to_slug_remains_usable(tmp_path: Path) -> None:
+    """明确恢复后的五位同值 ID/slug 不再被当成历史 fallback。"""
+    client = FakeClient()
+    client.apps["sales"] = {**client.apps["Ab123"], "app_id": "sales", "slug": "sales"}
+    manager = _manager(client, FakeGit())
+    _write_manifest(tmp_path)
+    manager.init_git(tmp_path, app_id="sales")
+    assert manager.push(tmp_path, message="修改")["app_id"] == "sales"

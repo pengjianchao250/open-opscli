@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import stat
 import sys
 from collections.abc import Callable
@@ -153,6 +154,7 @@ def build_dual_endpoint_app(
     api_key: str | None = None,
     auth_verify_url: str | None = None,
     app_wrapper: Callable[[Any], Any] | None = None,
+    internal_api_key: str | None = None,
 ) -> Any:
     """构建同时暴露 SSE 与 Streamable HTTP 的鉴权 ASGI 应用。"""
     from starlette.applications import Starlette
@@ -177,6 +179,8 @@ def build_dual_endpoint_app(
         combined,
         api_key=api_key,
         auth_verify_url=auth_verify_url,
+        protected_path_prefixes=("/mcp", "/sse") if app_wrapper is not None else None,
+        internal_api_key=internal_api_key,
     )
 
 
@@ -200,6 +204,20 @@ def _load_or_create_api_key(filename: str) -> str:
     key_path.write_text(api_key, encoding="utf-8")
     key_path.chmod(stat.S_IRUSR | stat.S_IWUSR)
     return api_key
+
+
+def _load_api_key_file_from_env(env_name: str | None) -> str | None:
+    """Load an optional service credential from a protected file path."""
+    if not env_name:
+        return None
+    configured = os.environ.get(env_name, "").strip()
+    if not configured:
+        return None
+    path = Path(configured).expanduser()
+    value = path.read_text(encoding="utf-8").strip()
+    if not value:
+        raise ValueError(f"{env_name} points to an empty credential file")
+    return value
 
 
 def _print_http_startup_banner(
@@ -231,6 +249,7 @@ def run_mcp_app(
     catalog: list[dict],
     api_key_filename: str = "mcp_api_key",
     app_wrapper: Callable[[Any], Any] | None = None,
+    internal_api_key_file_env: str | None = None,
 ) -> None:
     """按统一参数解析规则运行 MCP 服务。"""
     from opscli.auth.config import get_ops_url
@@ -275,6 +294,7 @@ def run_mcp_app(
             _logger.warning("无法从 config.ini 读取 ops_url: %s", exc)
 
     api_key = None if auth_verify_url else _load_or_create_api_key(api_key_filename)
+    internal_api_key = _load_api_key_file_from_env(internal_api_key_file_env)
     _print_http_startup_banner(
         service_name=service_name,
         host=host,
@@ -293,6 +313,7 @@ def run_mcp_app(
             api_key=api_key,
             auth_verify_url=auth_verify_url,
             app_wrapper=app_wrapper,
+            internal_api_key=internal_api_key,
         )
     else:
         transport_name = "sse" if transport_val == "sse" else "streamable-http"
@@ -304,6 +325,8 @@ def run_mcp_app(
             sub_app,
             api_key=api_key,
             auth_verify_url=auth_verify_url,
+            protected_path_prefixes=("/mcp", "/sse") if app_wrapper is not None else None,
+            internal_api_key=internal_api_key,
         )
 
     async def _serve() -> None:

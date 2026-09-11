@@ -15,6 +15,7 @@ from opscli.config import CONFIG_DIR
 from opscli.mcp.quota import ENV_SQLITE_PATH
 from opscli.seller_sprite.services.account_bindings import DEFAULT_BINDING_DB_PATH
 from opscli.seller_sprite.config import ENV_QUEUE_DB_PATH, resolve_queue_db_path
+from opscli.shared.collection_storage.config import MySqlSettings, load_storage_settings
 
 _ENV_PREFIX = "OPSCLI_COLLECTOR_MONITOR_"
 # 项目内默认机器人文件随包分发；显式环境配置仍具有最高优先级。
@@ -43,6 +44,7 @@ class MonitorSettings:
     scenario_test_enabled: bool
     account_binding_db_path: Path | None = None
     quota_db_path: Path | None = None
+    telemetry_mysql: MySqlSettings | None = None
 
 
 def load_settings(
@@ -102,6 +104,11 @@ def load_settings(
         quota_db_path=Path(
             str(env.get(ENV_SQLITE_PATH) or base_dir / "mcp_quota" / "quota.sqlite3")
         ).expanduser(),
+        telemetry_mysql=load_storage_settings(
+            "collector-monitor",
+            environ=env,
+            config_dir=base_dir,
+        ).mysql,
     )
     return validate_settings(settings)
 

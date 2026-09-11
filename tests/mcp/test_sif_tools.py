@@ -104,6 +104,53 @@ def test_sif_run_accepts_asins_list_for_compare(monkeypatch):
     assert DummyManager.last_request.sections == ["重点广告词"]
 
 
+def test_sif_run_returns_json_fallback_for_failed_upload(monkeypatch):
+    class UploadFailedManager(DummyManager):
+        def run(self, request):
+            result = super().run(request)
+            export = result.exports["traffic_structure_xlsx"]
+            export.url = export.path
+            result.warnings = [
+                {
+                    "stage": "file_upload",
+                    "export_key": "traffic_structure_xlsx",
+                    "message": "upload failed",
+                }
+            ]
+            return result
+
+        def job_status(self, job_id, output_dir=None):
+            return {
+                "job_id": job_id,
+                "feature": "查流量",
+                "site": "US",
+                "traffic_response": {"data": [{"asin": "B01NBNDC1T", "score": 88}]},
+                "exports": {},
+                "warnings": self.run_warning,
+            }
+
+        run_warning = [
+            {
+                "stage": "file_upload",
+                "export_key": "traffic_structure_xlsx",
+                "message": "upload failed",
+            }
+        ]
+
+    monkeypatch.setattr(
+        "opscli.sif.services.SifServiceManager",
+        lambda **kwargs: UploadFailedManager(**kwargs),
+    )
+
+    result = _run(sif_tools.sif_run(feature="traffic", asin="B01NBNDC1T"))
+
+    assert result["success"] is True
+    fallback = result["data"]["exports"]["traffic_structure_xlsx"]["json_data"]
+    assert fallback["traffic_response"] == {
+        "data": [{"asin": "B01NBNDC1T", "score": 88}]
+    }
+
+
 def test_sif_run_accepts_product_time_machine_keyword(monkeypatch):
     monkeypatch.setattr("opscli.sif.services.SifServiceManager", lambda **kwargs: DummyManager(**kwargs))
 
@@ -148,3 +195,47 @@ def test_sif_export_returns_export_info(monkeypatch):
     assert result["success"] is True
     assert result["data"]["exports"]["traffic_structure_xlsx"]["filename"] == "structure.xlsx"
     assert result["data"]["download_links"][0]["filename"] == "structure.xlsx"
+
+
+def test_sif_export_returns_json_fallback_for_failed_upload(monkeypatch):
+    class UploadFailedManager(DummyManager):
+        def job_status(self, job_id, output_dir=None):
+            return {
+                "job_id": job_id,
+                "feature": "查排名",
+                "site": "US",
+                "list_response": {"data": [{"asin": "B01NBNDC1T", "rank": 12}]},
+                "exports": {
+                    "daily_ranking_xlsx": {
+                        "path": str(Path("output/test-artifacts/job-sif/ranking.xlsx").resolve()),
+                        "filename": "ranking.xlsx",
+                        "url": "file:///ranking.xlsx",
+                    }
+                },
+                "warnings": [
+                    {
+                        "stage": "file_upload",
+                        "export_key": "daily_ranking_xlsx",
+                        "message": "upload failed",
+                    }
+                ],
+            }
+
+        def export(self, job_id, export_key=None, output_dir=None):
+            return self.job_status(job_id, output_dir=output_dir)
+
+    monkeypatch.setattr(
+        "opscli.sif.services.SifServiceManager",
+        lambda **kwargs: UploadFailedManager(**kwargs),
+    )
+
+    result = _run(sif_tools.sif_export("job-sif"))
+
+    assert result["success"] is True
+    fallback = result["data"]["exports"]["daily_ranking_xlsx"]["json_data"]
+    assert fallback["feature"] == "查排名"
+    assert fallback["list_response"] == {
+        "data": [{"asin": "B01NBNDC1T", "rank": 12}]
+    }
+    assert "exports" not in fallback
+    assert "warnings" not in fallback

@@ -10,9 +10,10 @@ import httpx
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from opscli.config import __version__
 from opscli.mcp_client import McpConfigClient, RemoteMcpClient
 
-from .helpers import _err
+from .helpers import _err, _get_session_id
 
 TOTAL_TIMEOUT_SECONDS = 30.0
 
@@ -48,7 +49,11 @@ async def _call_yingyan(tool_name: str, arguments: dict[str, Any]) -> dict[str, 
                 return _proxy_error(tool_name, arguments, exc, unavailable=True)
 
             try:
-                client = RemoteMcpClient(server.url)
+                session_id = _get_session_id()
+                headers = {"X-Opscli-Version": __version__}
+                if session_id:
+                    headers["X-Session-Id"] = session_id
+                client = RemoteMcpClient(server.url, headers=headers)
                 return await client.call_tool(tool_name, _proxy_arguments(arguments))
             except Exception as exc:  # noqa: BLE001
                 return _proxy_error(

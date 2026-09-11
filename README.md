@@ -220,6 +220,8 @@ opscli collector-monitor probe --target queue-source
 
 页面另有“场景测试”Tab，可在显式设置 `OPSCLI_COLLECTOR_MONITOR_SCENARIO_TEST_ENABLED=true` 后提交固定 `keyword-reverse`（关键词反查）真实任务，用于验证 API Key、入队与调度链路。该操作会消耗额度，必须填写页面 API Key 并勾选确认；服务端不接受任意工具或场景，不自动重试，也不会借用服务端 Key 文件，成功返回 `job_id` 供任务 Tab 跟踪。启用时必须同时配置 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_URL`，该地址必须使用 HTTPS 或明确回环 HTTP。
 
+账号 Tab 还会从统一采集 MySQL 的 `mcp_call_events` 读取“今日 MCP 功能调用”，按用户、服务、Tool 和 `executor`/`gateway_proxy` 角色分行展示。鹰眼 PND 以“鹰眼 / `external_pnd`”显示；该区域只记录调用事实，不判断业务成功或失败。未配置统一 MySQL 时仅该区域显示数据源不可用，不影响其他监控功能。
+
 Collector Monitor 默认读取项目内随包分发的企业微信机器人文件；`OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 可覆盖该路径，显式空值可禁用。服务端持久 Collector MCP API Key 仍必须放在权限受限文件中，并通过 `OPSCLI_COLLECTOR_MONITOR_COLLECTOR_MCP_API_KEY_FILE` 配置。页面 `localStorage` 选项只适合受控运维终端，会以当前页面同源脚本可读取的明文形式保存在浏览器 Profile 中，不替代生产 Key 文件。配置 API Key 文件或启用场景测试时，Collector MCP 地址必须使用 HTTPS，仅明确回环地址允许 HTTP；携带密钥的调用不跟随重定向。容量按任务类型计算，并扣除 SQLite 全局运行任务和本实例活跃尝试中的 Generic、Listing、专属任务及其他调度器共享账号占用。默认服务没有应用层认证，不应直接暴露公网；非回环部署必须使用 HTTPS 与运维认证后才能输入或保存页面 Key。
 
 完整配置、部署和判定合同见：

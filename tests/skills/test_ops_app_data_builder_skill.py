@@ -20,6 +20,7 @@ SKILL_MD = SKILL_DIR / "SKILL.md"
 VERSION_FILE = SKILL_DIR / "data" / "VERSION.json"
 CONTRACT_FILE = SKILL_DIR / "references" / "data-layer-contract.md"
 ROUTING_FILE = SKILL_DIR / "references" / "runtime-source-routing.md"
+APPLICATION_GUIDE_FILE = SKILL_DIR / "references" / "ops-dataset-application-guide.md"
 MANIFEST_FILE = TEMPLATES_DIR / "manifest.json"
 
 
@@ -42,11 +43,12 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.7"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.7"}
+    assert frontmatter["metadata"]["version"] == "0.1.11"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.11"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
+    assert APPLICATION_GUIDE_FILE.exists()
 
 
 def test_ops_app_data_builder_has_narrow_project_scope():
@@ -79,7 +81,7 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
         "### 0. 模板初始化门禁",
         ".opscli/app.json",
         "binding 必须包含有效 `app_id/slug`",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         "当前本地分支是 `master`",
         "远端存在 `origin/master`",
         "只有 binding 而没有模板代码",
@@ -115,11 +117,44 @@ def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
         assert required in text
 
 
+def test_ops_app_data_builder_separates_application_routing_from_query_execution():
+    """应用层只判定取数模式和合同状态，查询事实仍来自在线元数据。"""
+    skill = SKILL_MD.read_text(encoding="utf-8")
+    guide = APPLICATION_GUIDE_FILE.read_text(encoding="utf-8")
+    content = "\n".join((skill, guide))
+
+    for required in (
+        "one-off-query",
+        "guided-query",
+        "viewer-live",
+        "viewer-private-persisted",
+        "approved-system-sync",
+        "reference-only",
+        "candidate",
+        "verified",
+        "blocked",
+        "当前在线元数据",
+        "查询组件只用于",
+        "确定性分页",
+        "断点续传",
+        "不生成伪实现",
+    ):
+        assert required in content
+
+    for forbidden in (
+        "ops-dataset-source-catalog.json",
+        "ops-dataset-field-catalog.json",
+        "运营系统数据集.xlsx",
+    ):
+        assert forbidden not in content
+
+
 def test_ops_app_data_builder_defines_safe_runtime_source_routing():
     """OPS、Keepa 和 SellerSprite 必须使用各自真实且受支持的运行时边界。"""
     skill = SKILL_MD.read_text(encoding="utf-8")
     routing = ROUTING_FILE.read_text(encoding="utf-8")
-    content = "\n".join((skill, routing))
+    guide = APPLICATION_GUIDE_FILE.read_text(encoding="utf-8")
+    content = "\n".join((skill, routing, guide))
 
     for required in (
         "viewer-live",
@@ -131,11 +166,17 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         "app.yaml",
         "opscli.datasets",
         "FakeGateway",
-        "OPSCLI_API_BASE_URL",
-        "OPSCLI_API_KEY",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "QueryCredentials",
+        "get_query_credentials",
+        "X-User-Email",
+        "X-Session-Id",
+        'AuthClient.build_session_headers("ops")',
+        'AuthClient.build_request_auth("ops")',
         "https://ops.mcp.xenkee.com",
+        "https://mcp.ops.aukeyit.com",
         "纯根域名",
-        "同一个 `ThirdPartyApiClient`",
+        "请求级 `ThirdPartyApiClient`",
         'base_url.rstrip("/") + path',
         "/api/v1/keepa/run",
         "页面运行时只调用 `POST /api/v1/keepa/run`",
@@ -146,12 +187,18 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         "不生成或引用 `opscli.app.sdk.OpsClient`",
         "不兼容旧适配器",
         "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议",
+        "经过批准的 OPS 系统运行时适配器",
+        "不得保存或复用访问者 `X-Ops-Token`",
+        "UNIQUE(owner_user_id, provider, request_hash)",
     ):
         assert required in content
 
+    assert "OPSCLI_THIRD_PARTY_DATA_API_KEY" not in content
     assert "/api/v1/keepa/" + "scenarios" not in content
-    assert "不引入 `OPSCLI_SELLER_SPRITE_E2E_BASE_URL`" in content
-    assert "`OPSCLI_SELLER_SPRITE_E2E_API_KEY`" in content
+    assert "OPSCLI_" + "API_BASE_URL" not in content
+    assert "OPSCLI_" + "API_KEY" not in content
+    assert "OPSCLI_SELLER_SPRITE_" + "E2E_BASE_URL" not in content
+    assert "OPSCLI_SELLER_SPRITE_" + "E2E_API_KEY" not in content
     assert "OPSCLI_KEEPA_BASE_URL" not in content
     assert "OPSCLI_SELLER_SPRITE_BASE_URL" not in content
 
@@ -177,7 +224,7 @@ def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
         "owner_user_id",
         "third_party_source_snapshot",
         "third_party_async_job",
-        "UNIQUE(provider, request_hash)",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "XLS/XLSX",
         "第一阶段只生成 Markdown 规范，不新增运行时 YAML",
         "Pydantic Schema 与前端类型的一致性",
@@ -193,10 +240,16 @@ def test_ops_app_data_builder_contract_example_is_valid_json():
     assert example["product_key"] == "seller_sprite_competitor_analysis"
     assert example["source"] == "seller_sprite"
     assert example["execution_mode"] == "async-job"
+    assert example["source_execution"]["auth"] == "query-credentials"
+    assert example["source_execution"]["auth_modes"] == ["viewer", "session", "local"]
     assert example["source_execution"]["success_state"] == "succeeded"
     assert example["task_storage"]["table"] == "third_party_async_job"
     assert example["task_storage"]["active_states"] == ["queued", "running"]
-    assert example["source_storage"]["storage_scope"] == "site-shared"
+    assert example["task_storage"]["owner_key"] == "owner_user_id"
+    assert example["task_storage"]["unique_key"] == ["owner_user_id", "provider", "request_hash"]
+    assert example["source_storage"]["storage_scope"] == "user-private"
+    assert example["source_storage"]["owner_key"] == "owner_user_id"
+    assert example["source_storage"]["unique_key"] == ["owner_user_id", "provider", "request_hash"]
     assert example["result_storage"]["owner_key"] == "owner_user_id"
     assert example["site_api"].startswith("GET /api/")
 
@@ -212,7 +265,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.7"
+    assert templates[SKILL_NAME]["version"] == "v0.1.11"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))
@@ -224,6 +277,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
         "agents/openai.yaml",
         "references/data-layer-contract.md",
         "references/runtime-source-routing.md",
+        "references/ops-dataset-application-guide.md",
     ):
         assert (installed_path / relative).exists()
 
@@ -277,4 +331,5 @@ def test_ops_app_data_builder_does_not_embed_sensitive_or_local_values():
 
     urls = set(re.findall(r"https://[^\s`<>]+", content))
     assert urls
-    assert all(url.startswith("https://ops.mcp.xenkee.com") for url in urls)
+    allowed_origins = ("https://ops.mcp.xenkee.com", "https://mcp.ops.aukeyit.com")
+    assert all(url.startswith(allowed_origins) for url in urls)

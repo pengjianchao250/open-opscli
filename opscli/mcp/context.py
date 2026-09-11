@@ -144,6 +144,26 @@ def get_current_user_email() -> str | None:
     return None
 
 
+def get_current_session_id() -> str | None:
+    """Return the AppHub session attached to the current trusted request."""
+    ctx = mcp_request_ctx.get()
+    if ctx:
+        value = str(ctx.get("session_id") or "").strip()
+        if value:
+            return value
+    return None
+
+
+def get_current_jwt() -> str | None:
+    """Return the OPS JWT attached to the current trusted request."""
+    ctx = mcp_request_ctx.get()
+    if ctx:
+        value = str(ctx.get("jwt") or "").strip()
+        if value:
+            return value
+    return None
+
+
 def get_current_client_name() -> str | None:
     """从 MCP initialize 握手中读取客户端 Agent 名称（clientInfo.name）。
 

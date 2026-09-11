@@ -52,7 +52,7 @@ Keepa、SellerSprite 等第三方查询返回的原始业务数据使用：
 storage_scope = site-shared
 ```
 
-相同第三方查询条件只在 SQLite 中保留一份共享快照，所有站点用户均通过 FastAPI 业务 API 使用该快照。该规则的当前前提是站点后端使用同一组 `OPSCLI_API_BASE_URL` 和 `OPSCLI_API_KEY` 调用第三方服务；站点访问用户身份与上游 API Key 身份是两个不同概念。
+相同第三方查询条件只在 SQLite 中保留一份共享快照，所有站点用户均通过 FastAPI 业务 API 使用该快照。该规则的当前前提是站点后端使用同一组 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 和 `OPSCLI_THIRD_PARTY_DATA_API_KEY` 调用第三方服务；站点访问用户身份与上游 API Key 身份是两个不同概念。
 
 共享的是清理后的 JSON 业务 payload，不包含用户身份、API Key、完整鉴权头、Session、JWT、Cookie、本地路径或其他非业务调用上下文。XLS/XLSX 文件、二进制内容和临时下载 URL 不作为共享业务快照写入 SQLite。
 
@@ -115,7 +115,7 @@ Keepa：站点后端 Secret → /api/v1/keepa/run
 SellerSprite：站点后端 Secret → 提交异步任务 → 保存 job_id → 查询状态 → 读取结果
 ```
 
-Keepa 和 SellerSprite 共用后端 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，通过 `Authorization: Bearer <API_KEY>` 调用。站点访问用户身份只用于本地用户数据归属，不传给第三方 API 作为调用凭证。
+Keepa 和 SellerSprite 共用后端 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，通过 `Authorization: Bearer <API_KEY>` 调用。站点访问用户身份只用于本地用户数据归属，不传给第三方 API 作为调用凭证。
 
 ### 4.2 应用数据读取
 
@@ -281,7 +281,7 @@ Keepa 原始取数使用站点后端 Secret，不使用用户 OPS 权限：
 
 ```text
 FastAPI
-→ OPSCLI_API_BASE_URL + OPSCLI_API_KEY
+→ OPSCLI_THIRD_PARTY_DATA_API_BASE_URL + OPSCLI_THIRD_PARTY_DATA_API_KEY
 → /api/v1/keepa/run
 ```
 
@@ -293,7 +293,7 @@ FastAPI
 
 ### 7.3 SellerSprite
 
-SellerSprite 已提供正式异步 REST API，站点后端与 Keepa 共用 `OPSCLI_API_BASE_URL` 和 `OPSCLI_API_KEY`：
+SellerSprite 已提供正式异步 REST API，站点后端与 Keepa 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 和 `OPSCLI_THIRD_PARTY_DATA_API_KEY`：
 
 ```text
 场景确认：GET /api/v1/seller-sprite/scenarios
@@ -525,7 +525,7 @@ Keepa 合同使用 `execution_mode=sync-request`、`task_storage=null`，并以 
 1. OPS 按当前用户权限取数，原始和加工结果持久化时按当前用户隔离；
 2. Keepa 运行时只调用 `POST /api/v1/keepa/run`，场景接口仅用于开发期合同验证；
 3. SellerSprite 接入正式异步 REST，区分普通 jobs 和 Listing Analysis 专用接口；
-4. Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 E2E 环境变量别名；
+4. Keepa 和 SellerSprite 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不兼容旧环境变量别名；
 5. SellerSprite 保存并复用 pending `job_id`，成功 JSON 结果写共享快照；
 6. OPS 与第三方混合来源的最终加工结果按当前用户隔离；
 7. 补充统一错误映射、有限重试、日志脱敏和有效快照保护。
@@ -593,7 +593,7 @@ owner_user_email：可选审计字段
 
 1. Skill 明确 SQLite 仍是正式存储，禁止表述为“用户数据不能写 SQLite”；
 2. OPS 原始数据和基于 OPS 的加工结果持久化时按 `owner_user_id` 隔离；
-3. Keepa 和 SellerSprite 共用 `OPSCLI_API_BASE_URL`、`OPSCLI_API_KEY`，不引入 `OPSCLI_SELLER_SPRITE_E2E_*` 别名；
+3. Keepa 和 SellerSprite 共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`，不兼容旧环境变量别名；
 4. Keepa 页面运行时只调用 `POST /api/v1/keepa/run`，并同时检查 HTTP 状态码和响应 `success`；
 5. SellerSprite 使用正式异步 REST，普通任务和 Listing Analysis 使用各自正确的提交、状态和结果端点；
 6. Keepa、SellerSprite 场景列表只用于开发期合同验证或新增场景确认，不生成页面运行时动态场景发现；

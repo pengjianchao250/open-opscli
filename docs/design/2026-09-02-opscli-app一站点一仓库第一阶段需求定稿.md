@@ -2,6 +2,7 @@
 
 > **历史方案，已被取代**：2026-09-05 起以 `docs/design/2026-09-05-opscli-app三命令源码交付职责定稿.md` 为准。init 不再拉模板，push 只推送源码且不再自动发布。
 > **分支约定已被取代**：2026-09-07 起新应用统一使用 `master`，以 `docs/design/2026-09-07-opscli-app与建站Skill-master分支统一方案.md` 为准。
+> **应用身份接口已被取代**：2026-09-09 起，应用详情和 Git 配置统一使用大小写敏感的五位 `app_id`，当前路径为 `GET /api/v1/apps/{app_id}` 和 `GET /api/v1/apps/{app_id}/git-config`，不再使用 slug 定位应用。
 
 > 日期：2026-09-02  
 > 环境配置修订：2026-09-03  

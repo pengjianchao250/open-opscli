@@ -1,6 +1,6 @@
 ---
 name: ops-amazon-rufus
-description: Amazon Rufus 默认题库数据与 Agent 编排入口。用于基于 MCP 工具链对 ASIN 商品页进行 Rufus 问答、Listing 诊断、报告读取、回答质量判断、问题改写有限重试、远程授权偏好处理和 headless 后端获取错误恢复。
+description: Amazon Alexa（原 Rufus）默认题库数据与 Agent 编排入口，兼容 Alexa/alexa、Rufus/rufus 名称触发。用于基于 MCP 工具链对 ASIN 商品页进行 Alexa/Rufus 问答、Listing 诊断、报告读取、回答质量判断、问题改写有限重试、远程授权偏好处理和 headless 后端获取错误恢复；不用于 Echo 音箱或智能家居控制。
 ---
 
 # ops-amazon-rufus
@@ -9,12 +9,14 @@ description: Amazon Rufus 默认题库数据与 Agent 编排入口。用于基�
 
 ## 术语约定
 
+Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答、ASIN 或 Listing 诊断场景中使用 Alexa/alexa 或 Rufus/rufus 时，均触发本 Skill，按同一流程处理。Skill 名称仍为 `ops-amazon-rufus`，MCP 工具仍为 `amazon_rufus_*`，CLI 仍为 `opscli amazon-rufus`；下文 Rufus 均兼指 Alexa，不另行查找 `ops-amazon-alexa` 或 `amazon_alexa_*` 入口。
+
 1. 面向用户和 Agent 的流程统一称为“亚马逊 Rufus 登录态”，不得把它描述为普通 Cookie。
 2. 后端接口和工具名仍保留 `platform-cookie` / OPS 平台 Cookie 命名；其 `content` 实际承载亚马逊 Rufus 登录态，当前规范直接保存浏览器 `/rufus/cl/streaming` cURL 命令态。
 
 ## 触发范围
 
-当用户提到 Amazon Listing、listing 商品页、listing 分析或 listing 优化，并且目标是通过 Rufus 对 ASIN 商品页进行问答、诊断、报告或表达风险判断时，使用本 Skill。
+当用户要求通过 Alexa（原 Rufus）或 Rufus 对 Amazon ASIN 商品页进行问答、诊断、报告或表达风险判断时，使用本 Skill；提到 Amazon Listing、listing 商品页、listing 分析或 listing 优化且目标相同时也适用。Alexa 智能音箱、Echo 或智能家居控制不在本 Skill 范围内。
 
 如果用户要求基于卖家精灵采集材料、关键词、高频词、PPC/ABA 数据做 Listing 表达与一致性优化，优先使用 `ops-amazon-listing-analysis`，不要用本 Skill 代替。
 

@@ -1,0 +1,26 @@
+providers = ["node", "python"]
+
+[phases.setup]
+nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
+
+[phases."python:setup"]
+nixpkgsArchive = "23f9169c4ccce521379e602cc82ed873a1f1b52b"
+
+[phases.install]
+cmds = [
+  "...",
+  "npm --prefix frontend ci",
+]
+
+[phases."python:install"]
+cmds = [
+  "...",
+  "python -c \"import opscli.keepa.api.scenarios; import opscli.mcp.tools.keepa\"",
+]
+
+[phases.build]
+cmds = ["npm --prefix frontend run build"]
+dependsOn = ["install", "python:install"]
+
+[start]
+cmd = "uvicorn backend.app:app --host 0.0.0.0 --port 8000"

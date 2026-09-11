@@ -1,5 +1,7 @@
 # opscli app 应用身份文件归一化需求确认稿
 
+> 2026-09-10 合同变更：本文关于 `app.yaml.name` 的设计已被最新模板的 `app.yaml.app_id` 身份合同取代。本文仅保留为历史决策记录，不再作为当前实现依据。
+
 > 日期：2026-09-05  
 > 状态：已确认并完成代码落地  
 > 范围：`opscli/app`、`ops-app-build-spec`、`ops-app-data-builder` 及相关测试和使用文档  
@@ -252,9 +254,9 @@ POST /api/v1/apps 成功
 | --- | --- |
 | 创建应用 | `POST /api/v1/apps` |
 | 查询当前用户创建的应用 | `GET /api/v1/apps` |
-| 查询应用详情 | `GET /api/v1/apps/{slug}` |
+| 查询应用详情 | `GET /api/v1/apps/{app_id}` |
 | 查询当前用户可访问应用 | `GET /api/v1/accessible-apps` |
-| 查询 Git 配置 | `GET /api/v1/apps/{slug}/git-config` |
+| 查询 Git 配置 | `GET /api/v1/apps/{app_id}/git-config` |
 | 签发 Git 凭据 | `POST /api/v1/git/credentials` |
 
 `GET /api/v1/accessible-apps` 与 `GET /api/v1/apps` 职责不同。当前 binding 恢复逻辑使用前者是合理的，不应仅因为存在 `/apps` 列表接口就替换。

@@ -31,6 +31,9 @@ class CollectionSubmission:
     result_path: Path
     started_at: str | None = None
     completed_at: str | None = None
+    cache_key: str | None = None
+    cache_scope: str | None = None
+    result_metadata: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -46,6 +49,8 @@ class CollectionSubmission:
             raise ValueError("data_environment 仅支持 production 或 debug")
         if self.ingestion_mode not in {"live", "backfill"}:
             raise ValueError("ingestion_mode 仅支持 live 或 backfill")
+        if bool(self.cache_key) != bool(self.cache_scope):
+            raise ValueError("cache_key 与 cache_scope 必须同时提供")
         object.__setattr__(
             self, "result_path", Path(self.result_path).expanduser().resolve()
         )
@@ -73,6 +78,15 @@ class CollectionSubmission:
             ),
             completed_at=(
                 str(payload["completed_at"]) if payload.get("completed_at") else None
+            ),
+            cache_key=(str(payload["cache_key"]) if payload.get("cache_key") else None),
+            cache_scope=(
+                str(payload["cache_scope"]) if payload.get("cache_scope") else None
+            ),
+            result_metadata=(
+                dict(payload["result_metadata"])
+                if isinstance(payload.get("result_metadata"), dict)
+                else None
             ),
         )
 

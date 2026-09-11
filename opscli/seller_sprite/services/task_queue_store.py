@@ -199,6 +199,87 @@ class SellerSpriteTaskQueueStore:
             conn.commit()
         return self.get_status(str(request.job_id))
 
+    def enqueue_cached_owned_mcp_run(
+        self,
+        *,
+        request: SellerSpriteScenarioRequest,
+        queue_scope: str,
+        root_dir: Path,
+        user_email: str,
+        source_job_id: str,
+        row_count: int,
+        export_payload: dict[str, Any] | None,
+        account_route: str = ACCOUNT_ROUTE_SHARED_POOL,
+        requested_account_id: str | None = None,
+        requested_account_key: str | None = None,
+    ) -> dict[str, Any]:
+        """原子创建当前用户拥有的缓存成功任务，不发布 Worker 成功事件。"""
+        now = _now_iso()
+        export_json = (
+            json.dumps(export_payload, ensure_ascii=False)
+            if export_payload is not None
+            else None
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_task_queue (
+                    job_id, queue_scope, task_kind, status, request_json, root_dir,
+                    created_at, started_at, finished_at, assigned_account,
+                    worker_key, result_path, row_count, export_json, error_json,
+                    credential_scope, runtime_auth_required, expected_user_email,
+                    account_route, requested_account_id, requested_account_key,
+                    session_id, jwt, progress_stage, progress_at, progress_sequence
+                )
+                VALUES (?, ?, ?, 'succeeded', ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?,
+                        NULL, NULL, 0, NULL, ?, ?, ?, NULL, NULL, 'succeeded', ?, 1)
+                """,
+                (
+                    request.job_id,
+                    queue_scope,
+                    _task_kind_for_request(request),
+                    json.dumps(request.to_dict(), ensure_ascii=False),
+                    str(root_dir),
+                    now,
+                    now,
+                    now,
+                    max(0, int(row_count)),
+                    export_json,
+                    account_route,
+                    requested_account_id,
+                    requested_account_key,
+                    now,
+                ),
+            )
+            conn.execute(
+                """
+                INSERT INTO seller_sprite_mcp_runs (
+                    job_id, user_email, scenario, mode, params_json,
+                    result_state, result_row_count, result_export_format,
+                    result_export_filename, result_export_job_id, error_json,
+                    created_at, started_at, finished_at, updated_at
+                )
+                VALUES (?, ?, ?, 'cache', ?, 'succeeded', ?, ?, ?, ?, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    request.job_id,
+                    user_email,
+                    request.scenario,
+                    json.dumps(request.params, ensure_ascii=False),
+                    max(0, int(row_count)),
+                    (export_payload or {}).get("format"),
+                    (export_payload or {}).get("filename"),
+                    source_job_id,
+                    now,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get_status(str(request.job_id))
+
     def claim_next(
         self,
         *,

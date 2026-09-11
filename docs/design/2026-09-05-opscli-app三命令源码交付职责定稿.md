@@ -1,5 +1,7 @@
 # opscli app 三命令源码交付职责定稿
 
+> 2026-09-10 合同变更：本文涉及 `app.yaml.name` 的身份同步规则已被 `app.yaml.app_id` 取代；创建 API 的 `name` 仍作为 slug 请求字段保留。本文其他 Git 与交付职责继续有效。
+
 > 日期：2026-09-05  
 > 状态：已确认，按本文完成代码落地  
 > 范围：`opscli/app`、AppHub API 调用边界、Git 源码交付、相关 Skill、测试和使用文档  
@@ -77,8 +79,8 @@ opscli app init .\sales-dashboard
 
 - 读取或恢复 `.opscli/app.json`。
 - binding 不存在时，优先根据可访问应用恢复；没有匹配应用时再创建应用。
-- 调用 `GET /api/v1/apps/{slug}` 获取应用详情。
-- 调用 `GET /api/v1/apps/{slug}/git-config` 获取当前 Git 仓库配置。
+- 调用 `GET /api/v1/apps/{app_id}` 获取应用详情。
+- 调用 `GET /api/v1/apps/{app_id}/git-config` 获取当前 Git 仓库配置。
 - 必要时调用 `POST /api/v1/git/credentials` 获取 Git 凭据。
 - 初始化本地 Git 项目。
 - 将 AppHub 返回的独立仓库设置为 `origin`。
@@ -134,9 +136,9 @@ opscli app push .\sales-dashboard -m 优化库存风险筛选
 | 用途 | 方法与路径 | 使用命令 |
 | --- | --- | --- |
 | 创建应用 | `POST /api/v1/apps` | `create`、自动补齐 |
-| 查询应用详情 | `GET /api/v1/apps/{slug}` | `init`、`push` |
+| 查询应用详情 | `GET /api/v1/apps/{app_id}` | `init`、`push` |
 | 查询可访问应用 | `GET /api/v1/accessible-apps` | binding 恢复 |
-| 查询 Git 配置 | `GET /api/v1/apps/{slug}/git-config` | `init`、`push` |
+| 查询 Git 配置 | `GET /api/v1/apps/{app_id}/git-config` | `init`、`push` |
 | 签发 Git 凭据 | `POST /api/v1/git/credentials` | 凭据缺失或刷新 |
 
 ### 4.2 从 `opscli/app` 移除的 API

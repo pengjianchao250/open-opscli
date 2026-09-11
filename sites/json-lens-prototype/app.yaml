@@ -1,0 +1,14 @@
+apiVersion: apps.aukeys/v1
+name: test-keepa
+title: test-keepa
+description: Keepa JSON 查询结果浏览与分析工具。
+database:
+  kind: sqlite
+  path: /data/app.db
+opscli:
+  auth_mode: viewer
+  datasets: []
+llm:
+  enabled: false
+access:
+  visibility: members

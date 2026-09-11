@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -36,6 +37,7 @@ class GitRunner:
         *,
         check: bool = True,
         input_text: str | None = None,
+        env_overrides: dict[str, str] | None = None,
     ) -> GitCommandResult:
         env = os.environ.copy()
         env.update(
@@ -46,6 +48,8 @@ class GitRunner:
                 "GCM_INTERACTIVE": "Never",
             }
         )
+        if env_overrides:
+            env.update(env_overrides)
         try:
             completed = subprocess.run(
                 ["git", *args],
@@ -120,16 +124,10 @@ class GitService:
                     check=False,
                 )
                 if ancestor.returncode != 0:
-                    self.runner.run(
-                        root,
-                        [
-                            "merge",
-                            "--allow-unrelated-histories",
-                            "-s",
-                            "ours",
-                            "--no-commit",
-                            f"origin/{branch}",
-                        ],
+                    raise AppGitError(
+                        "GIT-003",
+                        f"远端 {branch} 包含本地尚未合并的提交，拒绝自动合并无关历史。",
+                        fix_hint=f"先人工核对并合并 origin/{branch}；禁止使用 force push。",
                     )
 
         if remote_sha is not None:
@@ -148,6 +146,55 @@ class GitService:
             "remote_branch_sha": remote_sha,
             "remote_branch_exists": remote_sha is not None,
         }
+
+    def origin_matches(self, root: Path, *, repo_url: str) -> bool:
+        """只检查现有 origin 的 fetch URL，不修改 Git 配置。"""
+        if not (root / ".git").exists():
+            return False
+        origin = self.runner.run(root, ["remote", "get-url", "origin"], check=False)
+        return origin.returncode == 0 and _repo_urls_match(origin.stdout, repo_url)
+
+    def probe_remote_branch_with_basic_auth(
+        self,
+        root: Path,
+        *,
+        repo_url: str,
+        username: str,
+        token: str,
+        branch: str = GIT_DEFAULT_BRANCH,
+    ) -> str | None:
+        """使用仅对子进程生效的 Basic Header 验证新签发凭据。"""
+        if not username or not token:
+            raise AppGitError("GIT-002", "AppHub 返回的 Git 凭据不完整。")
+        index = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
+        basic = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
+        overrides = {
+            "GIT_CONFIG_COUNT": str(index + 1),
+            f"GIT_CONFIG_KEY_{index}": f"http.{repo_url}.extraHeader",
+            f"GIT_CONFIG_VALUE_{index}": f"Authorization: Basic {basic}",
+        }
+        try:
+            result = self.runner.run(
+                root,
+                ["ls-remote", repo_url, f"refs/heads/{branch}"],
+                check=False,
+                env_overrides=overrides,
+            )
+        finally:
+            overrides.clear()
+            basic = ""
+        if result.returncode != 0:
+            self._raise_git_transport_error(result)
+        if not result.stdout:
+            return None
+        sha = result.stdout.split(maxsplit=1)[0]
+        if not _is_sha(sha):
+            raise AppGitError(
+                "GIT-REPO-NOT-READY",
+                f"AppHub 已登记应用，但仓库 {branch} 暂不可访问。",
+                fix_hint=f"稍后重新执行 opscli app init；仓库和 {branch} 由 AppHub 创建。",
+            )
+        return sha
 
     def push_all(
         self,
@@ -342,6 +389,22 @@ class GitService:
                 "Git origin 与当前应用的独立仓库不一致。",
                 fix_hint="请重新执行 opscli app init。",
             )
+        push_urls = self.runner.run(
+            root,
+            ["remote", "get-url", "--push", "--all", "origin"],
+            check=False,
+        )
+        configured = [line for line in push_urls.stdout.splitlines() if line.strip()]
+        if (
+            push_urls.returncode != 0
+            or len(configured) != 1
+            or not _repo_urls_match(configured[0], repo_url)
+        ):
+            raise AppGitError(
+                "GIT-ORIGIN-MISMATCH",
+                "Git origin 的 push URL 与当前应用仓库不一致。",
+                fix_hint="请重新执行 opscli app init 收敛 origin push URL。",
+            )
 
     def _assert_binding_ignored(self, root: Path) -> None:
         binding_path = root / ".opscli" / "app.json"
@@ -368,11 +431,18 @@ class GitService:
         current = self.runner.run(root, ["remote", "get-url", name], check=False)
         if current.returncode == 0:
             if _repo_urls_match(current.stdout, url):
-                return current.stdout
-            self.runner.run(root, ["remote", "set-url", name, url])
-            return current.stdout
-        self.runner.run(root, ["remote", "add", name, url])
-        return None
+                previous = current.stdout
+            else:
+                self.runner.run(root, ["remote", "set-url", name, url])
+                previous = current.stdout
+        else:
+            self.runner.run(root, ["remote", "add", name, url])
+            previous = None
+        self.runner.run(
+            root,
+            ["config", "--local", "--replace-all", f"remote.{name}.pushurl", url],
+        )
+        return previous
 
     def _raise_git_transport_error(
         self,
@@ -393,12 +463,22 @@ class GitService:
             )
         if any(
             marker in lowered
-            for marker in ("authentication", "credential", "unauthorized", "403", "401")
+            for marker in (
+                "authentication",
+                "credential",
+                "unauthorized",
+                "not authorized",
+                "access denied",
+                "could not read username",
+                "terminal prompts disabled",
+                "403",
+                "401",
+            )
         ):
             raise AppGitError(
                 "GIT-002",
                 "Git 凭据缺失、失效或无仓库写权限。",
-                fix_hint="重新执行 opscli app init 以刷新凭据。",
+                fix_hint="检查本机凭据；确需轮换时执行 opscli app init --rotate-git-credential。",
             )
         raise AppGitError("GIT-010", f"Git 远端操作失败：{detail}")
 

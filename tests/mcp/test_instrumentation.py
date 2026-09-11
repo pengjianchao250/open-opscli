@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from opscli.mcp.instrumentation import telemetry_wrap
+from opscli.mcp.instrumentation import quota_wrap, telemetry_wrap
+from opscli.shared.collection_storage.result_cache import mark_cache_hit
 
 
 @pytest.fixture
@@ -68,6 +70,37 @@ def test_records_scenario_dimensions_without_sensitive_params(fired_events):
     }
     assert event["raw_payload"] is None
     assert "secret-jwt" not in json.dumps(event, ensure_ascii=False)
+
+
+def test_quota_wrapper_reports_cache_hit_to_settlement():
+    class Limiter:
+        def __init__(self):
+            self.cache_hit = None
+
+        async def before_call(self, tool_name):
+            return SimpleNamespace(
+                allowed=True,
+                ticket=object(),
+                access_context=None,
+            )
+
+        async def after_call(self, ticket, response, *, cache_hit=False):
+            self.cache_hit = cache_hit
+            return response
+
+        async def after_exception(self, ticket):
+            raise AssertionError("成功缓存调用不得进入异常结算")
+
+    limiter = Limiter()
+
+    async def keepa_run():
+        mark_cache_hit()
+        return {"success": True}
+
+    result = _run(quota_wrap(keepa_run, limiter=limiter)())
+
+    assert result == {"success": True}
+    assert limiter.cache_hit is True
 
 
 def test_uses_declared_feature_as_scenario_dimension(fired_events):

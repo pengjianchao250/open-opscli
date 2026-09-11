@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from opscli.skills.packaging import validate_release_manifest
@@ -31,12 +32,20 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.12"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.16"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
+def test_ops_app_build_spec_entry_references_resolve() -> None:
+    """入口引用必须随 Skill 存在，防止残留旧资产路径。"""
+    references = re.findall(r"(?:references|assets)/[\w/.-]+\.(?:md|py)", _read("SKILL.md"))
+    assert references
+    for relative_path in references:
+        assert (SKILL_DIR / relative_path).is_file(), relative_path
+
+
 def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
-    """普通后端开发和前端合同变更必须读取同一后端红线。"""
+    """主入口维护阅读路由，数据细则允许放在对应参考文件中。"""
     skill = _read("SKILL.md")
 
     for required in (
@@ -49,8 +58,10 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         "不选择或猜测数据集、字段、聚合、筛选、第三方场景",
         "前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite",
         "docs/ops-app/data-spec.md",
-        "OPSCLI_API_BASE_URL",
-        "OPSCLI_API_KEY",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "QueryCredentials",
+        "https://mcp.ops.aukeyit.com",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "未隔离的 viewer 数据",
         "owner_user_id",
         "pending `job_id`",
@@ -67,6 +78,12 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         assert required in skill
 
     assert "references/backend-standard.md" not in skill
+    data_access = _read("references/data-access-standard.md")
+    for required in (
+        "OPSCLI_API_BASE_URL", "OPSCLI_API_KEY", "owner_user_id", "pending `job_id`",
+        "XLS/XLSX", "第一阶段不增加运行时数据 YAML",
+    ):
+        assert required in data_access
 
 
 def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
@@ -93,12 +110,10 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     for obsolete in ("create-vue", "assets/app.yaml", "ops-app.config"):
         assert obsolete not in skill
 
-    for required in (
-        ".opscli/app.json.slug == app.yaml.name",
-        ".gitignore` 必须忽略 `.opscli/",
-        "app_id`、仓库、Owner 和 Git 信息只保留在本地 binding",
-    ):
-        assert required in skill
+    assert ".opscli/app.json.app_id == app.yaml.app_id" in skill
+    deployment = _read("references/deployment-standard.md")
+    assert ".gitignore` 必须忽略 `.opscli/" in deployment
+    assert "slug、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
     assert skill.index('python "<skill-directory>/scripts/clone_template.py"') < skill.index(
         'opscli app create "<app-name>" --path "<project-directory>" --json'
@@ -116,15 +131,15 @@ def test_ops_app_build_spec_frontend_follows_backend_contract() -> None:
     frontend = _read("references/frontend-standard.md")
 
     for required in (
-        "API 合同以后端为主",
+        "API 合同以后端为准",
         "backend-redlines.md",
-        "实际路由和 Pydantic Schema",
+        "Pydantic Schema 和生成的 OpenAPI",
         "前端不得维护第二套口径",
-        "具体 API 前缀、响应形状、成功语义和业务失败表达只从目标项目后端合同读取",
+        "具体端点及字段仍从目标项目后端合同读取",
         "是否存在 HTTP 200 内的业务失败，只按目标项目合同判断",
         "先由后端更新路由、Schema、相关测试和 OpenAPI",
         "不新增前端兼容分支掩盖漂移",
-        "前端不得保存密钥、JWT、Cookie",
+        "应用代码不得读取、复制或持久化平台密钥、JWT、Cookie",
     ):
         assert required in frontend
 
@@ -143,6 +158,8 @@ def test_ops_app_build_spec_backend_redlines_use_current_apphub_design() -> None
         "目标项目现有依赖清单",
         "AppHub SQLite 应用保持单写实例",
         "viewer、session 或 local 网关",
+        "ThirdPartyApiClient",
+        "UNIQUE(owner_user_id, provider, request_hash)",
         "用户未授权时",
         "--autogenerate",
         "alembic_version",
@@ -193,9 +210,32 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         "前端不得持有 API Key、JWT、Cookie",
         "不选择或猜测数据集、字段、聚合、筛选",
         "默认按访问者实时取数",
+        "由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步",
+        "固定同步必须标记为 `blocked`",
         "Mock、测试替身和本地回退不得被描述成线上真实接入",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "QueryCredentials",
+        "get_query_credentials()",
+        "X-User-Email",
+        "X-Session-Id",
+        'AuthClient.build_session_headers("ops")',
+        'AuthClient.build_request_auth("ops")',
+        "https://ops.mcp.xenkee.com",
+        "https://mcp.ops.aukeyit.com",
+        "UNIQUE(owner_user_id, provider, request_hash)",
+        "不兼容旧变量别名",
     ):
         assert required in content
+
+    assert "OPSCLI_THIRD_PARTY_DATA_API_KEY" not in content
+
+    for obsolete_env in (
+        "OPSCLI_" + "API_BASE_URL",
+        "OPSCLI_" + "API_KEY",
+        "OPSCLI_SELLER_SPRITE_" + "E2E_BASE_URL",
+        "OPSCLI_SELLER_SPRITE_" + "E2E_API_KEY",
+    ):
+        assert obsolete_env not in content
 
 
 def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
@@ -242,8 +282,7 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
 
     for required in (
         "apiVersion: apps.aukeys/v1",
-        'python: "3.12"',
-        "entrypoint: backend/app.py",
+        "backend/app.py",
         "uvicorn backend.app:app --host 0.0.0.0 --port 8000",
         "单应用进程合同",
         "opscli app create",
@@ -259,8 +298,12 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "不得报告“已发布”或“部署成功”",
         "ops-feedback",
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         ".opscli/app.json` 不得被 Git 跟踪或暂存",
+        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "https://ops.mcp.xenkee.com",
+        "https://mcp.ops.aukeyit.com",
+        "部署配置不得注入共享 API Key",
     ):
         assert required in deployment
 
@@ -268,6 +311,9 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "python -m opscli.app.migrate",
         "ops-app.config",
         "opscli app release",
+        "services.sqlite: true",
+        "runtime: fastapi",
+        "entrypoint: backend/app.py",
     ):
         assert obsolete not in deployment
 
@@ -317,7 +363,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.12"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.16"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

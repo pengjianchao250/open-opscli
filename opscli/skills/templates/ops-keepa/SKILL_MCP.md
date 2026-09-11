@@ -51,6 +51,7 @@ visibility: internal
 - `keepa_run`: run a Keepa scenario and save request/response/export files. Default export is XLSX with automatic readable formatting. `export_format` accepts `xls`/`xlsx`/`json`; `xls` and `xlsx` both generate `.xlsx`。
 - `keepa_job_status`: read a saved task result by `job_id`。
 - `keepa_export`: read export path or cloud URL, filename, format, and MIME type。
+- `keepa_history`: read database-persisted historical Keepa runs by `job_id` or scenario/site/params/time filters. It accepts the same parameter aliases as `keepa_run`, returns `total/limit/offset/has_more/found`, and can set `include_records=false` for a lightweight task list. Use `dataset_code` plus `record_offset/record_limit` to page large Dataset records. This tool does not consume Keepa quota。
 
 不要向用户推荐或暴露 Keepa token 状态查询。用户询问今天还能调用几次时，使用 `keepa_quota_status` 查询 MCP 每日调用额度。
 
@@ -193,7 +194,7 @@ Keepa uses minute-based timestamps in many API payloads. The timezone is UTC.
 
 - 若 `keepa_run` 响应顶层存在 `quota`，在最终自然语言回复末尾补一句：
   - `今日额度：已用 used / limit，剩余 remaining，重置时间 reset_at`
-- `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export` 不消耗额度；只有 `keepa_run` 消耗次数。
+- `keepa_scenarios`、`keepa_quota_status`、`keepa_job_status`、`keepa_export`、`keepa_history` 不消耗额度；只有 `keepa_run` 消耗次数。
 - `job_status` 和 `export` 默认不重复提示额度，避免轮询阶段重复刷屏。
 
 当用户问“导出的数据准确吗/字段怎么来的”：

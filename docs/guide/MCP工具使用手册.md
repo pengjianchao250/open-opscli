@@ -1525,7 +1525,40 @@ feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
 
 ---
 
-## 10. 认证状态速查
+## 10. 每日预取计划
+
+预取计划用于在业务使用前主动刷新 Keepa、Google Trends 或 SellerSprite 的共享结果缓存。
+计划由当前 MCP 用户手动创建，不会根据普通调用历史自动新增。
+
+```text
+prefetch_schedule_create(
+  name="每日竞品关键词",
+  source_system="seller_sprite",
+  scenario="keyword-reverse",
+  params={"asin": "B0XXXXXXXX"},
+  site="US",
+  run_time="06:00",
+  timezone_name="Asia/Shanghai"
+)
+```
+
+| Tool | 用途 |
+|------|------|
+| `prefetch_schedule_create` | 创建每日计划 |
+| `prefetch_schedule_list` | 查看当前用户计划与通用 MCP 调度状态 |
+| `prefetch_schedule_update` | 修改参数、时间或启停状态 |
+| `prefetch_schedule_enable` | 审核通过后批量启用计划 |
+| `prefetch_schedule_disable` | 批量禁用后续每日执行 |
+| `prefetch_schedule_delete` | 删除没有排队或运行任务的计划 |
+| `prefetch_schedule_run_now` | 立即追加一次运行，不改变每日时间 |
+| `prefetch_schedule_runs` | 查看最近执行状态和来源 `job_id` |
+
+计划参数禁止包含 JWT、Session、API Key、Cookie、密码或 Token。SellerSprite 计划只支持共享
+账号池中的可重放场景，`listing-analysis` 仍必须由用户显式调用专用提交工具。
+
+---
+
+## 11. 认证状态速查
 
 | Tool | 需要认证 | 认证方式 |
 |------|---------|---------|
@@ -1570,7 +1603,7 @@ feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
 
 ---
 
-## 11. 快速索引
+## 12. 快速索引
 
 | 模块 | Tool | 对应 CLI 命令 |
 |------|------|--------------|
@@ -1608,5 +1641,9 @@ feedback_detail(feedback_uuid=result["data"]["feedback_uuid"])
 | 技能广场 | `skills_marketplace_list` | `opscli skills marketplace list/search` |
 | 技能广场 | `skills_marketplace_info` | `opscli skills marketplace info/versions` |
 | 技能广场 | `skills_record_usage` | （CLI 无直接对应，自动异步触发） |
+| 预取计划 | `prefetch_schedule_create` / `prefetch_schedule_update` | （CLI 无直接对应） |
+| 预取计划 | `prefetch_schedule_enable` / `prefetch_schedule_disable` | （CLI 无直接对应） |
+| 预取计划 | `prefetch_schedule_list` / `prefetch_schedule_runs` | （CLI 无直接对应） |
+| 预取计划 | `prefetch_schedule_run_now` / `prefetch_schedule_delete` | （CLI 无直接对应） |
 | Knowledge | `search` | （CLI 无直接对应） |
 | Knowledge | `fetch` | （CLI 无直接对应） |

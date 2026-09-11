@@ -43,7 +43,7 @@ def test_detach_git_metadata_preserves_template_files(tmp_path: Path) -> None:
     (project / ".git" / "objects").mkdir(parents=True)
     (project / ".git" / "config").write_text("template remote", encoding="utf-8")
     (project / ".gitignore").write_text(".opscli/\n", encoding="utf-8")
-    (project / "app.yaml").write_text("name: demo\n", encoding="utf-8")
+    (project / "app.yaml").write_text("app_id: Ab123\n", encoding="utf-8")
 
     result = module.detach_git_metadata(project)
 
@@ -80,7 +80,7 @@ def test_clone_template_removes_cloned_repository_metadata(tmp_path: Path) -> No
     _git(source, "config", "user.name", "Template Test")
     _git(source, "config", "user.email", "template@example.com")
     (source / ".gitignore").write_text(".opscli/\n", encoding="utf-8")
-    (source / "app.yaml").write_text("name: template-app\n", encoding="utf-8")
+    (source / "app.yaml").write_text("app_id: Ab123\n", encoding="utf-8")
     _git(source, "add", "-A")
     _git(source, "commit", "-m", "template")
 
@@ -90,4 +90,4 @@ def test_clone_template_removes_cloned_repository_metadata(tmp_path: Path) -> No
     assert result == target.resolve()
     assert not (target / ".git").exists()
     assert (target / ".gitignore").read_text(encoding="utf-8") == ".opscli/\n"
-    assert (target / "app.yaml").read_text(encoding="utf-8") == "name: template-app\n"
+    assert (target / "app.yaml").read_text(encoding="utf-8") == "app_id: Ab123\n"
