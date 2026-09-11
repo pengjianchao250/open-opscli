@@ -224,6 +224,26 @@ def _explicit_candidates(query: str, profiles: list[dict]) -> list[dict]:
     return sorted(matches, key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
 
+# 纯枚举问句：只在用户已经显式点名组件数据集时才据此放行
+_ENUMERATION_QUESTION_RE = re.compile(
+    r"有哪些|都有哪些|有什么|都有什么|列出|列一下|清单|取值|可取值"
+)
+
+
+def _enumeration_question(query: str) -> bool:
+    """是否是"有哪些/列出"这类纯枚举问句。
+
+    比 _permission_enum_requested 宽松：不要求同时出现"可选/可用/可见"。
+    只用在用户已经把组件数据集名字写出来的场景——那时意图没有歧义，
+    再要求补一个"可选"才肯放行属于过度澄清（全字段矩阵实测 37 例）。
+    业务指标否决门禁仍然优先生效。
+    """
+    normalized_query = _normalize(query)
+    if COMPONENT_BUSINESS_ANALYSIS_RE.search(normalized_query):
+        return False
+    return bool(_ENUMERATION_QUESTION_RE.search(normalized_query))
+
+
 def _permission_enum_requested(query: str) -> bool:
     normalized_query = _normalize(query)
     if COMPONENT_BUSINESS_ANALYSIS_RE.search(normalized_query):
@@ -234,6 +254,51 @@ def _permission_enum_requested(query: str) -> bool:
         pattern.search(normalized_query)
         for pattern in PERMISSION_ENUM_PATTERNS
     )
+
+
+# 组件数据集中文名的固定包装：查询组件<字段词>数据集
+_COMPONENT_DESCRIPTION_RE = re.compile(r"^查询组件(?P<core>.+?)数据集$")
+
+
+def _component_field_terms(card: dict) -> list[str]:
+    """从组件数据集中文名里取出它所枚举的字段词。
+
+    「查询组件销售小组和大组数据集」→ ["销售小组", "大组"]。用中文名而不是硬编码
+    映射，新增组件表时无需改代码。
+    """
+    match = _COMPONENT_DESCRIPTION_RE.match(_normalize(card.get("description")))
+    if not match:
+        return []
+    core = match.group("core")
+    return [term for term in re.split(r"和|、|与|及", core) if len(term) >= 2]
+
+
+def _permission_enum_component_candidates(query: str, profiles: list[dict]) -> list[dict]:
+    """枚举意图下，请求里点名了哪个组件数据集的字段。
+
+    「列出当前可见的部门」原本会落到默认的即时综合数据集，生成一份没有时间过滤的
+    dept_name 维度查询，后端固定报「必须指定时间范围后才能取数」——这条被文档承诺
+    的能力实际 100% 失败。权限枚举的权威来源就是组件表，且组件表不要求时间过滤，
+    因此枚举意图命中时直接选组件表。命中多个时交给上层澄清，不猜。
+    """
+    normalized_query = _normalize(query)
+    matched = []
+    for profile in profiles:
+        card = profile["card"]
+        if card.get("dataset_category") != "query_component":
+            continue
+        terms = _component_field_terms(card)
+        if any(term in normalized_query for term in terms):
+            matched.append(
+                {
+                    "dataset_alias": card["dataset_alias"],
+                    "dataset_name": card["dataset_name"],
+                    "dataset_category": card["dataset_category"],
+                    "score": EXPLICIT_NAME_SCORE,
+                    "reasons": ["permission_enum_component"],
+                }
+            )
+    return matched
 
 
 def _description_candidates(query: str, profiles: list[dict]) -> list[dict]:
@@ -927,7 +992,10 @@ def plan_query(
             validated_rules,
         )
         top = explicit[0]
-        component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
+        # 用户已显式写出组件数据集名，枚举问句即可放行，不必再要求"可选/可用"
+        component_blocked = top["dataset_category"] == "query_component" and not (
+            _permission_enum_requested(query) or _enumeration_question(query)
+        )
         if len(explicit) > 1 or component_blocked:
             return _result(
                 "clarify_required",
@@ -1003,7 +1071,10 @@ def plan_query(
                 description_matches[:candidate_limit],
                 "dataset_constraints",
             )
-        component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
+        # 用户已显式写出组件数据集名，枚举问句即可放行，不必再要求"可选/可用"
+        component_blocked = top["dataset_category"] == "query_component" and not (
+            _permission_enum_requested(query) or _enumeration_question(query)
+        )
         if component_blocked:
             return _result(
                 "clarify_required",
@@ -1026,6 +1097,27 @@ def plan_query(
     specialized_hint = any(
         _dataset_business_hint(profile, query) is not None for profile in profiles
     )
+    # 权限枚举意图优先于默认业务表推荐：组件表才是授权取值的权威来源，
+    # 且不需要时间过滤，落到业务表只会被后端以「必须指定时间范围」拒绝。
+    if _permission_enum_requested(query):
+        enum_components = _permission_enum_component_candidates(query, profiles)
+        if len(enum_components) == 1:
+            return _result(
+                "candidate_ready",
+                "permission_enum",
+                semantics["slots"],
+                enum_components[:candidate_limit],
+                None,
+            )
+        if len(enum_components) > 1:
+            return _result(
+                "clarify_required",
+                "permission_enum",
+                semantics["slots"],
+                enum_components[:candidate_limit],
+                "dataset_selection",
+            )
+
     default_candidate = None
     if recommend_default_dataset and not default_dataset_rejected and not specialized_hint:
         default_candidate = _default_dataset_candidate(

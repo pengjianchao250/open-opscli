@@ -326,6 +326,10 @@
         "resolved_platform_values": {
           "$ref": "#/$defs/string_array"
         },
+        "excluded_platform_values": {
+          "description": "用户要求排除的平台授权枚举原值；纯排除请求时模板落 !=/not_in，已有正向平台范围时仅用于审计与文本归属",
+          "$ref": "#/$defs/string_array"
+        },
         "platform_semantic_keys": {
           "description": "平台语义成员的内部枚举名（构造引用，不向用户展示）",
           "$ref": "#/$defs/string_array"
