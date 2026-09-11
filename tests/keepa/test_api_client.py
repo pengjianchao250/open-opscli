@@ -30,3 +30,28 @@ def test_keepa_upstream_errors_have_stable_codes(
         _parse_json_response(response)
 
     assert captured.value.code == expected_code
+
+
+def test_keepa_upstream_error_logs_bounded_diagnostic_without_api_key(caplog) -> None:
+    """上游错误日志应包含分类字段，但不能记录 API Key 或完整响应。"""
+    response = httpx.Response(
+        429,
+        json={
+            "error": {"code": "RATE_LIMIT", "message": "too many requests"},
+            "tokensLeft": 0,
+            "refillIn": 1200,
+            "secret": "keepa-secret-value",
+        },
+    )
+
+    with caplog.at_level("WARNING", logger="opscli.keepa.api"):
+        with pytest.raises(KeepaApiError):
+            _parse_json_response(response, secrets=("keepa-secret-value",))
+
+    message = "\n".join(record.getMessage() for record in caplog.records)
+    assert "[KEEPA-DIAG] upstream_error" in message
+    assert "status=429" in message
+    assert "upstream_code=RATE_LIMIT" in message
+    assert "tokens_left=0" in message
+    assert "keepa-secret-value" not in message
+    assert "secret" not in message
