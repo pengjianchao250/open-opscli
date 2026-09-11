@@ -1,5 +1,5 @@
 apiVersion: apps.aukeys/v1
-name: test-keepa
+app_id: "1kKLO"
 title: test-keepa
 description: Keepa JSON 查询结果浏览与分析工具。
 database:

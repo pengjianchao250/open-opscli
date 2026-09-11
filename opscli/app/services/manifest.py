@@ -12,7 +12,7 @@ import yaml
 from opscli.app.domain.exceptions import AppProjectError
 from opscli.app.domain.models import SiteBinding, slugify_site_name
 
-_IDENTITY_LINE_RE = re.compile(r"^(?P<key>name|title)\s*:[^\r\n]*$")
+_IDENTITY_LINE_RE = re.compile(r"^(?P<key>name|app_id|title)\s*:[^\r\n]*$")
 _API_VERSION_LINE_RE = re.compile(r"^apiVersion\s*:[^\r\n]*$")
 
 
@@ -47,7 +47,7 @@ class AppManifestStore:
                 "APP-MANIFEST-INVALID",
                 "app.yaml 顶层必须是 YAML 对象。",
             )
-        for key in ("name", "title"):
+        for key in ("name", "app_id", "title"):
             value = payload.get(key)
             if value is not None and not isinstance(value, str):
                 raise AppProjectError(
@@ -78,7 +78,13 @@ class AppManifestStore:
         payload = self.load(root, required=required)
         if payload is None:
             return False
-        if payload.get("name") == binding.slug and payload.get("title") == binding.app_name:
+        identity_key = "app_id" if "app_id" in payload else "name"
+        identity_value = binding.app_id if identity_key == "app_id" else binding.slug
+        if (
+            payload.get(identity_key) == identity_value
+            and payload.get("title") == binding.app_name
+            and not (identity_key == "app_id" and "name" in payload)
+        ):
             return False
 
         try:
@@ -90,7 +96,8 @@ class AppManifestStore:
             ) from exc
         updated = _replace_identity(
             original,
-            name=binding.slug,
+            identity_key=identity_key,
+            identity_value=identity_value,
             title=binding.app_name,
         )
         temporary = target.with_suffix(".yaml.tmp")
@@ -106,18 +113,27 @@ class AppManifestStore:
         return True
 
 
-def _replace_identity(content: str, *, name: str, title: str) -> str:
+def _replace_identity(
+    content: str,
+    *,
+    identity_key: str,
+    identity_value: str,
+    title: str,
+) -> str:
     newline = "\r\n" if "\r\n" in content else "\n"
     had_trailing_newline = content.endswith(("\n", "\r"))
     lines = content.splitlines()
-    replacements = {"name": name, "title": title}
-    seen: dict[str, int] = {"name": 0, "title": 0}
+    replacements = {identity_key: identity_value, "title": title}
+    seen: dict[str, int] = {"name": 0, "app_id": 0, "title": 0}
+    updated_lines: list[str] = []
 
-    for index, line in enumerate(lines):
+    for line in lines:
         if line != line.lstrip():
+            updated_lines.append(line)
             continue
         match = _IDENTITY_LINE_RE.fullmatch(line)
         if match is None:
+            updated_lines.append(line)
             continue
         key = match.group("key")
         seen[key] += 1
@@ -126,9 +142,14 @@ def _replace_identity(content: str, *, name: str, title: str) -> str:
                 "APP-MANIFEST-INVALID",
                 f"app.yaml 包含重复的顶层字段：{key}",
             )
-        lines[index] = f"{key}: {_yaml_string(replacements[key])}"
+        if identity_key == "app_id" and key == "name":
+            continue
+        if key in replacements:
+            line = f"{key}: {_yaml_string(replacements[key])}"
+        updated_lines.append(line)
 
-    missing = [key for key in ("name", "title") if seen[key] == 0]
+    lines = updated_lines
+    missing = [key for key in (identity_key, "title") if seen[key] == 0]
     if missing:
         insert_at = 0
         for index, line in enumerate(lines):
@@ -146,7 +167,7 @@ def _replace_identity(content: str, *, name: str, title: str) -> str:
 
 
 def _validate_identity_lines(content: str) -> None:
-    seen: dict[str, int] = {"name": 0, "title": 0}
+    seen: dict[str, int] = {"name": 0, "app_id": 0, "title": 0}
     for line in content.splitlines():
         if line != line.lstrip():
             continue

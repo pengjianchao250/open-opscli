@@ -26,6 +26,16 @@
 
 ---
 
+## 2026-09-09 App - AppHub 绑定改用 app_id 查询
+
+**变更原因**：AppHub 最新模板已使用顶层 `app_id`，线上应用 `test-keepa` 可通过 ID `1kKLO` 访问，但 `opscli app push` 仍使用 slug 请求应用详情和 Git 配置，导致已有应用返回 `NOT_FOUND`，并向新版清单注入旧版 `name` 字段。
+**改动点**：已绑定应用改用 binding 的 `app_id` 获取应用详情和 Git 配置；从可访问应用恢复 binding 时优先使用响应中的应用 ID；清单同步兼容新版 `app_id/title`，并移除混入的旧版顶层 `name`；补充 manager 与 manifest 回归测试。
+**验证结果**：`tests/app/test_manager.py`、`test_manifest.py`、`test_client.py` 专项回归 `23 passed`，目标文件 `compileall` 与 `git diff --check` 通过；使用 `test-keepa / 1kKLO` 实际 binding 执行 `opscli app push` 成功，远端 `master` 更新到 `462020678f747c938c66ed68849cde22921bce90`。
+**影响范围**：`opscli app create/init/push` 的应用身份解析和 `app.yaml` 身份同步；旧版 `name/title` 清单继续兼容。
+**回滚方式**：回退 `opscli/app/services/manager.py`、`opscli/app/services/manifest.py` 及对应测试和本条记录。
+
+---
+
 ## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
 
 **变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。

@@ -13,9 +13,9 @@ def main() -> None:
     manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
     assert isinstance(manifest, dict), "app.yaml must contain a YAML object"
     assert manifest.get("apiVersion") == "apps.aukeys/v1"
-    assert manifest.get("name") == "test-keepa"
+    assert manifest.get("app_id") == "1kKLO"
     assert manifest.get("title") == "test-keepa"
-    for unsupported_key in ("runtime", "python", "entrypoint"):
+    for unsupported_key in ("name", "runtime", "python", "entrypoint"):
         assert unsupported_key not in manifest, (
             f"AppHub schema rejects unsupported app.yaml field: {unsupported_key}"
         )
@@ -56,6 +56,7 @@ def main() -> None:
     compose = compose_path.read_text(encoding="utf-8")
     for required in (
         "APPHUB_APP_ID",
+        "APPHUB_RESOURCE_ID",
         "APPHUB_SQLITE_PATH",
         "subpath: apphub-databases/${APPHUB_APP_ID:?}",
         "PathPrefix(`/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}/`)",
@@ -63,6 +64,7 @@ def main() -> None:
         "apphub.route_contract=root-v1",
     ):
         assert required in compose
+    assert "strip-${APP_SLUG:?}" not in compose
 
     nixpacks = (ROOT / "nixpacks.toml").read_text(encoding="utf-8")
     assert "npm --prefix frontend ci" in nixpacks

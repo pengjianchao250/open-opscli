@@ -1,5 +1,29 @@
 # 变更记录
 
+## 2026-09-09 AppHub - 同步最新安全 Compose 模板
+
+**变更原因**：提交 `4620206` 的 release #106 在服务端校验阶段返回 `YAML-INVALID`，明确指出 `compose.apphub.yaml` 与平台安全模板不一致。最新模板已使用 `APPHUB_RESOURCE_ID` 隔离 Traefik 路由资源，站点仍使用旧版 `APP_SLUG` 资源名。
+
+**改动点**：将 `compose.apphub.yaml` 原样同步到统一模板提交 `ac18605`，路由 middleware、router 和 service 名称改用 `APPHUB_RESOURCE_ID`；部署合同增加模板字段及旧资源名回归检查，并同步部署说明。
+
+**验证结果**：站点 Compose 与统一模板 SHA-256 均为 `5BCD79FB852C676D7C84DAC47CC59F4C544844443A62EA4DDBF26C4EC8EA1E72`；YAML 解析、部署合同、后端冒烟、前端单元测试 6 项、Vite 生产构建和 `git diff --check` 均通过。
+
+**影响范围**：AppHub Compose 安全校验与 Traefik 路由资源命名；应用 URL、FastAPI 路由、页面及 Keepa 数据行为不变。
+
+**回滚方式**：回退本次修改会恢复平台已拒绝的旧版 Compose 模板，不建议回滚。
+
+## 2026-09-09 AppHub - 恢复 test-keepa 应用身份
+
+**变更原因**：项目本地 binding 和远端仓库均属于 `test-keepa`，但发布清单曾被临时切换到 `test-keepa-2`，会把源码身份指向错误的 AppHub 应用。
+
+**改动点**：将 `app.yaml` 恢复为 `app_id: 1kKLO`、`title: test-keepa`，同步部署合同断言和部署文档，并禁止本地旧版 opscli 再注入模板已移除的 `name` 字段；不修改本地 binding、业务接口或页面行为。
+
+**验证结果**：YAML 与 `.opscli/app.json` 身份核对通过，前端单元测试 6 项通过，Vite 生产构建通过，部署合同与后端冒烟通过，`git diff --check` 通过。
+
+**影响范围**：仅 AppHub 应用身份声明、部署测试和交付文档。
+
+**回滚方式**：回退本次修改会重新将发布清单指向 `test-keepa-2`，不建议回滚。
+
 ## 2026-09-09 Keepa - 修复 AppHub Viewer 被误判为 MCP 会话
 
 **变更原因**：AppHub 已完成 Cookie 校验并向应用注入 Viewer JWT 与用户身份，但站点 FastAPI 在调用 Keepa 共享内核时只传递了 JWT、邮箱和 Session，遗漏 `apphub_viewer` 认证模式，导致共享凭证层误走普通 MCP 登录流程并错误提示缺少 `session_id`。

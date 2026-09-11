@@ -77,8 +77,61 @@ def test_new_credential_probe_uses_ephemeral_basic_header(tmp_path: Path) -> Non
         "https://gitea.example/apps/demo.git",
         "refs/heads/master",
     ]
-    assert f"Authorization: Basic {expected}" in captured["env"].values()
+    assert captured["env"]["GIT_CONFIG_COUNT"] == "3"
+    assert captured["env"]["GIT_CONFIG_KEY_0"] == "credential.helper"
+    assert captured["env"]["GIT_CONFIG_VALUE_0"] == ""
+    assert captured["env"]["GIT_CONFIG_KEY_1"] == "http.extraHeader"
+    assert captured["env"]["GIT_CONFIG_VALUE_1"] == ""
+    assert captured["env"]["GIT_CONFIG_KEY_2"] == (
+        "http.https://gitea.example/apps/demo.git.extraHeader"
+    )
+    assert captured["env"]["GIT_CONFIG_VALUE_2"] == f"Authorization: Basic {expected}"
     assert all("secret-token" not in argument for argument in captured["args"])
+
+
+def test_credential_probe_treats_private_repository_not_found_as_auth_error(
+    tmp_path: Path,
+) -> None:
+    """仅凭据探测上下文把 Gitea 私有仓库伪装 404 归类为凭据错误。"""
+    command = (
+        "ls-remote",
+        "https://gitea.example/apps/demo.git",
+        "refs/heads/master",
+    )
+    runner = FakeRunner(
+        {command: GitCommandResult(1, "", "remote: Repository not found")}
+    )
+
+    with pytest.raises(AppGitError) as caught:
+        GitService(runner=runner).probe_remote_branch(
+            tmp_path,
+            repo_url="https://gitea.example/apps/demo.git",
+            repository_not_found_is_auth=True,
+        )
+
+    assert caught.value.code == "GIT-002"
+
+
+def test_regular_probe_keeps_repository_not_found_as_transport_error(
+    tmp_path: Path,
+) -> None:
+    """正常 Git 操作仍应暴露真实的远端仓库不存在错误。"""
+    command = (
+        "ls-remote",
+        "https://gitea.example/apps/demo.git",
+        "refs/heads/master",
+    )
+    runner = FakeRunner(
+        {command: GitCommandResult(1, "", "remote: Repository not found")}
+    )
+
+    with pytest.raises(AppGitError) as caught:
+        GitService(runner=runner).probe_remote_branch(
+            tmp_path,
+            repo_url="https://gitea.example/apps/demo.git",
+        )
+
+    assert caught.value.code == "GIT-010"
 
 
 def test_empty_project_bases_master_on_origin_without_template(tmp_path: Path) -> None:
@@ -100,6 +153,7 @@ def test_empty_project_bases_master_on_origin_without_template(tmp_path: Path) -
     result = GitService(runner=runner).initialize(
         tmp_path,
         repo_url="https://gitea.example/apps/demo.git",
+        credential_username="demo-user",
     )
 
     assert result["git_created"] is True
@@ -109,6 +163,13 @@ def test_empty_project_bases_master_on_origin_without_template(tmp_path: Path) -
     assert ["fetch", "origin", "master:refs/remotes/origin/master"] in runner.calls
     assert ["reset", "--mixed", "origin/master"] in runner.calls
     assert ["remote", "add", "origin", "https://gitea.example/apps/demo.git"] in runner.calls
+    assert [
+        "config",
+        "--local",
+        "--replace-all",
+        "credential.https://gitea.example/apps/demo.git.username",
+        "demo-user",
+    ] in runner.calls
     assert not any("template" in call for call in runner.calls)
 
 

@@ -6,46 +6,46 @@ services:
     network_mode: none
     read_only: true
     cap_drop:
-    - ALL
+      - ALL
     cap_add:
-    - CHOWN
-    - FOWNER
+      - CHOWN
+      - FOWNER
     security_opt:
-    - no-new-privileges:true
+      - no-new-privileges:true
     entrypoint:
-    - /bin/sh
-    - -ec
+      - /bin/sh
+      - -ec
     command:
-    - 'id="$${APPHUB_APP_ID}"
+      - 'id="$${APPHUB_APP_ID}"
 
-      case "$$id" in ''''|*[!a-zA-Z0-9]*) exit 1;; esac
+        case "$$id" in ''''|*[!a-zA-Z0-9]*) exit 1;; esac
 
-      [ "$${#id}" -eq 5 ]
+        [ "$${#id}" -eq 5 ]
 
-      test ! -L /shared/apphub-databases
+        test ! -L /shared/apphub-databases
 
-      mkdir -p /shared/apphub-databases
+        mkdir -p /shared/apphub-databases
 
-      test ! -L "/shared/apphub-databases/$$id"
+        test ! -L "/shared/apphub-databases/$$id"
 
-      mkdir -p "/shared/apphub-databases/$$id"
+        mkdir -p "/shared/apphub-databases/$$id"
 
-      chown 1000:1000 "/shared/apphub-databases/$$id"
+        chown 1000:1000 "/shared/apphub-databases/$$id"
 
-      chmod 0750 "/shared/apphub-databases/$$id"
+        chmod 0750 "/shared/apphub-databases/$$id"
 
-      '
+        '
     environment:
       APPHUB_APP_ID: ${APPHUB_APP_ID:?}
     volumes:
-    - type: volume
-      source: apphub-shared
-      target: /shared
-      volume:
-        nocopy: true
-    restart: 'no'
+      - type: volume
+        source: apphub-shared
+        target: /shared
+        volume:
+          nocopy: true
+    restart: "no"
     labels:
-    - traefik.enable=false
+      - traefik.enable=false
   app:
     build:
       context: .
@@ -57,40 +57,41 @@ services:
       db-init:
         condition: service_completed_successfully
     env_file:
-    - .env
+      - .env
     environment:
-      PORT: '8000'
+      PORT: "8000"
       APP_SLUG: ${APP_SLUG:?}
       SQLITE_PATH: ${APPHUB_SQLITE_PATH:?}
     volumes:
-    - type: volume
-      source: apphub-shared
-      target: /data
-      volume:
-        nocopy: true
-        subpath: apphub-databases/${APPHUB_APP_ID:?}
+      - type: volume
+        source: apphub-shared
+        target: /data
+        volume:
+          nocopy: true
+          subpath: apphub-databases/${APPHUB_APP_ID:?}
     networks:
-    - apphub
+      - apphub
     labels:
-    - traefik.enable=true
-    - traefik.http.middlewares.gzip.compress=true
-    - traefik.http.middlewares.strip-${APP_SLUG:?}.stripprefix.prefixes=/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}
-    - traefik.http.routers.http-0-${APP_SLUG:?}.entryPoints=http
-    - traefik.http.routers.http-0-${APP_SLUG:?}.rule=Host(`${APPHUB_PUBLIC_HOST:?}`)
-      && PathPrefix(`/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}/`)
-    - traefik.http.routers.http-0-${APP_SLUG:?}.middlewares=apphub-errors@file,apphub-auth@file,apphub-strip-cookie@file,strip-${APP_SLUG:?}@docker,gzip@docker
-    - traefik.http.routers.http-0-${APP_SLUG:?}.service=http-0-${APP_SLUG:?}
-    - traefik.http.services.http-0-${APP_SLUG:?}.loadbalancer.server.port=8000
-    - traefik.http.routers.hc-${APP_SLUG:?}.entryPoints=http
-    - traefik.http.routers.hc-${APP_SLUG:?}.rule=Host(`${APPHUB_PUBLIC_HOST:?}`) &&
-      Path(`/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}/__apphub_healthz`)
-    - traefik.http.routers.hc-${APP_SLUG:?}.middlewares=apphub-strip-cookie@file,strip-${APP_SLUG:?}@docker
-    - traefik.http.routers.hc-${APP_SLUG:?}.service=http-0-${APP_SLUG:?}
-    - apphub.managed=true
-    - apphub.public_id=${APPHUB_APP_ID:?}
-    - apphub.slug=${APP_SLUG:?}
-    - apphub.route_contract=root-v1
-    - traefik.docker.network=${APPHUB_APP_NETWORK:?}
+      - traefik.enable=true
+      - traefik.http.middlewares.gzip.compress=true
+      # 路由资源按平台应用 ID 隔离，避免同名应用冲突。
+      - traefik.http.middlewares.strip-${APPHUB_RESOURCE_ID:?}.stripprefix.prefixes=/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}
+      - traefik.http.routers.http-0-${APPHUB_RESOURCE_ID:?}.entryPoints=http
+      - traefik.http.routers.http-0-${APPHUB_RESOURCE_ID:?}.rule=Host(`${APPHUB_PUBLIC_HOST:?}`)
+        && PathPrefix(`/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}/`)
+      - traefik.http.routers.http-0-${APPHUB_RESOURCE_ID:?}.middlewares=apphub-errors@file,apphub-auth@file,apphub-strip-cookie@file,strip-${APPHUB_RESOURCE_ID:?}@docker,gzip@docker
+      - traefik.http.routers.http-0-${APPHUB_RESOURCE_ID:?}.service=http-0-${APPHUB_RESOURCE_ID:?}
+      - traefik.http.services.http-0-${APPHUB_RESOURCE_ID:?}.loadbalancer.server.port=8000
+      - traefik.http.routers.hc-${APPHUB_RESOURCE_ID:?}.entryPoints=http
+      - traefik.http.routers.hc-${APPHUB_RESOURCE_ID:?}.rule=Host(`${APPHUB_PUBLIC_HOST:?}`) &&
+        Path(`/ops-app/${APPHUB_APP_ID:?}/${APP_SLUG:?}/__apphub_healthz`)
+      - traefik.http.routers.hc-${APPHUB_RESOURCE_ID:?}.middlewares=apphub-strip-cookie@file,strip-${APPHUB_RESOURCE_ID:?}@docker
+      - traefik.http.routers.hc-${APPHUB_RESOURCE_ID:?}.service=http-0-${APPHUB_RESOURCE_ID:?}
+      - apphub.managed=true
+      - apphub.public_id=${APPHUB_APP_ID:?}
+      - apphub.slug=${APP_SLUG:?}
+      - apphub.route_contract=root-v1
+      - traefik.docker.network=${APPHUB_APP_NETWORK:?}
     restart: unless-stopped
 volumes:
   apphub-shared:

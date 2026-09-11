@@ -64,6 +64,28 @@ def test_sync_identity_inserts_missing_identity_after_api_version(tmp_path: Path
     assert lines[2] == 'title: "销售看板"'
 
 
+def test_sync_identity_uses_app_id_schema_without_legacy_name(tmp_path: Path) -> None:
+    target = tmp_path / "app.yaml"
+    target.write_text(
+        "apiVersion: apps.aukeys/v1\n"
+        "name: stale-slug\n"
+        "app_id: old-id\n"
+        "title: 示例应用\n"
+        "database:\n"
+        "  kind: sqlite\n",
+        encoding="utf-8",
+    )
+
+    changed = AppManifestStore().sync_identity(tmp_path, _binding())
+
+    assert changed is True
+    payload = yaml.safe_load(target.read_text(encoding="utf-8"))
+    assert payload["app_id"] == "app-1"
+    assert payload["title"] == "销售看板"
+    assert "name" not in payload
+    assert payload["database"] == {"kind": "sqlite"}
+
+
 def test_required_manifest_must_exist(tmp_path: Path) -> None:
     with pytest.raises(AppProjectError) as caught:
         AppManifestStore().load(tmp_path, required=True)
