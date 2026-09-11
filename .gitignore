@@ -53,3 +53,6 @@ output/test-artifacts/
 output/google-trends/
 output/ops-amazon-stylesnap/
 output/seller-sprite-rest-e2e-*/
+
+# Standalone site projects; each manages its own Git repository.
+/sites/
