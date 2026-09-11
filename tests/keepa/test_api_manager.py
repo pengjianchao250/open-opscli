@@ -760,3 +760,52 @@ def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):
         raise AssertionError("expected quota precheck failure")
 
     assert (tmp_path / "low-quota" / "params.json").exists()
+
+
+def test_manager_rechecks_quota_after_wait_and_stops_if_still_low(
+    monkeypatch, tmp_path: Path
+):
+    """等待 refill 后额度仍不足时不得继续消耗 Keepa 请求。"""
+
+    class StillLowQuotaClient(DummyKeepaClient):
+        token_status_calls = 0
+        get_json_calls = 0
+
+        async def token_status(self):
+            self.__class__.token_status_calls += 1
+            return {"timestamp": 1000, "tokensLeft": 1, "refillIn": 300000, "refillRate": 5}
+
+        async def get_json(self, endpoint, params):
+            self.__class__.get_json_calls += 1
+            return await super().get_json(endpoint, params)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", StillLowQuotaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    monkeypatch.setattr(api_manager_module.asyncio, "sleep", no_sleep)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    try:
+        _run(
+            manager.run(
+                KeepaScenarioRequest(
+                    scenario="product",
+                    site="US",
+                    params={"asin": "B0088PUEPK"},
+                    job_id="low-quota-after-wait",
+                    wait=True,
+                )
+            )
+        )
+    except Exception as exc:
+        assert exc.code == "KEEPA_QUOTA_INSUFFICIENT"
+        assert exc.retry_after_seconds == 301
+        assert exc.tokens_left == 1
+    else:
+        raise AssertionError("expected quota recheck failure")
+
+    assert StillLowQuotaClient.token_status_calls == 2
+    assert StillLowQuotaClient.get_json_calls == 0
