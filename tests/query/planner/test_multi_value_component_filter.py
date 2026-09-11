@@ -72,6 +72,32 @@ def test_no_hit_returns_empty_kind():
     assert kind == ""
 
 
+@pytest.mark.parametrize(
+    ("query", "values"),
+    [
+        ("按ASIN看销量", ["SI"]),
+        ("group by 部门", ["R"]),
+        ("查看指标 price", ["R"]),
+    ],
+)
+def test_short_ascii_enum_values_require_token_boundaries(query, values):
+    hits, kind = query_plan._reverse_lookup_component_matches(
+        query, values, query_plan._normalize_component_value
+    )
+
+    assert hits == []
+    assert kind == ""
+
+
+def test_short_ascii_enum_value_still_matches_when_explicit():
+    hits, kind = query_plan._reverse_lookup_component_matches(
+        "品牌=R", ["R"], query_plan._normalize_component_value
+    )
+
+    assert hits == ["R"]
+    assert kind == "exact"
+
+
 def test_legacy_values_helper_still_returns_flat_list():
     """保留的旧签名仍只返回候选列表，既有调用方与测试不受影响。"""
     hits = query_plan._reverse_lookup_component_values(
@@ -79,6 +105,250 @@ def test_legacy_values_helper_still_returns_flat_list():
     )
 
     assert hits == ["傲彼瑞-美国"]
+
+
+def test_partial_authorized_channel_list_does_not_leak_country_substring():
+    """未授权复合渠道项仍归渠道所有，内部国家名不得成为额外筛选。"""
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": [
+                {
+                    "field_name": "channel_name",
+                    "label_zh": "渠道",
+                    "component_table_id": 1,
+                },
+                {
+                    "field_name": "country_name",
+                    "label_zh": "国家",
+                    "component_table_id": 2,
+                },
+            ],
+            "query_template": {"filters": []},
+        },
+    }
+
+    def enum_fn(table_id, _field_name, *, limit):
+        return ["傲创-美国"] if table_id == 1 else ["美国", "加拿大"]
+
+    resolved = query_plan._resolve_component_filters(
+        contract,
+        "渠道是傲创-美国和傲创-加拿大的销售额",
+        enum_fn,
+        auto_enum=True,
+    )
+
+    assert resolved["status"] == "planned"
+    assert resolved["execution_ref"]["query_template"]["filters"] == [
+        {"field": "channel_name", "operator": "=", "value": "傲创-美国"}
+    ]
+    disclosure = " ".join(resolved["model_view"]["component_filter_disclosures_zh"])
+    assert "傲创-加拿大" in disclosure
+    assert "未纳入" in disclosure
+
+
+def test_prefixed_department_partial_list_uses_authorized_intersection():
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": [
+                {"field_name": "dept_name", "label_zh": "部门", "component_table_id": 1}
+            ],
+            "query_template": {"filters": []},
+        },
+    }
+
+    resolved = query_plan._resolve_component_filters(
+        contract,
+        "部门是范泰克、火星事业部的销量",
+        lambda *_args, **_kwargs: ["范泰克", "九部"],
+        auto_enum=True,
+    )
+
+    assert resolved["status"] == "planned"
+    assert resolved["execution_ref"]["query_template"]["filters"] == [
+        {"field": "dept_name", "operator": "=", "value": "范泰克"}
+    ]
+    disclosure = " ".join(resolved["model_view"]["component_filter_disclosures_zh"])
+    assert "火星事业部" in disclosure
+    assert "未纳入" in disclosure
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "渠道傲创-美国、傲创-加拿大的销量",
+        "请看渠道傲创-美国和傲创-加拿大的销量",
+        "领导要渠道傲创-美国或傲创-加拿大的销量",
+    ],
+)
+def test_copula_less_compound_channel_list_keeps_channel_ownership(query):
+    """省略系词的复合渠道列表仍整体归属渠道，不降级成国家列表。"""
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": [
+                {"field_name": "channel_name", "label_zh": "渠道", "component_table_id": 1},
+                {"field_name": "country_name", "label_zh": "国家", "component_table_id": 2},
+            ],
+            "query_template": {"filters": []},
+        },
+    }
+
+    def enum_fn(table_id, _field_name, *, limit):
+        return (
+            ["傲创-美国", "傲创-加拿大"]
+            if table_id == 1
+            else ["美国", "加拿大"]
+        )
+
+    resolved = query_plan._resolve_component_filters(
+        contract, query, enum_fn, auto_enum=True
+    )
+
+    assert resolved["status"] == "planned"
+    assert resolved["execution_ref"]["query_template"]["filters"] == [
+        {
+            "field": "channel_name",
+            "operator": "in",
+            "value": ["傲创-美国", "傲创-加拿大"],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("channel_values", "expected_filter", "disclosed_value"),
+    [
+        (
+            ["傲创-美国", "傲创-加拿大"],
+            {
+                "field": "channel_name",
+                "operator": "in",
+                "value": ["傲创-美国", "傲创-加拿大"],
+            },
+            None,
+        ),
+        (
+            ["傲创-美国"],
+            {"field": "channel_name", "operator": "=", "value": "傲创-美国"},
+            "傲创-加拿大",
+        ),
+    ],
+)
+def test_postfixed_channel_list_keeps_channel_ownership(
+    channel_values, expected_filter, disclosed_value
+):
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": [
+                {"field_name": "channel_name", "label_zh": "渠道", "component_table_id": 1},
+                {"field_name": "country_name", "label_zh": "国家", "component_table_id": 2},
+            ],
+            "query_template": {"filters": []},
+        },
+    }
+
+    def enum_fn(table_id, _field_name, *, limit):
+        return channel_values if table_id == 1 else ["美国", "加拿大"]
+
+    resolved = query_plan._resolve_component_filters(
+        contract,
+        "2026年8月傲创-美国和傲创-加拿大渠道的销量",
+        enum_fn,
+        auto_enum=True,
+    )
+
+    assert resolved["status"] == "planned"
+    assert resolved["execution_ref"]["query_template"]["filters"] == [expected_filter]
+    disclosure = " ".join(
+        resolved["model_view"].get("component_filter_disclosures_zh") or []
+    )
+    if disclosed_value:
+        assert disclosed_value in disclosure
+        assert "未纳入" in disclosure
+
+
+@pytest.mark.parametrize(
+    ("field_name", "label_zh", "values", "query"),
+    [
+        ("dept_name", "部门", ["范泰克", "九部"], "排除部门范泰克,九部后看销量"),
+        ("country_name", "国家", ["加拿大", "英国"], "加拿大,英国国家除外看销量"),
+        ("brand_name", "品牌", ["HOMFA", "MAMIZO"], "HOMFA,MAMIZO品牌除外看销量"),
+        (
+            "channel_name",
+            "渠道",
+            ["傲创-美国", "傲创-加拿大"],
+            "傲创-美国,傲创-加拿大渠道除外看销量",
+        ),
+        (
+            "team_name",
+            "销售小组",
+            ["一部-C组", "三部-A组"],
+            "一部-C组,三部-A组销售小组除外看销量",
+        ),
+    ],
+)
+def test_ascii_comma_exclusion_list_keeps_one_owner_and_one_polarity(
+    field_name, label_zh, values, query
+):
+    """列表级排除不得因 ASCII 逗号断成一正一负或泄漏内部子字段。"""
+    component_values = {
+        "dept_name": ["范泰克", "九部", "一部", "三部"],
+        "country_name": ["加拿大", "英国", "美国"],
+        "brand_name": ["HOMFA", "MAMIZO"],
+        "channel_name": ["傲创-美国", "傲创-加拿大"],
+        "team_name": ["一部-C组", "三部-A组"],
+        "large_team_name": ["A组", "C组"],
+    }
+    components = [
+        {
+            "field_name": name,
+            "label_zh": {
+                "dept_name": "部门",
+                "country_name": "国家",
+                "brand_name": "品牌",
+                "channel_name": "渠道",
+                "team_name": "销售小组",
+                "large_team_name": "大组",
+            }[name],
+            "component_table_id": index,
+        }
+        for index, name in enumerate(component_values, start=1)
+    ]
+    table_to_field = {
+        component["component_table_id"]: component["field_name"]
+        for component in components
+    }
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "filter_components": components,
+            "query_template": {"filters": []},
+        },
+    }
+
+    def enum_fn(table_id, _field_name, *, limit):
+        return component_values[table_to_field[table_id]]
+
+    resolved = query_plan._resolve_component_filters(
+        contract, query, enum_fn, auto_enum=True
+    )
+
+    assert resolved["status"] == "planned"
+    assert resolved["execution_ref"]["query_template"]["filters"] == [
+        {"field": field_name, "operator": "not_in", "value": values}
+    ]
 
 
 def _write(resolved):

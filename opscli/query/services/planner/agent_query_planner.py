@@ -83,11 +83,41 @@ PERMISSION_ENUM_TERMS = (
     "可用枚举值",
     "枚举值",
     "可选值",
+    "当前账号可见",
+    "当前账户可见",
     "合法值",
     "允许值",
     "权限值",
     "enumerate",
     "enum",
+)
+PERMISSION_ENUM_PATTERNS = (
+    re.compile(r"当前(?:账号|账户)(?:能|可以|可)?(?:看到|查看)"),
+    re.compile(r"当前可见"),
+    re.compile(r"(?:有哪些|有什么|列出|列表|罗列).{0,24}(?:可选|可用|允许|可见)"),
+    re.compile(
+        r"(?:可选|可用|允许|可见)的?[^，。；;！？!?]{0,24}"
+        r"(?:有哪些|有什么|是什么|列表)"
+    ),
+    re.compile(
+        r"\b(?:show|list|display)\s+(?:the\s+)?available\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwhat\s+(?:values?\s+)?(?:are\s+)?available\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bwhat\s+[^,.;!?]{1,32}\s+values?\s+(?:are\s+)?available\b",
+        re.IGNORECASE,
+    ),
+)
+COMPONENT_BUSINESS_ANALYSIS_RE = re.compile(
+    r"业绩|销售额|销量|销售量|订单|利润|毛利|收入|成本|转化率|点击率|"
+    r"退款率|退货率|趋势|表现|同比|环比|"
+    r"\b(?:sales|revenue|profit|orders?|inventory|performance|trends?|"
+    r"conversion|clicks?|refunds?|returns?)\b",
+    re.IGNORECASE,
 )
 DEFAULT_DATASET_REJECTION_TERMS = (
     "不使用即时综合数据集",
@@ -194,8 +224,81 @@ def _explicit_candidates(query: str, profiles: list[dict]) -> list[dict]:
     return sorted(matches, key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
 
+# 纯枚举问句：只在用户已经显式点名组件数据集时才据此放行
+_ENUMERATION_QUESTION_RE = re.compile(
+    r"有哪些|都有哪些|有什么|都有什么|列出|列一下|清单|取值|可取值"
+)
+
+
+def _enumeration_question(query: str) -> bool:
+    """是否是"有哪些/列出"这类纯枚举问句。
+
+    比 _permission_enum_requested 宽松：不要求同时出现"可选/可用/可见"。
+    只用在用户已经把组件数据集名字写出来的场景——那时意图没有歧义，
+    再要求补一个"可选"才肯放行属于过度澄清（全字段矩阵实测 37 例）。
+    业务指标否决门禁仍然优先生效。
+    """
+    normalized_query = _normalize(query)
+    if COMPONENT_BUSINESS_ANALYSIS_RE.search(normalized_query):
+        return False
+    return bool(_ENUMERATION_QUESTION_RE.search(normalized_query))
+
+
 def _permission_enum_requested(query: str) -> bool:
-    return any(_term_matches(term, query) for term in PERMISSION_ENUM_TERMS)
+    normalized_query = _normalize(query)
+    if COMPONENT_BUSINESS_ANALYSIS_RE.search(normalized_query):
+        return False
+    return any(
+        _term_matches(term, normalized_query) for term in PERMISSION_ENUM_TERMS
+    ) or any(
+        pattern.search(normalized_query)
+        for pattern in PERMISSION_ENUM_PATTERNS
+    )
+
+
+# 组件数据集中文名的固定包装：查询组件<字段词>数据集
+_COMPONENT_DESCRIPTION_RE = re.compile(r"^查询组件(?P<core>.+?)数据集$")
+
+
+def _component_field_terms(card: dict) -> list[str]:
+    """从组件数据集中文名里取出它所枚举的字段词。
+
+    「查询组件销售小组和大组数据集」→ ["销售小组", "大组"]。用中文名而不是硬编码
+    映射，新增组件表时无需改代码。
+    """
+    match = _COMPONENT_DESCRIPTION_RE.match(_normalize(card.get("description")))
+    if not match:
+        return []
+    core = match.group("core")
+    return [term for term in re.split(r"和|、|与|及", core) if len(term) >= 2]
+
+
+def _permission_enum_component_candidates(query: str, profiles: list[dict]) -> list[dict]:
+    """枚举意图下，请求里点名了哪个组件数据集的字段。
+
+    「列出当前可见的部门」原本会落到默认的即时综合数据集，生成一份没有时间过滤的
+    dept_name 维度查询，后端固定报「必须指定时间范围后才能取数」——这条被文档承诺
+    的能力实际 100% 失败。权限枚举的权威来源就是组件表，且组件表不要求时间过滤，
+    因此枚举意图命中时直接选组件表。命中多个时交给上层澄清，不猜。
+    """
+    normalized_query = _normalize(query)
+    matched = []
+    for profile in profiles:
+        card = profile["card"]
+        if card.get("dataset_category") != "query_component":
+            continue
+        terms = _component_field_terms(card)
+        if any(term in normalized_query for term in terms):
+            matched.append(
+                {
+                    "dataset_alias": card["dataset_alias"],
+                    "dataset_name": card["dataset_name"],
+                    "dataset_category": card["dataset_category"],
+                    "score": EXPLICIT_NAME_SCORE,
+                    "reasons": ["permission_enum_component"],
+                }
+            )
+    return matched
 
 
 def _description_candidates(query: str, profiles: list[dict]) -> list[dict]:
@@ -583,12 +686,10 @@ def _default_dataset_candidate(
 def _with_default_dataset_recommendation(
     result: dict, candidate: dict | None, *, override_existing: bool = False
 ) -> dict:
-    """把默认候选标为必须确认的推荐，而不是可直接执行的静默选表。
+    """把唯一且覆盖请求语义的默认候选标为自动选用。
 
-    override_existing=True 时允许默认候选覆盖已选出的其他候选：调用方已判定
-    既有首选候选拿不出请求点名指标的精确中文证据、而默认即时综合数据集拿得出
-    （验收实测「亚马逊SC 近7天销售额」靠平台槽位+说明文本把流量转化率表推成首选，
-    该表根本没有「销售额」，即时综合数据集反而落选）。
+    override_existing=True 只用于没有显式数据集或专用业务提示的阶段 3：默认候选已通过
+    当前账号授权、领域、槽位和点名指标覆盖校验，应覆盖普通文本打分得到的其他候选。
     """
     if candidate is None:
         return result
@@ -610,7 +711,8 @@ def _with_default_dataset_recommendation(
     )
     recommended["default_dataset_recommendation"] = {
         "kind": "instant_comprehensive",
-        "confirmation_required": True,
+        "confirmation_required": False,
+        "auto_selected": True,
     }
     return recommended
 
@@ -890,7 +992,10 @@ def plan_query(
             validated_rules,
         )
         top = explicit[0]
-        component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
+        # 用户已显式写出组件数据集名，枚举问句即可放行，不必再要求"可选/可用"
+        component_blocked = top["dataset_category"] == "query_component" and not (
+            _permission_enum_requested(query) or _enumeration_question(query)
+        )
         if len(explicit) > 1 or component_blocked:
             return _result(
                 "clarify_required",
@@ -966,7 +1071,10 @@ def plan_query(
                 description_matches[:candidate_limit],
                 "dataset_constraints",
             )
-        component_blocked = top["dataset_category"] == "query_component" and not _permission_enum_requested(query)
+        # 用户已显式写出组件数据集名，枚举问句即可放行，不必再要求"可选/可用"
+        component_blocked = top["dataset_category"] == "query_component" and not (
+            _permission_enum_requested(query) or _enumeration_question(query)
+        )
         if component_blocked:
             return _result(
                 "clarify_required",
@@ -989,6 +1097,27 @@ def plan_query(
     specialized_hint = any(
         _dataset_business_hint(profile, query) is not None for profile in profiles
     )
+    # 权限枚举意图优先于默认业务表推荐：组件表才是授权取值的权威来源，
+    # 且不需要时间过滤，落到业务表只会被后端以「必须指定时间范围」拒绝。
+    if _permission_enum_requested(query):
+        enum_components = _permission_enum_component_candidates(query, profiles)
+        if len(enum_components) == 1:
+            return _result(
+                "candidate_ready",
+                "permission_enum",
+                semantics["slots"],
+                enum_components[:candidate_limit],
+                None,
+            )
+        if len(enum_components) > 1:
+            return _result(
+                "clarify_required",
+                "permission_enum",
+                semantics["slots"],
+                enum_components[:candidate_limit],
+                "dataset_selection",
+            )
+
     default_candidate = None
     if recommend_default_dataset and not default_dataset_rejected and not specialized_hint:
         default_candidate = _default_dataset_candidate(
@@ -1046,6 +1175,7 @@ def plan_query(
                         None,
                     ),
                     default_candidate,
+                    override_existing=True,
                 )
             return _with_default_dataset_recommendation(
                 _result(
@@ -1103,21 +1233,9 @@ def plan_query(
     contenders = [candidate for candidate in scored if candidate["_semantic_rank"] == best_rank]
     contenders.sort(key=lambda item: (-item["score"], item["dataset_alias"].casefold()))
 
-    # 点名指标的精确中文证据优先于槽位/文本得分：首选候选拿不出该证据、而默认
-    # 即时综合数据集拿得出时，改由默认数据集承接（专用业务提示场景不会走到这里，
-    # 因为 specialized_hint 时 default_candidate 恒为 None）。
-    profiles_by_alias = {profile["card"]["dataset_alias"]: profile for profile in profiles}
-    top_profile = profiles_by_alias.get(contenders[0]["dataset_alias"])
-    default_profile = (
-        profiles_by_alias.get(default_candidate["dataset_alias"]) if default_candidate else None
-    )
-    prefer_default = bool(
-        has_metric
-        and top_profile is not None
-        and default_profile is not None
-        and not _has_chinese_metric_evidence(query, top_profile)
-        and _has_chinese_metric_evidence(query, default_profile)
-    )
+    # 阶段 3 表示用户没有显式指定数据集；推荐表通过完整覆盖校验后直接承接普通请求。
+    # 专用业务提示、明确拒绝推荐表和显式数据集均已在更早分支处理，此处不会覆盖。
+    prefer_default = default_candidate is not None
 
     if len(contenders) == 1:
         return _with_default_dataset_recommendation(

@@ -148,14 +148,14 @@ query_flow(request="查近30天各部门的销售额和订单量", limit=100,
   - `clarification_reason_codes`（澄清原因码数组）与 `clarification_messages_zh`（对应中文文案）：**先读 `clarification_reason_codes` 判断澄清类型，再看 `clarification_messages_zh` 取话术**，不要只凭文案反推类型
   - `dataset_candidates_zh`（候选数据集卡片）、`pending_confirmations_zh`（待确认项）
   - `field_suggestions_zh`（近似字段建议，形态 `[{requested, candidates_zh[]}]`）与 `unknown_requested_fields`（用户点名却不在当前数据集的字段）：`metric_not_in_dataset` / `dimension_not_in_dataset` 时下发
-  - `field_alias_mappings_zh`（形态 `[{requested, field_zh, field_name}]`）：用户用稳定别名点名（订单量/单量 → 销量，销售金额 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实取数据集口径字段时下发；结论须以 `field_zh` 命名并说明该对应关系
+  - `field_alias_mappings_zh`（形态 `[{requested, field_zh, field_name}]`）：用户用稳定别名点名（订单量/单量 → 销量，销售金额/收入 → 销售额，广告花费 → 广告费，毛利额 → 毛利，采购费用 → 采购成本）而实取数据集口径字段时下发；结论须以 `field_zh` 命名并说明该对应关系
   - `component_candidates_zh`（组件当前账号可见取值，形态 `[{field_zh, values_zh[], total}]`）：只在 `component_filter_value_unmatched` / `component_filter_unauthorized` 时下发；`component_filter_field_ambiguous` **不下发**该键，候选字段名写在 `clarification_messages_zh` 文案内
   - `unsupported_currencies`（识别到的白名单外币种代码）：`unsupported_currency` 时下发
-  - `default_dataset_recommendation_zh`：`auto_selected=true` 时直接继续，不再提问；`confirmation_required=true` 时才询问是否采用推荐数据集
+  - `default_dataset_recommendation_zh`：未指定数据集且推荐表通过业务与字段指导校验时固定为 `auto_selected=true`、`confirmation_required=false`，并优先于其他普通数据集的文本打分候选直接继续；显式数据集、明确拒绝推荐表或专用业务提示除外。请求仍缺查询字段时只澄清推荐字段，不再确认数据集
   - `platform_semantic_members`（**一律是展示名**：亚马逊SC / 亚马逊VC / TikTok / Walmart / Wayfair / Temu / Shopify / SHEIN / 山姆，不是内部键；内部枚举名在 `execution_ref.platform_semantic_keys`）/ `platform_effective_members` / `platform_scope_disclosures_zh` / `platform_filter_state`
   - `default_filters_zh`（服务端默认条件，必须披露）、`component_filter_disclosures_zh`
   - `fallback_level`（降级起点，只有 `L1_contract_catalog` / `L3_metadata_refresh` 两个取值）、`no_guess_policy_zh`（降级态禁止猜字段的口径原文）、`recovery_state`（如 `refresh_failed`）与 `recovery_command` / `recovery_hint_zh`
-- **澄清码清单**（`clarification_reason_codes` 的全部取值）：`dataset_constraints`、`query`、`business_scope`、`dataset_selection`、`business_dataset`、`dataset_not_available_in_current_scope`、`incompatible_scope`、`dataset_identity`、`platform_scope`、`ad_type`、`grain`、`field_identity`、`time_scope_confirmation`、`recommended_fields_confirmation`、`default_dataset_confirmation`、`time_comparison_unsupported`、`metric_not_in_dataset`、`dimension_not_in_dataset`、`unsupported_currency`、`component_filter_value_unmatched`、`component_filter_unauthorized`、`component_filter_field_ambiguous`、`snapshot_metric_window_conflict`。
+- **澄清码清单**（`clarification_reason_codes` 的全部取值）：`dataset_constraints`、`query`、`business_scope`、`dataset_selection`、`business_dataset`、`dataset_not_available_in_current_scope`、`incompatible_scope`、`dataset_identity`、`platform_scope`、`ad_type`、`grain`、`field_identity`、`time_scope_confirmation`、`recommended_fields_confirmation`、`time_comparison_unsupported`、`metric_not_in_dataset`、`dimension_not_in_dataset`、`unsupported_currency`、`component_filter_value_unmatched`、`component_filter_unauthorized`、`component_filter_field_ambiguous`、`snapshot_metric_window_conflict`。
 - `answer_contract`：最终回答必须覆盖 `required_disclosures_zh`，并遵守 `forbidden_outputs_zh`。`technical_identifiers_user_visible=false` 时不得向用户展示 alias、table_id 等技术标识。
 - `execution_ref`：仅供构造使用，**禁止**作为业务判断理由或展示给用户。`selection_source=recommended` 的字段是系统推荐（用户未点名），未经说明不得直接采用。常见键还有 `query_template`（`status=planned` 时的完整性绑定模板）、`time_scope`、`snapshot_policy`（快照窗口收敛口径，见 4.8）、`resolved_platform_values` / `platform_semantic_keys`、`filter_components` / `filter_value_match_policy`、`default_filters`、`fallback_catalog`。
 
@@ -218,7 +218,7 @@ Excel。
 
 **趋势/按日自动加日期维度**：原文出现「按日趋势」「每天的」「逐日」「趋势」「走势」等表述时，规划器会自动把数据集主日期字段加为分组维度（**日粒度**），并在 `answer_contract.required_disclosures_zh` 追加「已按趋势/按日诉求加入日期维度（日粒度）：结论须按日期序列表述，不得只报合计」。结论必须按日期序列讲，不得只报合计。原文含「不按日拆分」等否定语境时不加该维度。
 
-**默认按日期升序**：模板含时间粒度维度（日期/月份等）且用户未点名排序时，规划器自动写入 `orderBy: [{"field": "<日期字段>", "desc": false}]`。执行器若发现服务端未按此排序会本地重排，并在 `result_disclosures.order_fallback` / `order_disclosure_zh` 披露。调用方不需要、也不应为趋势结果自行重排。
+**默认按日期升序**：模板含时间粒度维度（日期/月份等）且用户未点名排序时，规划器自动写入 `orderBy: [{"field": "<日期字段>", "desc": false}]`。明确“按日/趋势”时，指标名称中自带的“排名”等词不算用户点名排序，仍按日期升序；只有 Top N 或可绑定到已选字段的显式排序才覆盖。主日期字段须具备独立日期技术词元或中文日期/时间语义，普通字段名偶然包含 `time` 子串不算日期。执行器若发现服务端未按此排序会本地重排，并在 `result_disclosures.order_fallback` / `order_disclosure_zh` 披露。调用方不需要、也不应为趋势结果自行重排。
 
 **TopN/排序的 NL 解析**：规划器解析「前3」「前十」「top5」（**不带「名/行/条」等行数单位**的写法也算；唯一例外是数字后紧跟时间单位的时间表述，如「前7天」「前3个月」，那是时间范围不是行数）、「按X降序/升序」「只要前5行」等意图，解析成功即写入模板的 `orderBy` / `limit`（`orderBy` 形态 `[{"field": "<结果字段>", "desc": true}]`，`desc` 为布尔）。排序字段优先级：用户显式点名的字段 > 本次唯一指标（Top N 的常识语义）。
 
@@ -272,8 +272,9 @@ query_metadata(include_all_fields=True)  # 全量元数据（所有授权数据�
 3. 问句内嵌完整中文数据集名时，嵌套命中保留包含关系中**最长**的授权名称；独立命中多个名称或同名冲突时必须澄清。
 4. 候选不唯一、粒度不清或无授权候选时停止并澄清，不自行选择。
 5. 业务领域词（"广告数据""销售数据""库存数据"等）必须搜索**数据集列表本身**，不能因为字段搜索结果集中在某个 table_id 就判定数据集唯一。
-6. `query_component` 类数据集**只用于权限枚举**，不是业务结果数据集。明确请求枚举/可用值时才可作为查询目标。
-7. 候选为空不表示可以扩大数据范围；应报告当前授权元数据无可用候选。
+6. `query_component` 类数据集**只用于权限枚举**，不是业务结果数据集。明确请求枚举/可用值（含短语级 `show/list/display available`、`what values are available for <字段>`、`what <字段> values are available`）时才可作为查询目标并下发维度查询模板；`available sales/inventory` 等普通业务分析仍安全澄清。组件枚举的 Top N 仅写入 `limit`，无指标时不要求排序字段。
+7. 已确认的数据集完整名称只用于选表，不参与字段或组件值识别；完整授权字段标签的命中区间优先于其中的稳定短别名。分组句法（如“按部门”“各事业部”“中查看部门”“by 事业部”“group by 部门”）不得解析为组件筛选值。组件筛选须统一覆盖有无系词、前置排除、后置“除外”、字段前置/后置多值列表和“同时/又排除”等冲突子句；字段前置显式标签优先于值内部或后续的后置标签，筛选字段标签不进入分组，完整列表先归属一个字段再与授权枚举求交集，整组排除极性跨所有列表分隔符作用于全部成员，完整复合值优先于其内部跨字段子串，同值正负冲突在下发模板前澄清。
+8. 候选为空不表示可以扩大数据范围；应报告当前授权元数据无可用候选。
 
 ---
 
@@ -477,7 +478,9 @@ query_simple(
    不在返回值中           → 无权限：展示合法值列表请用户重选，禁止执行原查询
 ```
 
-**值匹配策略**：先做规范化（NFKC、去首尾空白、大小写归一）后的**完整等值**比较；部门名称额外允许阿拉伯数字与中文数字等价（"9部" = "九部"）。唯一等值命中时直接使用该枚举原值执行，不再询问；**禁止用子串模糊扩展**——"9部"只匹配"九部"，不匹配"项目九部"；"范泰克"只匹配"范泰克"，不匹配"范泰克体系外"。无唯一等值命中时停止并让用户重选。
+**值匹配策略**：先做规范化（NFKC、去首尾空白、大小写归一）后的**完整等值**比较；部门编号中的多位阿拉伯数字与中文数字统一归一（"22部" = "二十二部"），并保留"项目"前缀作为组织身份的一部分。"十二部"、"项目十一部"、"22部"、"项目二十二部"等完整部门词必须整体识别，禁止截取其中的"一部"或"二部"作为销售小组，也不得用这些子串命中"一部-B组"等销售小组枚举的主段。唯一等值命中时直接使用该枚举原值执行，不再询问；**禁止用子串模糊扩展**——"9部"只匹配"九部"，不匹配"项目九部"；"范泰克"只匹配"范泰克"，不匹配"范泰克体系外"。命中值处于排除语境（排除、剔除、去除、不含、不等于、除外、之外、以外、`!=`、`<>`、`not in`）时，模板必须保留排除极性：单值使用 `!=`，多值使用 `not_in`，不得生成 `=` 或 `in`；同一值同时出现包含和排除语义时转澄清。无唯一等值命中时停止并让用户重选。
+
+**指标集合完整性**：用户点名的每个指标都必须逐项绑定到当前数据集授权字段。稳定别名按正式字段披露并执行（如“收入”对应“销售额”）；多指标请求只命中其中一部分时不得 `planned`，缺失项必须进入 `metric_not_in_dataset` 澄清。
 
 组件 alias 缺失或组件枚举失败时**只阻断该筛选**，不得改为不加筛选的全范围查询。
 

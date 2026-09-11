@@ -4,11 +4,11 @@
 
 ## 提交前配置检查
 
-- 使用 Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://ops.api.qa.aukeyit.com`。
+- 使用 Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://mcp.ops.aukeyit.com`。
 - `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 必须是纯 origin，不含 `/api`、接口路径、查询参数或末尾 `/`；不得设置代码默认值、按鉴权模式推断环境或拆分 provider 专属变量。
 - 第三方数据鉴权来自每个请求已校验的 `QueryCredentials`，部署配置不得注入共享 API Key、JWT、Session、Cookie 或 viewer ticket。
-- 独立仓库根存在 `app.yaml`，保持 `apiVersion: apps.aukeys/v1`；名称、标题、数据集和可见范围按真实应用维护。应用清单字段以当前模板和平台 schema 为准，不补回旧版运行时声明。
-- 根目录存在 schema v4 的本地 binding `.opscli/app.json`；`app_id` 严格匹配 `^[0-9A-Za-z]{5}$` 并保留大小写，`default_branch` 只能是 `master`，且 `.opscli/app.json.slug == app.yaml.name`。禁止使用 slug、`id`、`site_id`、目录名或 `app.yaml.name` 回退身份；`app_id`、仓库、Owner 和 Git 信息只保留在本地 binding。
+- 独立仓库根存在 `app.yaml`，保持 `apiVersion: apps.aukeys/v1`；`app_id`、标题、数据集和可见范围按真实应用维护，且不得包含已废弃的顶层 `name`。应用清单字段以当前模板和平台 schema 为准，不补回旧版运行时声明。
+- 根目录存在 schema v4 的本地 binding `.opscli/app.json`；binding 和 `app.yaml` 中的 `app_id` 均严格匹配 `^[0-9A-Za-z]{5}$`、保留大小写，并满足 `.opscli/app.json.app_id == app.yaml.app_id`，`default_branch` 只能是 `master`。禁止使用 slug、`id`、`site_id`、目录名或旧 `app.yaml.name` 回退身份；slug、仓库、Owner 和 Git 信息只保留在本地 binding。
 - `.gitignore` 必须忽略 `.opscli/`，`.opscli/app.json` 不得被 Git 跟踪或暂存；`app.yaml` 留在源码中。
 - 使用 SQLite 时保留 `database.kind: sqlite`、`database.path: /data/app.db`。应用只使用 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。
 - 已初始化的空白 `data/app.db` 是必要模板资产，可以进入 Git 和镜像；本地运行库、真实业务数据、SQLite 伴生文件、`.env`、密钥和本地 binding 不得进入 Git 或构建上下文。不得把写入业务数据后的库当空白模板提交。

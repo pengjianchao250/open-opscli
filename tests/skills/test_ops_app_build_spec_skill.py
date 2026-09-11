@@ -32,7 +32,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.15"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.16"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -60,7 +60,7 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         "docs/ops-app/data-spec.md",
         "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
         "QueryCredentials",
-        "https://ops.api.qa.aukeyit.com",
+        "https://mcp.ops.aukeyit.com",
         "UNIQUE(owner_user_id, provider, request_hash)",
         "未隔离的 viewer 数据",
         "owner_user_id",
@@ -110,10 +110,10 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     for obsolete in ("create-vue", "assets/app.yaml", "ops-app.config"):
         assert obsolete not in skill
 
-    assert ".opscli/app.json.slug == app.yaml.name" in skill
+    assert ".opscli/app.json.app_id == app.yaml.app_id" in skill
     deployment = _read("references/deployment-standard.md")
     assert ".gitignore` 必须忽略 `.opscli/" in deployment
-    assert "app_id`、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
+    assert "slug、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
     assert skill.index('python "<skill-directory>/scripts/clone_template.py"') < skill.index(
         'opscli app create "<app-name>" --path "<project-directory>" --json'
@@ -221,7 +221,7 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         'AuthClient.build_session_headers("ops")',
         'AuthClient.build_request_auth("ops")',
         "https://ops.mcp.xenkee.com",
-        "https://ops.api.qa.aukeyit.com",
+        "https://mcp.ops.aukeyit.com",
         "UNIQUE(owner_user_id, provider, request_hash)",
         "不兼容旧变量别名",
     ):
@@ -298,11 +298,11 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "不得报告“已发布”或“部署成功”",
         "ops-feedback",
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         ".opscli/app.json` 不得被 Git 跟踪或暂存",
         "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
         "https://ops.mcp.xenkee.com",
-        "https://ops.api.qa.aukeyit.com",
+        "https://mcp.ops.aukeyit.com",
         "部署配置不得注入共享 API Key",
     ):
         assert required in deployment
@@ -363,7 +363,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.15"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.16"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

@@ -214,7 +214,10 @@ def test_filter_component_contract_requires_exact_enum_member_match():
     assert policy["substring_match_allowed"] is False
     assert policy["no_exact_match_action"] == "clarify_required"
     assert "department_arabic_chinese_numeral_equivalence" in policy["normalizations"]
+    assert "department_token_precedence_over_component_substrings" in policy["normalizations"]
     assert "9部”只匹配“九部" in policy["rule_zh"]
+    assert "十二部”“项目十一部”“22部”“项目二十二部" in policy["rule_zh"]
+    assert "不得截取其中的“一部”或“二部”作为销售小组" in policy["rule_zh"]
     assert "范泰克”不匹配“范泰克体系外" in policy["rule_zh"]
     assert any(
         "仅因名称包含" in message

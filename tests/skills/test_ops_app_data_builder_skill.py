@@ -43,8 +43,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.10"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.10"}
+    assert frontmatter["metadata"]["version"] == "0.1.11"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.11"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -81,7 +81,7 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
         "### 0. 模板初始化门禁",
         ".opscli/app.json",
         "binding 必须包含有效 `app_id/slug`",
-        ".opscli/app.json.slug == app.yaml.name",
+        ".opscli/app.json.app_id == app.yaml.app_id",
         "当前本地分支是 `master`",
         "远端存在 `origin/master`",
         "只有 binding 而没有模板代码",
@@ -174,7 +174,7 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         'AuthClient.build_session_headers("ops")',
         'AuthClient.build_request_auth("ops")',
         "https://ops.mcp.xenkee.com",
-        "https://ops.api.qa.aukeyit.com",
+        "https://mcp.ops.aukeyit.com",
         "纯根域名",
         "请求级 `ThirdPartyApiClient`",
         'base_url.rstrip("/") + path',
@@ -265,7 +265,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.10"
+    assert templates[SKILL_NAME]["version"] == "v0.1.11"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))
@@ -331,5 +331,5 @@ def test_ops_app_data_builder_does_not_embed_sensitive_or_local_values():
 
     urls = set(re.findall(r"https://[^\s`<>]+", content))
     assert urls
-    allowed_origins = ("https://ops.mcp.xenkee.com", "https://ops.api.qa.aukeyit.com")
+    allowed_origins = ("https://ops.mcp.xenkee.com", "https://mcp.ops.aukeyit.com")
     assert all(url.startswith(allowed_origins) for url in urls)

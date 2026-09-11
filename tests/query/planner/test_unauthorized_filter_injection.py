@@ -105,6 +105,12 @@ def test_partial_overlap_injects_only_authorized_values():
     assert _country_filters(contract) == [
         {"field": "country_name", "operator": "=", "value": "美国"}
     ]
+    disclosure = " ".join(
+        contract["model_view"].get("component_filter_disclosures_zh") or []
+    )
+    assert "德国" in disclosure
+    assert "未纳入" in disclosure
+    assert "美国" in disclosure
 
 
 def test_query_without_country_mention_passes_through():
