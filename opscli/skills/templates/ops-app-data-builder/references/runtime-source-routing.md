@@ -28,16 +28,16 @@
 - local 只存在于站点后端；远端不接收 local 标识、Cookie、`X-Opscli-Version` 或其他本机凭证。
 - 身份字段缺失或不合法时快速失败，不允许在 `viewer > session > local` 之间回退，也不使用共享 Secret 兜底。
 - 凭证不得进入 URL、请求体、前端、日志、SQLite、源码或异常文本。
-- 第三方 Client 只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，不得读取共享 API Key、旧变量别名或第二套运行时配置。
+- OPS Query 与第三方 Client 只读取 `OPSCLI_MCP_REST_API_BASE_URL`，不得读取共享 API Key、旧变量别名或第二套运行时配置。
 
 部署环境显式注入：
 
-| 环境 | `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` |
+| 环境 | `OPSCLI_MCP_REST_API_BASE_URL` |
 | --- | --- |
 | 生产 | `https://ops.mcp.xenkee.com` |
 | 预发布 | `https://mcp.ops.aukeyit.com` |
 
-`OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 不得有代码默认值，也不得根据鉴权模式推断环境。该值必须是纯 origin，不得包含 `/api`、接口路径、查询参数或末尾 `/`。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得分别定义 Keepa、SellerSprite Base URL，也不得进入 `VITE_*` 或其他前端构建变量。
+`OPSCLI_MCP_REST_API_BASE_URL` 不得有代码默认值，也不得根据鉴权模式推断环境。该值必须是纯 origin，不得包含 `/api`、接口路径、查询参数或末尾 `/`。所有接口地址统一使用 `base_url.rstrip("/") + path` 拼接，不得分别定义 OPS、Keepa、SellerSprite Base URL，也不得进入 `VITE_*` 或其他前端构建变量。它只承载 `/api/v1/*` REST 调用，不用于 `/mcp`、`/sse`。
 
 ## 3. OPS
 
@@ -59,7 +59,8 @@ OPS 使用标准模板的 `backend/core/auth.py` 和 `backend/clients/ops_query_
 → 站点 FastAPI
 → Depends(get_query_gateway)
 → ViewerQueryGateway
-→ OPS data-metrics
+→ OPSCLI_MCP_REST_API_BASE_URL + /api/v1/query/simple
+→ opscli-mcp 内部转发 OPS data-metrics
 ```
 
 标准模板固定提供三种 Gateway：
@@ -71,6 +72,8 @@ OPS 使用标准模板的 `backend/core/auth.py` 和 `backend/clients/ops_query_
 | local | 无上述 Header 且显式开启本地回退 | `LocalQueryGateway` | 仅本地开发 |
 
 业务 API 必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`，service 通过参数接收 Gateway。允许调用的模板合同为 `list_datasets`、`get_dataset_metadata`、`build_simple` 和 `build_simple_and_run`；不得绕过 Gateway 直接创建 `AuthClient`、`QueryManager` 或拼装 viewer 请求。
+
+viewer Gateway 的远端合同固定为 `GET /api/v1/query/metadata` 与 `POST /api/v1/query/simple`。`build_simple` 使用 `run=false`，`build_simple_and_run` 使用 `run=true`；同时检查 HTTP 状态和 `{success,data,error}`，HTTP 200、`success=false` 仍按查询内层失败处理。禁止生成 `/v1/data-metrics/viewer/query-metadata` 或 `/v1/data-metrics/viewer/cli-query/simple`。
 
 OPS 原始数据和基于 OPS 的加工结果如果持久化，必须写入带 `owner_user_id` 的用户私有表。列表、读取、更新、删除、索引和唯一约束都限定当前用户。测试使用 FakeGateway 和 FastAPI dependency override，不访问真实网络或本机凭证。
 
@@ -97,7 +100,7 @@ OPS 原始数据和基于 OPS 的加工结果如果持久化，必须写入带 `
 → POST /api/v1/keepa/run
 ```
 
-完整地址由当前环境的 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 与固定路径 `/api/v1/keepa/run` 拼接，不在代码中硬编码环境域名。
+完整地址由当前环境的 `OPSCLI_MCP_REST_API_BASE_URL` 与固定路径 `/api/v1/keepa/run` 拼接，不在代码中硬编码环境域名。
 
 Client 必须：
 

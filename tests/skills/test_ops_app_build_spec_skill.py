@@ -32,7 +32,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.16"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.18"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -58,7 +58,9 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
         "不选择或猜测数据集、字段、聚合、筛选、第三方场景",
         "前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite",
         "docs/ops-app/data-spec.md",
-        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "OPSCLI_MCP_REST_API_BASE_URL",
+        "/api/v1/query/simple",
+        "/api/v1/query/metadata",
         "QueryCredentials",
         "https://mcp.ops.aukeyit.com",
         "UNIQUE(owner_user_id, provider, request_hash)",
@@ -80,10 +82,16 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
     assert "references/backend-standard.md" not in skill
     data_access = _read("references/data-access-standard.md")
     for required in (
-        "OPSCLI_API_BASE_URL", "OPSCLI_API_KEY", "owner_user_id", "pending `job_id`",
-        "XLS/XLSX", "第一阶段不增加运行时数据 YAML",
+        "OPSCLI_MCP_REST_API_BASE_URL",
+        "/api/v1/*",
+        "不得设置环境默认值或读取共享 API Key",
+        "owner_user_id",
+        "pending `job_id`",
+        "XLS/XLSX",
+        "第一阶段不增加运行时数据 YAML",
     ):
         assert required in data_access
+    assert "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL" not in skill + data_access
 
 
 def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
@@ -213,7 +221,9 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         "由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步",
         "固定同步必须标记为 `blocked`",
         "Mock、测试替身和本地回退不得被描述成线上真实接入",
-        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "OPSCLI_MCP_REST_API_BASE_URL",
+        "/api/v1/query/simple",
+        "/api/v1/query/metadata",
         "QueryCredentials",
         "get_query_credentials()",
         "X-User-Email",
@@ -224,6 +234,19 @@ def test_ops_app_build_spec_keeps_data_access_constraints() -> None:
         "https://mcp.ops.aukeyit.com",
         "UNIQUE(owner_user_id, provider, request_hash)",
         "不兼容旧变量别名",
+        "dashboard_session_get_context",
+        "dashboard-tools.v2",
+        "URL、路由名、页面标题",
+        "普通 AppHub 仓库中的看板",
+        "精确 `dataset_alias`",
+        "`table_id`",
+        "`field_name`",
+        "关键词打分",
+        "`includes`",
+        "`global_alias`",
+        "最相近字段",
+        "`validate_fields=true`",
+        "metadata 漂移",
     ):
         assert required in content
 
@@ -300,7 +323,7 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务",
         ".opscli/app.json.app_id == app.yaml.app_id",
         ".opscli/app.json` 不得被 Git 跟踪或暂存",
-        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "OPSCLI_MCP_REST_API_BASE_URL",
         "https://ops.mcp.xenkee.com",
         "https://mcp.ops.aukeyit.com",
         "部署配置不得注入共享 API Key",
@@ -363,7 +386,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.16"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.18"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

@@ -20,7 +20,7 @@
     "auth": "query-credentials",
     "credential_dependency": "get_query_credentials",
     "auth_modes": ["viewer", "session", "local"],
-    "base_url_env": "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+    "base_url_env": "OPSCLI_MCP_REST_API_BASE_URL",
     "production_base_url": "https://ops.mcp.xenkee.com",
     "prerelease_base_url": "https://mcp.ops.aukeyit.com",
     "submit_endpoint": "POST /api/v1/seller-sprite/jobs",
@@ -86,6 +86,19 @@
 
 OPS 数据产品在 data-spec 中记录 `acquisition_mode`。Keepa 和 SellerSprite 继续使用各自的 `execution_mode`，但上游鉴权必须复用模板相同的 `viewer/session/local` 请求身份模式。
 
+### 2.2 OPS 精确字段合同
+
+每个 `verified` 的 OPS 数据产品必须记录并在后端业务代码中固化：
+
+- 精确 `dataset_alias` 和 `table_id`。
+- 每个业务角色对应的精确 `field_name`，以及它是维度、指标还是筛选字段。
+- 指标聚合方式、筛选操作符、稳定结果别名、时间与币种口径。
+- metadata 缺少字段、字段重复、字段角色变化或返回结构漂移时的稳定错误和停止策略。
+
+正式查询字段只能来自当前身份在线 metadata 验证后的 `field_name`。`global_alias`、`verbose_name`、描述和中文名称只用于候选发现与人工审查；不得通过 `includes`、关键词打分、子串搜索或最相近字段回退决定正式数据集、字段或结果列。`validate_fields=true` 不能证明字段业务语义正确，不能替代本合同。
+
+精确合同放在后端业务 service 或其相邻业务模块，并由 data-spec、Pydantic Schema、OpenAPI 和测试同步描述。前端只调用站点业务 API，不能读取 metadata 后自行选择字段或拼装通用 OPS 查询；响应解析只读取请求显式声明的稳定结果别名。
+
 ## 3. 执行模式
 
 - `viewer-live`：OPS 按当前访问用户权限查询。
@@ -117,7 +130,7 @@ owner_key = owner_user_id
 
 ### 4.3 第三方用户私有原始数据
 
-Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`，但必须按 `owner_user_id` 隔离。站点后端只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 和同一个请求级 `ThirdPartyApiClient`；生产根域名为 `https://ops.mcp.xenkee.com`，预发布根域名为 `https://mcp.ops.aukeyit.com`，均由部署环境显式注入且不得设默认值。endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。
+Keepa 和 SellerSprite 成功返回的 JSON 原始业务数据可以写入 `third_party_source_snapshot`，但必须按 `owner_user_id` 隔离。站点后端的 OPS Query 与 `ThirdPartyApiClient` 只使用 `OPSCLI_MCP_REST_API_BASE_URL`；生产根域名为 `https://ops.mcp.xenkee.com`，预发布根域名为 `https://mcp.ops.aukeyit.com`，均由部署环境显式注入且不得设默认值。endpoint 只记录 `/api/v1/...` 固定路径，不重复保存完整域名。
 
 `ThirdPartyApiClient` 通过 `get_query_credentials()` 复用模板 `QueryCredentials`。`viewer` 重建 `X-Ops-Token` 与可信 `X-User-*`，`session` 重建 `X-Session-Id` 与已有可选 Bearer JWT，`local` 通过 `AuthClient.build_session_headers("ops")` 和 `AuthClient.build_request_auth("ops")` 转换为标准 Session/JWT Header。禁止共享 API Key、Header 盲目透传、Cookie 上送、请求体凭证和模式回退。
 
@@ -190,7 +203,7 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 
 - 请求级 `ThirdPartyApiClient` 通过 `Depends(get_query_credentials)` 接收已校验的 `QueryCredentials`。
 - 三种模式只发送已定义的 Session/JWT 或 viewer Header，不传 Cookie，不从请求体接受身份，不跨模式回退。
-- 只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产/预发布显式注入，代码不设置环境默认值。
+- 只读取 `OPSCLI_MCP_REST_API_BASE_URL`；生产/预发布显式注入，代码不设置环境默认值。
 
 ### 8.1 Keepa
 
@@ -222,6 +235,8 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 至少覆盖：
 
 - OPS FakeGateway、dependency override 和 `owner_user_id` 隔离。
+- OPS 精确数据集与字段合同，包含字段缺失、重复、角色变化和 metadata 漂移的快速失败。
+- 使用接近真实 metadata 的相似字段干扰，例如 `asin/parent_asin`、`order_qty/orders`、`price/ads_sales_cny`，证明代码不会按关键词或相似度误选字段。
 - Keepa 同步成功、HTTP 200 业务失败、并发 `UPSERT` 和旧响应不覆盖新快照。
 - SellerSprite 提交、HTTP 202、pending `job_id` 复用、终态、JSON result 和 XLS/XLSX 边界。
 - 用户查询历史、加工结果、越权读取、越权更新和并发刷新。
@@ -234,7 +249,7 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 1. 页面与数据产品
 2. OPS acquisition_mode 与选择原因
 3. 候选来源、candidate/verified/blocked 状态和在线验证证据
-4. 字段、粒度、自然键、快照与业务口径
+4. 精确 dataset_alias、table_id、field_name、字段角色、聚合、结果别名、粒度、自然键、快照与业务口径
 5. 执行模式与身份边界
 6. source_execution 与 request_hash
 7. task/source/result storage

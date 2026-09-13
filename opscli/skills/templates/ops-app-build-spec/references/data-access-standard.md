@@ -29,6 +29,8 @@
 
 ## 3. 委托边界
 
+Dashboard 专用 Skill 的路由必须基于能力和对象，而不是页面外观：只有当前会话同时提供 `dashboard_session_get_context` 和 `dashboard-tools.v2`、上下文返回真实平台仪表盘对象，且用户要创建、修改或分析该对象时才转交。URL、路由名、页面标题或“Dashboard/看板”字样不能作为判断依据；普通 AppHub 仓库中的看板页面和 `/#/dashboard` 路由仍属于站点源码开发。
+
 确认项目属于受支持技术栈后，使用 `$ops-app-data-builder`：
 
 ```text
@@ -41,6 +43,8 @@
 页面、API 或数据库需要持续取数时，由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步。缺少批准的系统运行时适配器时，固定同步必须标记为 `blocked`，不得复用访问者身份建立共享数据。
 
 `ops-app-build-spec` 不选择或猜测数据集、字段、聚合、筛选、第三方场景或运行时方法签名，也不复制数据 Skill 的规则。
+
+OPS 正式查询必须使用 `$ops-app-data-builder` 在线验证并固化的精确 `dataset_alias`、`table_id` 和 `field_name`。显示名、描述、中文业务词和 `global_alias` 只能用于候选发现；不得通过关键词打分、`includes`、子串搜索或最相近字段回退决定正式查询字段。`validate_fields=true` 只能验证字段引用可执行，不能证明字段符合业务语义。
 
 如果当前只是 `检查` 模式，只记录数据需求和违规风险，不修改数据层代码。
 
@@ -88,14 +92,14 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 
 - 开发期通过 `ops-keepa` 验证场景和样本。
 - 页面运行期由站点后端调用正式 `POST /api/v1/keepa/run`；场景列表只用于开发期合同验证。
-- 后端只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产显式注入 `https://ops.mcp.xenkee.com`，预发布显式注入 `https://mcp.ops.aukeyit.com`，不得设置环境默认值或读取共享 API Key。
+- 后端只读取 `OPSCLI_MCP_REST_API_BASE_URL`；生产显式注入 `https://ops.mcp.xenkee.com`，预发布显式注入 `https://mcp.ops.aukeyit.com`，不得设置环境默认值或读取共享 API Key。该 origin 同时承载 OPS Query、Keepa 和 SellerSprite 的 `/api/v1/*` REST 接口。
 - 同时检查 HTTP 状态和响应 `success`；失败不清空当前用户最后有效快照。
 - 成功 JSON 结果通过 `owner_user_id + provider + request_hash` `UPSERT` 为当前用户私有快照。
 
 ### SellerSprite
 
 - 开发期通过 `ops-seller-sprite` 验证合同。
-- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端配置与 Keepa 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`。
+- 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端配置与 OPS Query、Keepa 共用 `OPSCLI_MCP_REST_API_BASE_URL`。
 - 按当前 `owner_user_id` 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务只复用该用户原 `job_id`，不得跨用户复用或重复提交。
 - 只有成功 JSON 结果进入当前用户私有快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
 - 用户查询历史、输入、收藏、备注和二次加工结果写入带 `owner_user_id` 的用户私有表。
@@ -123,7 +127,9 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 - Keepa 只使用正式同步 REST 和当前请求身份，HTTP 200 业务失败不会覆盖当前用户有效快照。
 - SellerSprite 使用正式异步 REST，pending `job_id` 按 `owner_user_id` 复用，终态和 HTTP 202 映射正确。
 - 第三方 JSON 原始数据、异步任务和用户加工结果分表且都按 `owner_user_id` 隔离；XLS/XLSX 和临时下载 URL 不进入 SQLite。
-- 只使用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产/预发布显式注入；不兼容旧变量别名、共享 API Key 或模式回退。
+- 只使用 `OPSCLI_MCP_REST_API_BASE_URL`，生产/预发布显式注入；不兼容旧变量别名、共享 API Key 或模式回退。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。
+- 正式 OPS 查询使用精确数据集和字段合同，业务聚合位于后端 service，前端没有读取 metadata 后自行选择字段或拼装通用查询。
+- 测试包含相似字段干扰、字段缺失、零行、上游失败和 metadata 漂移，且不会把合法但语义错误的字段当成目标字段。

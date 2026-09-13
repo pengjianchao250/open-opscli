@@ -28,6 +28,10 @@ def _emit(payload: dict, *, json_output: bool) -> None:
             "path",
             "repo_url",
             "default_branch",
+            "runtime_env_status",
+            "runtime_env_value",
+            "runtime_env_expected_value",
+            "runtime_env_updated",
             "commit_sha",
         ):
             if data.get(key) is not None:

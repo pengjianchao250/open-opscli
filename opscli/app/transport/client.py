@@ -16,6 +16,7 @@ from opscli.auth import AuthClient
 from opscli.auth.config import get_apphub_url
 from opscli.config import __version__
 
+
 class AppHubClient:
     """封装应用创建、查询和 Git 凭据所需的 AppHub API。"""
 
@@ -28,7 +29,8 @@ class AppHubClient:
         timeout: float = 60.0,
     ) -> None:
         root = base_url or get_apphub_url()
-        self.api_base_url = f"{root.rstrip('/')}{APPHUB_API_PREFIX}"
+        self.control_plane_url = root.rstrip("/")
+        self.api_base_url = f"{self.control_plane_url}{APPHUB_API_PREFIX}"
         self.auth_client = auth_client
         self._owns_client = http_client is None
         self.http = http_client or httpx.Client(timeout=timeout, follow_redirects=False)
@@ -62,7 +64,25 @@ class AppHubClient:
 
     def get_git_config(self, app_id: str) -> dict[str, Any]:
         """按公开 ID 获取平台保存的仓库绑定，不从 slug 拼接仓库。"""
-        return self._request_json("GET", f"/apps/{_segment(validate_app_id(app_id))}/git-config")
+        return self._request_json(
+            "GET",
+            f"/apps/{_segment(validate_app_id(app_id))}/git-config",
+        )
+
+    def get_app_env(self, app_id: str) -> dict[str, Any]:
+        """读取应用完整的自定义环境变量和只读平台环境变量。"""
+        return self._request_json(
+            "GET",
+            f"/apps/{_segment(validate_app_id(app_id))}/env",
+        )
+
+    def update_app_env(self, app_id: str, env: dict[str, str]) -> dict[str, Any]:
+        """全量保存应用自定义环境变量；调用方负责保留已有键。"""
+        return self._request_json(
+            "PUT",
+            f"/apps/{_segment(validate_app_id(app_id))}/env",
+            json={"env": env},
+        )
 
     def preflight_git_bind(self, app_id: str) -> dict[str, Any]:
         """首次绑定目标 origin 前确认平台仓库为空。"""
