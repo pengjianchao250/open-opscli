@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from opscli.query.services.planner import query_plan
 from opscli.query.services.planner.metadata_adapter import MetadataAdapter
 
@@ -132,6 +134,51 @@ def _plan(adapter, query):
     )
 
 
+# ── 0. 默认数据集直通与收入别名 ─────────────────────────────────────────────────
+
+
+def test_unspecified_dataset_auto_selects_recommendation_for_income_query():
+    """未点名数据集时直接采用推荐表；“收入”稳定映射为“销售额”并生成模板。"""
+    contract = _plan(_adapter(_instant_dataset), "查询8月的收入情况")
+
+    assert contract["status"] == "planned"
+    assert contract["model_view"]["dataset_name_zh"] == "即时综合数据集"
+    assert contract["model_view"]["metrics"] == ["销售额"]
+    recommendation = contract["model_view"]["default_dataset_recommendation_zh"]
+    assert recommendation["auto_selected"] is True
+    assert recommendation["confirmation_required"] is False
+    assert "default_dataset_confirmation" not in contract["model_view"][
+        "clarification_reason_codes"
+    ]
+    assert contract["execution_ref"]["query_template"]["metrics"] == [
+        {"field": "price", "alias": "price", "aggregation": "SUM"}
+    ]
+
+
+def test_multi_metric_alias_request_clarifies_when_only_part_is_available():
+    """“收入及毛利”不能因收入已命中就静默丢掉当前表缺失的毛利。"""
+    contract = _plan(_adapter(_instant_dataset), "查询8月的收入及毛利情况")
+
+    assert contract["status"] == "clarify_required"
+    assert contract["model_view"]["metrics"] == ["销售额"]
+    assert "metric_not_in_dataset" in contract["model_view"]["clarification_reason_codes"]
+    assert "毛利" in contract["model_view"]["unknown_requested_fields"]
+    assert "query_template" not in contract["execution_ref"]
+
+
+def test_vague_query_only_clarifies_fields_after_default_dataset_auto_selection():
+    """请求没有查询字段时可以追问字段，但不得再次要求确认推荐数据集。"""
+    contract = _plan(_adapter(_instant_dataset), "查询8月的数据")
+
+    assert contract["status"] == "clarify_required"
+    recommendation = contract["model_view"]["default_dataset_recommendation_zh"]
+    assert recommendation["auto_selected"] is True
+    assert recommendation["confirmation_required"] is False
+    reasons = contract["model_view"]["clarification_reason_codes"]
+    assert "recommended_fields_confirmation" in reasons
+    assert "default_dataset_confirmation" not in reasons
+
+
 # ── 1. 点名指标必须进入选表与 planned 门禁 ─────────────────────────────────────
 
 
@@ -238,3 +285,53 @@ def test_component_filter_clarify_carries_candidates_and_reason_code():
     candidates = contract["model_view"]["component_candidates_zh"]
     assert candidates == [{"field_zh": "部门", "values_zh": ["项目二部", "项目六部"], "total": 2}]
     assert "query_template" not in contract["execution_ref"]
+
+
+@pytest.mark.parametrize(
+    ("department", "sales_teams"),
+    [
+        ("十一部", ["一部-B组", "一部-Temu组"]),
+        ("十二部", ["二部-A组"]),
+        ("项目十一部", ["一部-Ohwill"]),
+        ("22部", ["2部-A组"]),
+        ("项目二十二部", ["二部-C组"]),
+    ],
+)
+def test_department_token_is_not_reused_as_sales_team_substring(department, sales_teams):
+    """完整编号部门优先；销售小组枚举也不能拿其中短编号作主段匹配。"""
+    contract = {
+        "status": "planned",
+        "query_mode": "dataset_query",
+        "model_view": {"clarification_messages_zh": [], "next_action": "construct_query"},
+        "execution_ref": {
+            "dataset_alias": "ds_instant",
+            "filter_components": [
+                {
+                    "field_name": "team_name",
+                    "label_zh": "销售小组",
+                    "component_dataset_alias": "ds_team",
+                    "component_table_id": 10,
+                }
+            ],
+            "query_template": {
+                "tableId": 1,
+                "dimensions": [],
+                "metrics": [],
+                "filters": [],
+            },
+        },
+    }
+
+    result = query_plan._resolve_component_filters(
+        contract,
+        (
+            f"查询部门等于{department}在2026年8月1日至2026年8月31日的收入情况；"
+            "仅按部门筛选，不筛选销售小组；收入按销售额口径。"
+        ),
+        lambda *_args, **_kwargs: sales_teams,
+        auto_enum=True,
+    )
+
+    assert result["status"] == "planned"
+    assert result["execution_ref"]["query_template"]["filters"] == []
+    assert not result["execution_ref"].get("resolved_component_filters")

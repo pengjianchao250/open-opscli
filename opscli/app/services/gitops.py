@@ -94,7 +94,9 @@ class GitService:
         *,
         repo_url: str,
         branch: str = GIT_DEFAULT_BRANCH,
+        credential_username: str | None = None,
     ) -> dict:
+        """初始化独立仓库，并固定当前仓库使用的平台 Git 用户名。"""
         root.mkdir(parents=True, exist_ok=True)
         self._ensure_git(root)
         git_created = not (root / ".git").exists()
@@ -102,6 +104,17 @@ class GitService:
             self.runner.run(root, ["init"])
         else:
             self._assert_on_branch(root)
+        if credential_username:
+            self.runner.run(
+                root,
+                [
+                    "config",
+                    "--local",
+                    "--replace-all",
+                    f"credential.{repo_url}.username",
+                    credential_username,
+                ],
+            )
         remote_sha = self.probe_remote_branch(root, repo_url=repo_url, branch=branch)
         previous_origin = self._get_remote(root, "origin")
         self._set_remote(root, "origin", repo_url)
@@ -168,10 +181,15 @@ class GitService:
             raise AppGitError("GIT-002", "AppHub 返回的 Git 凭据不完整。")
         index = int(os.environ.get("GIT_CONFIG_COUNT", "0"))
         basic = base64.b64encode(f"{username}:{token}".encode("utf-8")).decode("ascii")
+        # 2026-09-10: 同一 Gitea 主机可能缓存其他账号，验证时必须隔离旧 helper 和授权头。
         overrides = {
-            "GIT_CONFIG_COUNT": str(index + 1),
-            f"GIT_CONFIG_KEY_{index}": f"http.{repo_url}.extraHeader",
-            f"GIT_CONFIG_VALUE_{index}": f"Authorization: Basic {basic}",
+            "GIT_CONFIG_COUNT": str(index + 3),
+            f"GIT_CONFIG_KEY_{index}": "credential.helper",
+            f"GIT_CONFIG_VALUE_{index}": "",
+            f"GIT_CONFIG_KEY_{index + 1}": "http.extraHeader",
+            f"GIT_CONFIG_VALUE_{index + 1}": "",
+            f"GIT_CONFIG_KEY_{index + 2}": f"http.{repo_url}.extraHeader",
+            f"GIT_CONFIG_VALUE_{index + 2}": f"Authorization: Basic {basic}",
         }
         try:
             result = self.runner.run(
@@ -290,14 +308,19 @@ class GitService:
         *,
         repo_url: str,
         branch: str = GIT_DEFAULT_BRANCH,
+        repository_not_found_is_auth: bool = False,
     ) -> str | None:
+        """读取远端分支；凭据预检可识别私有仓库的伪装 404。"""
         result = self.runner.run(
             root,
             ["ls-remote", repo_url, f"refs/heads/{branch}"],
             check=False,
         )
         if result.returncode != 0:
-            self._raise_git_transport_error(result)
+            self._raise_git_transport_error(
+                result,
+                repository_not_found_is_auth=repository_not_found_is_auth,
+            )
         if not result.stdout:
             return None
         sha = result.stdout.split(maxsplit=1)[0]
@@ -450,7 +473,9 @@ class GitService:
         *,
         non_fast_forward: bool = False,
         branch: str = GIT_DEFAULT_BRANCH,
+        repository_not_found_is_auth: bool = False,
     ) -> None:
+        """把 Git 传输错误转换为稳定的应用错误码。"""
         detail = result.stderr or result.stdout or f"exit={result.returncode}"
         lowered = detail.lower()
         if non_fast_forward and any(
@@ -460,6 +485,13 @@ class GitService:
                 "GIT-003",
                 f"远端 {branch} 已领先，已拒绝非 fast-forward 推送。",
                 fix_hint=f"先合并 origin/{branch} 后重试；禁止使用 force push。",
+            )
+        # 2026-09-10: Gitea 会用 Repository not found 隐藏未认证的私有仓库。
+        if repository_not_found_is_auth and "repository not found" in lowered:
+            raise AppGitError(
+                "GIT-002",
+                "Git 凭据缺失、失效或无仓库写权限。",
+                fix_hint="检查本机凭据；确需轮换时执行 opscli app init --rotate-git-credential。",
             )
         if any(
             marker in lowered

@@ -22,6 +22,26 @@ _logger = logging.getLogger("opscli.api")
 router = APIRouter(prefix="/api/v1", tags=["keepa"])
 
 
+def _keepa_result_response(result: dict) -> JSONResponse:
+    """按 Keepa 稳定错误码选择 HTTP 状态，并保留 MCP 错误信封。"""
+    if result.get("success") is True:
+        return JSONResponse(result)
+    error = result.get("error") if isinstance(result.get("error"), dict) else {}
+    code = str(error.get("code") or "")
+    status_by_code = {
+        "KEEPA_AUTH_ERROR": 401,
+        "KEEPA_FORBIDDEN": 403,
+        "KEEPA_QUOTA_INSUFFICIENT": 429,
+        "KEEPA_RATE_LIMITED": 429,
+    }
+    status_code = status_by_code.get(code, 200)
+    headers: dict[str, str] = {}
+    retry_after = error.get("retry_after_seconds")
+    if status_code == 429 and retry_after is not None:
+        headers["Retry-After"] = str(retry_after)
+    return JSONResponse(result, status_code=status_code, headers=headers)
+
+
 def _trace_keepa_api(message: str) -> None:
     """复用鉴权层的低依赖 Keepa 诊断输出。"""
     try:
@@ -147,4 +167,4 @@ async def keepa_run(
             status_code=502,
         )
     # keepa_run 已返回统一 success/data/error 合同，并由 quota_wrap 补充 quota。
-    return JSONResponse(result)
+    return _keepa_result_response(result)

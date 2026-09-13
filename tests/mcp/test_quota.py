@@ -134,6 +134,8 @@ def test_default_quota_policies_only_limit_public_service_run_entries():
     assert policies["seller_sprite_run"].service == "seller_sprite"
     assert policies["seller_sprite_listing_analysis_submit"].service == "seller_sprite"
     assert policies["keepa_run"].service == "keepa"
+    assert policies["ext_xydc_get_asin_info"].service == "xiyou"
+    assert policies["ext_xydc_get_keyword_asin_analysis"].daily_limit == 10
     assert "seller_sprite_start" not in policies
     assert "seller_sprite_listing_analysis_status" not in policies
     assert "seller_sprite_listing_analysis_result" not in policies
@@ -161,6 +163,10 @@ def test_sqlite_quota_store_initializes_default_policy_table(tmp_path):
         ).fetchall()
 
     assert rows == [
+        ("ext_xydc_get_asin_info", "xiyou", 10, 1, "Asia/Shanghai"),
+        ("ext_xydc_get_asin_traffic", "xiyou", 10, 1, "Asia/Shanghai"),
+        ("ext_xydc_get_keyword_asin_analysis", "xiyou", 10, 1, "Asia/Shanghai"),
+        ("ext_xydc_get_keyword_info", "xiyou", 10, 1, "Asia/Shanghai"),
         ("keepa_run", "keepa", 200, 1, "Asia/Shanghai"),
         ("seller_sprite_listing_analysis_submit", "seller_sprite", 5, 1, "Asia/Shanghai"),
         ("seller_sprite_run", "seller_sprite", 100, 1, "Asia/Shanghai"),
@@ -205,7 +211,27 @@ def test_sqlite_quota_store_does_not_overwrite_existing_policy_table(tmp_path):
             "SELECT tool_name, daily_limit FROM mcp_quota_policy ORDER BY tool_name"
         ).fetchall()
 
-    assert rows == [("seller_sprite_run", 100)]
+    assert rows == [
+        ("ext_xydc_get_asin_info", 10),
+        ("ext_xydc_get_asin_traffic", 10),
+        ("ext_xydc_get_keyword_asin_analysis", 10),
+        ("ext_xydc_get_keyword_info", 10),
+        ("seller_sprite_run", 100),
+    ]
+
+
+def test_xydc_policy_migration_runs_once_and_preserves_manual_deletion(tmp_path):
+    db_path = tmp_path / "quota.sqlite3"
+    store = SQLiteQuotaStore(db_path)
+    _run(store.get_policy("ext_xydc_get_asin_info"))
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM mcp_quota_policy WHERE tool_name = 'ext_xydc_get_asin_info'"
+        )
+
+    policy = _run(store.get_policy("ext_xydc_get_asin_info"))
+
+    assert policy is None
 
 
 def test_limiter_refunds_failed_call_and_records_failure():

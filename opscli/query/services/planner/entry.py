@@ -36,23 +36,31 @@ _RESULT_PREVIEW_ROWS = 20
 _PREVIEW_STRING_TRUNC_LEN = 80
 
 
-def _extract_enum_values(result: Any, field_name: str) -> list[str]:
-    """从 simple 查询结果中提取某字段的去重非空值。
+# 组件权限枚举首页取满时的放大上限：覆盖当前账号最大的组件基数（品类 1799、
+# 销售小组 681），仍取满说明该字段基数极高（如渠道 5000+），由合同的 fail-closed 守卫兜底。
+_ENUM_EXPANDED_LIMIT = 5000
 
-    enum_fn 传入的是 cli_simple_query 的原始结果 {success, data:[行...], meta}，
+
+def _enum_rows(result: Any) -> list:
+    """定位 simple 查询结果里的行列表。
+
+    enum_fn 拿到的是 cli_simple_query 的原始结果 {success, data:[行...], meta}，
     行直接位于 result["data"]（一级）；兼容个别版本/CLI 包裹层的多级嵌套形状
-    （data.result.data / result.data / data.data），逐一兜底取第一个非空行列表，
-    再按 field_name 抽取字符串值、去空去重保序。
+    （data.result.data / result.data / data.data），逐一兜底取第一个非空行列表。
     """
-    rows: list = []
     root = result if isinstance(result, dict) else {}
     for path in (("data",), ("data", "result", "data"), ("result", "data"), ("data", "data")):
         node: Any = root
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
         if isinstance(node, list) and node:
-            rows = node
-            break
+            return node
+    return []
+
+
+def _extract_enum_values(result: Any, field_name: str) -> list[str]:
+    """从 simple 查询结果中提取某字段的去重非空值（去空去重保序）。"""
+    rows = _enum_rows(result)
     values: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -297,12 +305,24 @@ def _make_callbacks(qm: QueryManager, user_email: str, base_dir: Path | None):
     def enum_fn(table_id: Any, field_name: str, *, limit: int) -> list[str]:
         # 权限枚举：复用内核 simple 查询取组件表某字段的可选值
         try:
-            run = qm.build_simple_and_run(
-                table_id=int(table_id),
-                dimensions=[{"field": field_name, "alias": field_name}],
-                limit=limit,
-            )
-            values = _extract_enum_values(run.get("result"), field_name)
+            page_size = limit
+            while True:
+                run = qm.build_simple_and_run(
+                    table_id=int(table_id),
+                    dimensions=[{"field": field_name, "alias": field_name}],
+                    limit=page_size,
+                )
+                result = run.get("result")
+                # 分页截断：服务端返回行数等于请求上限即可能还有后续值（品类 1799 个、
+                # 销售小组 681 个，默认只取 500 个），落在首页之外的值一律校验不过，
+                # 且返回顺序不保证稳定，表现为同一请求时好时坏，因此放大上限再取一次。
+                # 取满必须按服务端原始行数判断，不能用去空去重后的条数：品类首页 500 行
+                # 里混有空值和「 转接头」这类去空白后重复的值，去重后只剩 499，
+                # 曾被误判为已取全，「家居」因此查无此值。
+                if page_size >= _ENUM_EXPANDED_LIMIT or len(_enum_rows(result)) < page_size:
+                    break
+                page_size = _ENUM_EXPANDED_LIMIT
+            values = _extract_enum_values(result, field_name)
         except Exception:  # noqa: BLE001 实时枚举失败先尝试缓存降级，缓存也无则原样抛出
             cached = enum_cache.get(table_id, field_name, base_dir=base_dir)
             if cached is None:

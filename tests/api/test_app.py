@@ -275,6 +275,35 @@ def test_keepa_run_reuses_governed_mcp_contract(monkeypatch):
     assert captured["payload"].wait is True
 
 
+def test_keepa_run_returns_retryable_status_for_quota_error(monkeypatch):
+    """Keepa 额度不足返回 429，并保留 Retry-After。"""
+    from opscli.api import app as api_module
+    from opscli.api.routers import keepa as keepa_router
+
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+
+    async def fake_run(_payload):
+        return {
+            "success": False,
+            "data": None,
+            "error": {
+                "code": "KEEPA_QUOTA_INSUFFICIENT",
+                "message": "Keepa 当前可用额度不足",
+                "retry_after_seconds": 301,
+            },
+        }
+
+    monkeypatch.setattr(keepa_router, "_run_keepa_scenario", fake_run)
+    response = TestClient(api_module.create_api_app()).post(
+        "/api/v1/keepa/run",
+        json={"scenario": "product", "site": "US", "params": {"asin": "B0088PUEPK"}},
+    )
+
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "301"
+    assert response.json()["error"]["code"] == "KEEPA_QUOTA_INSUFFICIENT"
+
+
 def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
     """API mode must be visible only during the delegated Keepa tool call."""
     from opscli.api.routers import keepa as keepa_router

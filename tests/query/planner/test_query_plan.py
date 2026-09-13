@@ -90,6 +90,166 @@ def _department_sales_payload():
     }
 
 
+def _query_component_payload():
+    return {
+        "datasets": [
+            {
+                "table_id": 7,
+                "dataset_alias": "ds_channel_component",
+                "dataset_name": "custom_channel_set",
+                "dataset_category": "query_component",
+                "description": "查询组件渠道数据集",
+                "remarks": "仅用于枚举渠道筛选项",
+                "select_columns": [],
+            }
+        ],
+        "fields": [
+            {
+                "table_id": 7,
+                "dataset_alias": "ds_channel_component",
+                "dataset_name": "custom_channel_set",
+                "field_name": "channel_name",
+                "verbose_name": "渠道名称",
+                "global_alias": "f_channel",
+                "field_type": "dimension",
+                "has_formula_config": 0,
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询组件渠道数据集里有哪些渠道可选",
+        "从查询组件渠道数据集列出当前账号可见的渠道，给我前5条",
+        "查询组件渠道数据集列下当前账号能看到的渠道",
+        "查询组件渠道数据集当前可见的渠道",
+        "查询组件渠道数据集允许的渠道有哪些",
+        "查询组件渠道数据集可用的渠道有哪些",
+        "查询组件渠道数据集: show available 渠道, top 5",
+        "查询组件渠道数据集: list the available 渠道",
+        "查询组件渠道数据集: what values are available for 渠道",
+        "查询组件渠道数据集: what 渠道 values are available",
+    ],
+)
+def test_explicit_component_enumeration_builds_query_template(query):
+    """显式询问可选成员时允许查询组件表，并下发可执行模板。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_query_component_payload()), query, enum_fn=lambda *_a, **_k: []
+    )
+
+    assert contract["status"] == "planned"
+    assert contract["execution_ref"]["table_id"] == 7
+    template = contract["execution_ref"]["query_template"]
+    assert template["dimensions"] == [{"field": "channel_name", "alias": "channel_name"}]
+    if "前5条" in query or "top 5" in query:
+        assert template["limit"] == 5
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "分析查询组件渠道数据集的渠道业绩",
+        "分析查询组件渠道数据集当前账号能看到的渠道业绩",
+        "查询组件渠道数据集可用的渠道销售额有哪些",
+    ],
+)
+def test_component_dataset_remains_blocked_for_business_analysis(query):
+    """普通业务分析即使点名组件表，也不能把它当作业务结果集。"""
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_query_component_payload()),
+        query,
+        enum_fn=lambda *_a, **_k: [],
+    )
+
+    assert contract["status"] == "clarify_required"
+    assert "business_dataset" in contract["model_view"]["clarification_reason_codes"]
+    assert "query_template" not in contract["execution_ref"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "查询组件渠道数据集: show available sales performance",
+        "查询组件渠道数据集: list the available inventory",
+        "查询组件渠道数据集: what sales values are available",
+        "查询组件渠道数据集: what inventory values are available",
+    ],
+)
+def test_english_available_business_analysis_does_not_enable_component_dataset(query):
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(_query_component_payload()),
+        query,
+        enum_fn=lambda *_a, **_k: [],
+    )
+
+    assert contract["status"] == "clarify_required"
+    assert set(contract["model_view"]["clarification_reason_codes"]).intersection(
+        {"business_dataset", "dataset_constraints"}
+    )
+    assert "query_template" not in contract["execution_ref"]
+
+
+def test_component_filter_label_is_not_reused_as_grouping_dimension():
+    masked = query_plan._query_without_component_filter_labels(
+        "按部门看销售额，品牌不等于HOMFA，国家=加拿大",
+        {
+            "dimensions": [
+                {"field_name": "dept_name", "verbose_name": "部门"},
+                {"field_name": "brand_name", "verbose_name": "品牌"},
+                {"field_name": "country_name", "verbose_name": "国家"},
+            ],
+            "metrics": [],
+        },
+    )
+
+    assert "按部门" in masked
+    assert "品牌" not in masked
+    assert "国家" not in masked
+
+
+def test_operatorless_component_filter_labels_are_not_grouping_dimensions():
+    masked = query_plan._query_without_component_filter_labels(
+        "部门范泰克除外，且只看品牌HOMFA、MAMIZO的销量",
+        {
+            "dimensions": [
+                {"field_name": "dept_name", "verbose_name": "部门"},
+                {"field_name": "brand_name", "verbose_name": "品牌"},
+            ],
+            "metrics": [],
+        },
+    )
+
+    assert "部门" not in masked
+    assert "品牌" not in masked
+
+
+def test_ambiguous_component_short_label_is_not_bound_arbitrarily():
+    """多个组件字段共享短称前缀时必须继续澄清。"""
+    payload = _query_component_payload()
+    payload["fields"].append(
+        {
+            **payload["fields"][0],
+            "field_name": "channel_type",
+            "verbose_name": "渠道类型",
+            "global_alias": "f_channel_type",
+        }
+    )
+
+    contract = query_plan.build_model_query_plan(
+        MetadataAdapter(payload),
+        "查询组件渠道数据集里有哪些渠道可选",
+        enum_fn=lambda *_a, **_k: [],
+    )
+
+    assert contract["status"] == "clarify_required"
+    assert "recommended_fields_confirmation" in contract["model_view"][
+        "clarification_reason_codes"
+    ]
+    assert "query_template" not in contract["execution_ref"]
+
+
 def test_sales_situation_selects_metrics_not_sales_person_dimension():
     """线上原句应按部门返回销售指标，不能退化成部门与销售人员名单。"""
     contract = query_plan.build_model_query_plan(
@@ -316,7 +476,6 @@ def test_every_clarification_code_has_dedicated_message():
         "field_identity",
         "time_scope_confirmation",
         "recommended_fields_confirmation",
-        "default_dataset_confirmation",
         "time_comparison_unsupported",
         # 2026-09-07 验收缺陷修复新增的合同层澄清码
         "metric_not_in_dataset",
@@ -412,6 +571,35 @@ def test_component_enum_success_still_resolves_filter():
     assert contract["status"] == "planned"
     filters = contract["execution_ref"]["query_template"]["filters"]
     assert {"field": "dept_name", "operator": "=", "value": "项目二部"} in filters
+
+
+@pytest.mark.parametrize(
+    ("query_value", "authorized_value", "canonical"),
+    [
+        ("十二部", "12部", "12部"),
+        ("项目十一部", "项目11部", "项目11部"),
+        ("22部", "二十二部", "22部"),
+        ("项目二十二部", "项目22部", "项目22部"),
+        ("二百零二部", "202部", "202部"),
+    ],
+)
+def test_numbered_departments_support_general_chinese_arabic_equivalence(
+    query_value, authorized_value, canonical
+):
+    """编号部门按通用数词规则归一；不得只覆盖十一部或单字符数字。"""
+    assert query_plan._normalize_department_value(query_value) == canonical
+    assert query_plan._normalize_department_value(authorized_value) == canonical
+
+    contract = query_plan._resolve_component_filters(
+        _dept_contract(),
+        f"查询{query_value}的销量",
+        lambda *_a, **_k: [authorized_value],
+        auto_enum=True,
+    )
+
+    assert contract["status"] == "planned"
+    filters = contract["execution_ref"]["query_template"]["filters"]
+    assert {"field": "dept_name", "operator": "=", "value": authorized_value} in filters
 
 
 # ── 部门筛选的枚举驱动识别（反查兜裸值 + 宽后缀候选转澄清）────────────────────

@@ -242,6 +242,25 @@ def _print_http_startup_banner(
         print(f"[{service_name}] Streamable HTTP: {local_url}/mcp")
 
 
+def _configure_keepa_diagnostic_logging() -> None:
+    """确保 Keepa 边界日志在 Uvicorn 外壳中有独立输出通道。"""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    setattr(handler, "_opscli_keepa_diagnostic", True)
+
+    for logger_name in ("opscli.keepa", "opscli.api"):
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not any(
+            getattr(existing, "_opscli_keepa_diagnostic", False)
+            for existing in logger.handlers
+        ):
+            logger.addHandler(handler)
+
+
 def run_mcp_app(
     mcp: FastMCP,
     *,
@@ -331,6 +350,9 @@ def run_mcp_app(
 
     async def _serve() -> None:
         config = uvicorn.Config(asgi_app, host=host, port=port, log_level="info")
+        # Uvicorn only guarantees handlers for its own loggers; configure business
+        # loggers explicitly so Keepa diagnostics are visible in deployment logs.
+        _configure_keepa_diagnostic_logging()
         await uvicorn.Server(config).serve()
 
     try:

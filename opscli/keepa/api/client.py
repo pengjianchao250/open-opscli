@@ -154,6 +154,7 @@ def _parse_json_response(
     if response.status_code >= 400:
         safe_payload = _redact_payload(payload, secrets)
         message = _extract_error_message(safe_payload) or f"Keepa API 请求失败，HTTP {response.status_code}"
+        _log_upstream_error(response.status_code, safe_payload, message)
         raise KeepaApiError(
             message,
             status_code=response.status_code,
@@ -163,14 +164,34 @@ def _parse_json_response(
 
     if payload.get("error"):
         safe_payload = _redact_payload(payload, secrets)
+        message = str(safe_payload.get("error"))
+        _log_upstream_error(response.status_code, safe_payload, message)
         raise KeepaApiError(
-            str(safe_payload.get("error")),
+            message,
             status_code=response.status_code,
             response_excerpt=text[:1000],
             response_payload=safe_payload,
         )
 
     return payload
+
+
+def _log_upstream_error(status_code: int, payload: dict[str, Any], message: str) -> None:
+    """记录不包含 API Key、完整请求参数或完整响应的 Keepa 错误摘要。"""
+    error = KeepaApiError(message, status_code=status_code, response_payload=payload)
+    error_value = payload.get("error")
+    upstream_code = error_value.get("code") if isinstance(error_value, dict) else None
+    _logger.warning(
+        "[KEEPA-DIAG] upstream_error status=%s code=%s upstream_code=%s "
+        "message=%s tokens_left=%s refill_in_ms=%s refill_rate=%s",
+        status_code,
+        error.code,
+        upstream_code,
+        message[:300],
+        payload.get("tokensLeft"),
+        payload.get("refillIn"),
+        payload.get("refillRate"),
+    )
 
 
 def _extract_error_message(payload: dict[str, Any]) -> str | None:

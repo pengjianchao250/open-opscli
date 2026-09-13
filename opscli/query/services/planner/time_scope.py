@@ -13,6 +13,7 @@ Asia/Shanghai 口径的绝对日期与对比窗口，模型只做展示与填充
 from __future__ import annotations
 
 import re
+import unicodedata
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
 
@@ -45,10 +46,14 @@ _ALL_TIME_RE = re.compile(
 # ① 没有任何标签以 不/非/勿/别/无 开头，所以这些否定前缀不会吞掉标签开头；
 # ② 「别」「不含」出现在标签内部（税别 / 币别 / 系统别名 / 周转天数(不含在途)），
 #    因此禁止收裸「别」——它会让「查税别和日期」从「别」起屏蔽、连带吃掉日期。
+# ④ 「移除」不收：真实字段标签里存在「仓租(平台移除费)」「平台移除数量」，
+#    收了会把这些字段所在的语段判成否定语境。「剔除/过滤掉/不包含/不包括/不选/
+#    不看/不查」经 1356 个标签全量核对没有出现在任何标签内，可安全收录。
 # ③ 「别用/别加」与裸「非」还会被合成词从中间切中，必须加左边界断言（见下方注释）。
 #    这类误判比漏判危险得多：它不是少屏蔽一段，而是把用户没说过的排除意图凭空造出来。
 _NEGATED_SPAN_RE = re.compile(
-    r"(?:拒绝|排除|不要|不用|不加|不添加|不需要|不按|不含|不带|不分|不显示|不展示"
+    r"(?:拒绝|排除|剔除|过滤掉|不要|不用|不加|不添加|不需要|不按|不含|不带|不分"
+    r"|不包含|不包括|不选|不看|不查|不显示|不展示"
     r"|无需|禁止"
     # 「分别用 A 和 B…」是多币种、多口径对比的标准问法，其中的「别用」曾被判为否定，
     # 把随后 12 字内的平台名当成排除项——语义直接反转。实测：
@@ -60,8 +65,28 @@ _NEGATED_SPAN_RE = re.compile(
     # 「非亚马逊VC」这类真否定不受影响。
     r"|(?<![除并莫若是无绝])非(?!常)"
     r"|勿)"
-    r"[^，。；！？,;!?]{0,12}"
+    # “排除加拿大后看8月”中，“后看”开启新的查询子句；否定范围必须在此停止，
+    # 否则后面的时间、维度和指标都会被一起遮蔽。
+    r"(?:(?!(?:后(?:再)?|然后|之后|随后|接着)(?:看|查|统计|分析|汇总)"
+    r"|再(?:看|查|统计|分析|汇总))"
+    r"[^，。；！？,;!?]){0,12}"
 )
+
+
+# 对比子句：这段文本描述的是"跟谁比"，不是本次要查的主周期。
+# 主周期解析必须先把它遮蔽掉——否则「近7天各平台的销售额，同比去年同期」里的
+# 「去年」会命中自然年分支，主周期整个变成 2025 全年、对比期变成 2024 全年，
+# 用户要的近 7 天一天都没查到，而且状态是 planned、没有任何提示。
+_COMPARISON_CLAUSE_RE = re.compile(
+    r"(?:同比|环比)\s*(?:去年同期|上年同期|上一?个?周期|上个?月|上季度|上周|同期)?"
+    r"|(?:去年|上年)\s*同期"
+    r"|(?:对比|相比|较|跟|与|和)\s*(?:去年同期|上年同期|上一?个?周期|上个?月|上季度|上周)"
+)
+
+
+def mask_comparison_clause(text: str) -> str:
+    """把对比子句替换为等长空白，供主周期解析使用。"""
+    return _COMPARISON_CLAUSE_RE.sub(lambda match: " " * len(match.group(0)), text)
 
 
 def negated_spans(text: str) -> list[tuple[int, int]]:
@@ -87,13 +112,47 @@ _CN_NUM = {
 }
 
 # 环比/上期 与 同比 的触发词
-_COMPARE_PREV_RE = re.compile(r"环比|上一个|上期|前一?周期|较上|与上|对比上")
+# 「跟上个周期比」「和上一周期对比」是初级用户对环比的口语说法，
+# 缺这几支时整句解析不出对比期，dataComparison 不下发且没有任何提示。
+_COMPARE_PREV_RE = re.compile(
+    r"环比|上一个|上期|前一?周期|上一?个?周期|较上|与上|跟上|和上|对比上"
+)
 _COMPARE_YOY_RE = re.compile(r"同比|去年同期")
 _MONTH_RE = re.compile(
     r"(?:(20\d{2})\s*年\s*)?(1[0-2]|[1-9])\s*月份?",
     re.IGNORECASE,
 )
-_COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|较|vs\.?", re.IGNORECASE)
+_ENGLISH_MONTH_TOKEN = (
+    r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?"
+)
+_ENGLISH_MONTH_RE = re.compile(
+    rf"\b(?:"
+    rf"(?P<month_first>{_ENGLISH_MONTH_TOKEN})\.?\s*[,/-]?\s*(?P<year_after>20\d{{2}})"
+    rf"|(?P<year_before>20\d{{2}})\s*[-/,]?\s*"
+    rf"(?P<month_after>{_ENGLISH_MONTH_TOKEN})\.?)\b",
+    re.IGNORECASE,
+)
+_NUMERIC_MONTH_RE = re.compile(
+    r"(?<!\d)(?P<year>20\d{2})[-/.](?P<month>1[0-2]|0?[1-9])"
+    r"(?![-/.\d])"
+)
+_ENGLISH_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_COMPARISON_CUE_RE = re.compile(r"对比期?|比较|与|和|较|比|vs\.?", re.IGNORECASE)
 _MONTH_THRESHOLD_LEFT_RE = re.compile(
     r"(?:超(?:过)?|大于|高于|多于|不少于|至少|库龄|账龄|货龄|周转)\s*$"
 )
@@ -105,6 +164,13 @@ _ABSOLUTE_RANGE_RE = re.compile(
     r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?\s*"
     r"(?:至|到|~|～|—|–)\s*"
     r"(?:(20\d{2})[-/.年])?(\d{1,2})[-/.月](\d{1,2})日?"
+)
+# 单个具体日期：2026年8月15日 / 8月15日 / 2026-08-15 / 2026/8/15。
+# 必须先于自然月匹配：自然月正则只看「2026年8月」，会把「2026年8月15日」整月放行，
+# 用户要的一天被放大成 31 天且没有任何提示（对抗矩阵实测形态）。
+_SINGLE_DATE_RE = re.compile(
+    r"(?<![0-9])(?:(20\d{2})\s*[-/.年]\s*)?(1[0-2]|0?[1-9])\s*[-/.月]\s*"
+    r"(3[01]|[12][0-9]|0?[1-9])\s*日?(?![0-9])"
 )
 
 
@@ -147,17 +213,28 @@ def _month_window(year: int, month: int) -> tuple[date, date]:
 
 
 def _calendar_month_matches(query: str):
-    """只返回自然月表达，排除“超6月/库龄6个月以上”等业务阈值。"""
+    """返回按原文顺序排列的 ``(year, month)``，并排除业务月份阈值。"""
+    matches: list[tuple[int, str | None, int]] = []
     for match in _MONTH_RE.finditer(query):
         # 显式年份足以证明是日历月份，不受附近业务词影响。
         if match.group(1):
-            yield match
+            matches.append((match.start(), match.group(1), int(match.group(2))))
             continue
         left = query[max(0, match.start() - 8) : match.start()]
         right = query[match.end() : match.end() + 8]
         if _MONTH_THRESHOLD_LEFT_RE.search(left) or _MONTH_THRESHOLD_RIGHT_RE.search(right):
             continue
-        yield match
+        matches.append((match.start(), None, int(match.group(2))))
+    for match in _ENGLISH_MONTH_RE.finditer(query):
+        raw_month = match.group("month_first") or match.group("month_after") or ""
+        year = match.group("year_after") or match.group("year_before")
+        matches.append(
+            (match.start(), year, _ENGLISH_MONTH_NUMBERS[raw_month.casefold()[:3]])
+        )
+    for match in _NUMERIC_MONTH_RE.finditer(query):
+        matches.append((match.start(), match.group("year"), int(match.group("month"))))
+    for _position, year, month in sorted(matches):
+        yield year, month
 
 
 def _explicit_comparison(
@@ -198,9 +275,9 @@ def _explicit_comparison(
             "end": _fmt(end),
             "label_zh": "显式对比周期",
         }
-    for month_match in _calendar_month_matches(comparison_text):
-        year = int(month_match.group(1) or today.year)
-        start, end = _month_window(year, int(month_match.group(2)))
+    for month_year, month in _calendar_month_matches(comparison_text):
+        year = int(month_year or today.year)
+        start, end = _month_window(year, month)
         if primary is not None and (start, end) == primary:
             continue
         return {
@@ -223,6 +300,9 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         return None, None, "全部时间（用户明确要求不加日期筛选）", False
     # 再剔除否定语境里的时间口径，避免「拒绝近30天」被当成「要近30天」
     query = _NEGATED_SPAN_RE.sub(" ", query)
+    # 对比子句只说明"跟谁比"，不参与主周期判定（对比期由 _explicit_comparison
+    # 与 _relative_comparison 用未遮蔽的原文单独解析）
+    query = mask_comparison_clause(query)
     # 明确绝对日期范围：2026-07-01 至 2026-07-15 / 2026年7月1日~7月15日
     absolute = _ABSOLUTE_RANGE_RE.search(query)
     if absolute:
@@ -247,8 +327,36 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         if quarter:
             start, end = _quarter_window(int(quarter_match.group(1)), quarter)
             return start, end, f"{start.year}年第{quarter}季度", False
+
+    # 相对年 + 自然季度：今年Q1 / 今年第一季度 / 去年第四季度 / 第2季度（默认今年）。
+    # 缺这一支时「今年第一季度」会被后面的「今年」分支吞掉，静默变成 1 月 1 日至今天，
+    # 季度汇报的时间窗被放大到大半年且无任何提示。无年份词时必须带「第」或「Q」，
+    # 否则「近3季度」这类"最近 N 个季度"的表述会被误读成第 3 季度。
+    relative_quarter_match = re.search(
+        r"(?P<yearword>今年|本年|去年|上年)\s*(?:年)?\s*"
+        r"(?:Q\s*(?P<q1>[1-4])|第?\s*(?P<q2>[一二三四1-4])\s*季度)",
+        query,
+        re.IGNORECASE,
+    ) or re.search(
+        r"(?:第\s*(?P<q2>[一二三四1-4])\s*季度"
+        r"|(?<![0-9A-Za-z])Q\s*(?P<q1>[1-4])(?![0-9]))",
+        query,
+        re.IGNORECASE,
+    )
+    if relative_quarter_match:
+        groups = relative_quarter_match.groupdict()
+        year_word = groups.get("yearword") or ""
+        raw_quarter = groups.get("q1") or groups.get("q2")
+        quarter = _num(raw_quarter) if raw_quarter else None
+        if quarter:
+            year = today.year - 1 if year_word in ("去年", "上年") else today.year
+            start, end = _quarter_window(year, quarter)
+            return start, end, f"{year}年第{quarter}季度", False
+
     current_quarter = (today.month - 1) // 3 + 1
-    if re.search(r"本季度|本季|这个季度", query):
+    if re.search(
+        r"本季度|本季|这个季度|季初至今|(?<![A-Za-z])QTD(?![A-Za-z])", query, re.IGNORECASE
+    ):
         start, _end = _quarter_window(today.year, current_quarter)
         return start, today, "本季度（季度首日至今天）", False
     if re.search(r"上季度|上个季度|上一季度", query):
@@ -257,28 +365,58 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
         start, end = _quarter_window(year, quarter)
         return start, end, f"上季度（{year}年第{quarter}季度）", False
 
+    # 单个具体日期必须先于自然月：否则「2026年8月15日」会被自然月正则读成整个 8 月。
+    single_date = _SINGLE_DATE_RE.search(query)
+    if single_date:
+        year = single_date.group(1) or str(today.year)
+        day = _parsed_date(year, single_date.group(2), single_date.group(3))
+        if day:
+            return day, day, f"{_fmt(day)}（单日）", False
+
     # 指定自然月必须优先于自然年匹配，否则“2026年6月”会被截断成全年。
-    month_match = next(_calendar_month_matches(query), None)
-    if month_match:
-        year = int(month_match.group(1) or today.year)
-        month = int(month_match.group(2))
+    calendar_month = next(_calendar_month_matches(query), None)
+    if calendar_month:
+        month_year, month = calendar_month
+        year = int(month_year or today.year)
         start, end = _month_window(year, month)
         return start, end, f"{year}年{month}月（自然月）", False
+
+    # 半年：近半年按 180 天滚动（与近N个月的 30 天近似口径一致）；上半年/下半年是
+    # 自然半年，必须先于自然年匹配，否则「2025年上半年」会被截成 2025 全年、
+    # 「今年上半年」会被读成 1 月 1 日至今天。未写年份默认今年，与季度口径一致。
+    if re.search(r"(?:近|最近|过去)\s*半年", query):
+        start = today - timedelta(days=179)
+        return start, today, "近半年（按180天计，含今天）", False
+    half_match = re.search(
+        r"(?:(?P<year>20\d{2})年|(?P<yearword>今年|本年|去年|上年))?\s*(?P<half>上|下)半年",
+        query,
+    )
+    if half_match:
+        if half_match.group("year"):
+            year = int(half_match.group("year"))
+        elif half_match.group("yearword") in ("去年", "上年"):
+            year = today.year - 1
+        else:
+            year = today.year
+        if half_match.group("half") == "上":
+            return date(year, 1, 1), date(year, 6, 30), f"{year}年上半年", False
+        return date(year, 7, 1), date(year, 12, 31), f"{year}年下半年", False
 
     # 指定自然年与本年/去年。
     year_match = re.search(r"(20\d{2})年(?:全年)?", query)
     if year_match:
         year = int(year_match.group(1))
         return date(year, 1, 1), date(year, 12, 31), f"{year}年全年", False
-    if re.search(r"今年|本年", query):
+    # 年初至今 / YTD 与「今年」同一口径（1 月 1 日至今天）
+    if re.search(r"今年|本年|年初至今|年初以来|(?<![A-Za-z])YTD(?![A-Za-z])", query, re.IGNORECASE):
         return date(today.year, 1, 1), today, "今年（1月1日至今天）", False
     if re.search(r"去年|上年", query):
         year = today.year - 1
         return date(year, 1, 1), date(year, 12, 31), f"去年（{year}年全年）", False
 
     m = re.search(
-        r"[近最][近]?\s*([0-9]+|[一两二三四五六七八九十]+)\s*"
-        r"(天|日|tian|days?|周|个?月)",
+        r"(?:[近最][近]?|前|过去)\s*([0-9]+|[一两二三四五六七八九十]+)\s*"
+        r"(天|日|tian|days?|周|个?季度|个?月)",
         query,
         re.IGNORECASE,
     )
@@ -292,20 +430,39 @@ def _window(query: str, today: date) -> tuple[date | None, date | None, str, boo
             if unit == "周":
                 start = today - timedelta(days=count * 7 - 1)
                 return start, today, f"近{count}周（含今天）", False
+            # 近N个季度：按 N*90 天滚动，与近N个月的 30 天近似口径一致，标签如实声明
+            if unit.endswith("季度"):
+                start = today - timedelta(days=count * 90 - 1)
+                return start, today, f"近{count}个季度（按{count * 90}天计，含今天）", False
             # 近N个月：按 N*30 天近似，标签中如实声明口径
             start = today - timedelta(days=count * 30 - 1)
             return start, today, f"近{count}个月（按{count * 30}天计，含今天）", False
+    # 「大前天/前天」必须先于「昨天」判定：初级业务用户高频使用，缺这两支时整句
+    # 走不到任何时间分支，静默退回默认近 30 天（澄清态下也已经不是用户要的那一天）。
+    if re.search(r"大前天|大前日", query):
+        day = today - timedelta(days=3)
+        return day, day, "大前天", False
+    if re.search(r"前天|前日", query):
+        day = today - timedelta(days=2)
+        return day, day, "前天", False
     if re.search(r"昨天|昨日", query):
         day = today - timedelta(days=1)
         return day, day, "昨天", False
     if re.search(r"今天|今日|当天", query):
         return today, today, "今天", False
-    if re.search(r"本周|这周", query):
+    if re.search(r"本周|这周|周初至今|(?<![A-Za-z])WTD(?![A-Za-z])", query, re.IGNORECASE):
         start = today - timedelta(days=today.weekday())
         return start, today, "本周（周一至今天）", False
     if re.search(r"上周", query):
         this_monday = today - timedelta(days=today.weekday())
         return this_monday - timedelta(days=7), this_monday - timedelta(days=1), "上周（周一至周日）", False
+    # 月初至今 / MTD / 本月至今：明确写了"至今"，窗口止于今天，先于整月口径判定
+    if re.search(
+        r"月初至今|月初以来|本月至今|本月以来|这个月至今|(?<![A-Za-z])MTD(?![A-Za-z])",
+        query,
+        re.IGNORECASE,
+    ):
+        return today.replace(day=1), today, "本月（1日至今天）", False
     if re.search(r"本月|这个月", query):
         # 整月口径：本月固定为 1 日至本月最后一天；月末未到时窗口尾部尚无数据，
         # 由消费方在结果中披露数据更新进度，不因此改回「至今天」或要求用户确认
@@ -329,7 +486,10 @@ def parse(query: str, *, today: date | None = None) -> dict:
     """
     if today is None:
         today = datetime.now(_TZ).date()
-    text = query or ""
+    # 全角数字/字母做 NFKC 归一：中文输入法与从表格粘贴的文本常带全角数字，
+    # 「近７天」原本一路走到默认近 30 天，用户明确写了时间却被当成没写。
+    # 只影响本函数内部的匹配，不改动传入原文。
+    text = unicodedata.normalize("NFKC", query or "")
     start, end, label, is_default = _window(text, today)
     result: dict = {
         "start": None if start is None else _fmt(start),
@@ -377,6 +537,29 @@ def parse(query: str, *, today: date | None = None) -> dict:
                 "start": _fmt(prev_last.replace(day=1)),
                 "end": _fmt(prev_last),
                 "label_zh": "环比（上一个自然月）",
+            }
+        elif (
+            start.day == 1
+            and start.month in {1, 4, 7, 10}
+            and (start, end) == _quarter_window(start.year, (start.month - 1) // 3 + 1)
+        ):
+            previous_end = start - timedelta(days=1)
+            previous_quarter = (previous_end.month - 1) // 3 + 1
+            previous_start, previous_end = _quarter_window(
+                previous_end.year, previous_quarter
+            )
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(previous_start),
+                "end": _fmt(previous_end),
+                "label_zh": "环比（上一个自然季度）",
+            }
+        elif start == date(start.year, 1, 1) and end == date(start.year, 12, 31):
+            result["comparison"] = {
+                "type": "period_over_period",
+                "start": _fmt(date(start.year - 1, 1, 1)),
+                "end": _fmt(date(start.year - 1, 12, 31)),
+                "label_zh": "环比（上一个自然年）",
             }
         else:
             length = (end - start).days + 1

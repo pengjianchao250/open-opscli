@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -576,8 +577,11 @@ class QueryManager:
         template = (execution_ref or {}).get("query_template")
         if not isinstance(template, dict):
             raise InvalidPayloadError("execution_ref 缺少 query_template，无法执行")
-        # 删除 None 占位键（orderBy/limit 未填时不下发），其余键原样转发
-        payload = {key: value for key, value in template.items() if value is not None}
+        # 深拷贝后删除 None 占位键，避免执行期的操作符归一污染规划合同。
+        payload = deepcopy({key: value for key, value in template.items() if value is not None})
+        filters = payload.get("filters")
+        if isinstance(filters, list) and filters:
+            self._validate_simple_filter_operators(filters)
         return self.client.cli_simple_query(payload)
 
     def _validate_simple_fields(
@@ -843,6 +847,10 @@ class QueryManager:
         支持符号操作符（=, >=, <=, >, <, !=, <>, ==）自动转换为语义操作符，
         与 query build 的 _WHERE_OP_MAP 行为对齐。就地修改 node 确保后续
         build_simple 构造 payload 时使用标准化后的值。
+
+        值为字符串的单值 ne 会再改写为单元素 not_in，绕开 simple 接口 ne
+        在部分字段上的结果反转缺陷（详见下方分支注释）。本方法只服务
+        simple 查询的发送路径，完整查询（querySpec.where）不经过这里。
         """
         valid = self._VALID_FILTER_OPERATORS
         logical = self._LOGICAL_OPERATORS
@@ -866,6 +874,19 @@ class QueryManager:
                             f"无效的过滤操作符: {op}\n"
                             f"  支持: {', '.join(sorted(valid))}"
                         )
+                    # 字符串单值不等于改写为单元素 not_in。
+                    # 原因：simple 接口（/cli-query/simple）的 ne 在平台、销售小组、
+                    # 大组、渠道、品牌、品类、SPU 等字段上会反转成「只返回被排除的值」
+                    # （2026-09-10 QA 实测：近7天各平台剔除 Amazon VC，ne 只回 1 行
+                    # Amazon VC；同条件 not_in ["Amazon VC"] 正确返回其余 21 个平台）。
+                    # 同批实测单元素字符串 not_in 在 11 个枚举字段、日期字符串、
+                    # 数值字段传字符串数字时都与正确的排除结果一致，因此改写不改变语义。
+                    # 只改字符串值：数值字面量 not_in [0] 会被服务端判成 0 行，
+                    # 而数值 ne 本身正确，所以数值、布尔、列表等值保持 ne 不动。
+                    # 改写后算子变为 not_in，重复调用本方法不会再次包装列表。
+                    if op_str == "ne" and isinstance(node.get("value"), str):
+                        node["operator"] = "not_in"
+                        node["value"] = [node["value"]]
             for child in node.get("conditions") or []:
                 walk(child)
 
@@ -1972,7 +1993,8 @@ class QueryManager:
             raise InvalidPayloadError("where 必须是 JSON 对象")
         return payload
 
-    # 操作符标准化映射：将 Python/SQL 风格符号转换为服务端语义操作符
+    # 操作符标准化映射：将符号和历史别名转换为查询服务原生操作符。
+    # 单值不等于的权威契约是 ne；neq 会被 querySpec.where 拒绝。
     _WHERE_OP_MAP: dict[str, str] = {
         ">=": "gte",
         "<=": "lte",
@@ -1980,12 +2002,14 @@ class QueryManager:
         "<": "lt",
         "=": "eq",
         "==": "eq",
-        "!=": "neq",
-        "<>": "neq",
+        "!=": "ne",
+        "<>": "ne",
+        "neq": "ne",
+        "notEquals": "ne",
     }
 
     _VALID_FILTER_OPERATORS: set[str] = {
-        "eq", "neq", "lt", "lte", "gt", "gte",
+        "eq", "ne", "lt", "lte", "gt", "gte",
         "in", "not_in", "between", "like", "not_like",
         "is_null", "is_not_null",
     }
@@ -1996,7 +2020,7 @@ class QueryManager:
         """解析 where 简写条件：field|operator|value_json。
 
         操作符支持两种写法：
-        - 语义操作符（服务端原生）：between, eq, neq, gt, gte, lt, lte, in
+        - 语义操作符（服务端原生）：between, eq, ne, gt, gte, lt, lte, in
         - 符号操作符（自动转换）：>=, <=, >, <, =, ==, !=, <>
         """
         parts = raw.split("|", 2)

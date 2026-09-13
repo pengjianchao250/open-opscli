@@ -31,6 +31,10 @@ MAX_QUERY_CHARS = 4096
 MAX_REQUESTED_FIELDS = 32
 MAX_FIELD_TEXT_CHARS = 256
 ASCII_IDENTIFIER_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+COMPONENT_FIELD_LABEL_SUFFIXES = ("名称",)
+DATE_FIELD_NAME_TOKENS = frozenset(
+    {"date", "datetime", "time", "timestamp", "day", "week", "month", "year"}
+)
 DEPARTMENT_VALUE_RE = re.compile(
     r"(?:项目)?[零〇一二三四五六七八九十百\d]+部"
     r"|部门\s*(?:为|是|=|＝|：|:|等于)\s*[\u4e00-\u9fffA-Za-z0-9_-]{1,30}?"
@@ -148,10 +152,13 @@ def _field_score(
     """
     field_name = _normalize(field.get("field_name"))
     labels = {_normalize(label) for label in _field_labels(field)}
+    # 销售人员维度只在原文确实点名"按销售/各销售/销售是谁"时才算命中。
+    # 原先只在宽泛销售意图（销售情况/销售表现）下才拦，其余场景里
+    # 「销售量」「销售件数」中的「销售」照样把人员维度选了进来——实测
+    # 「近7天各平台的销售量」返回 平台 x 销售人员 两个维度且一个指标都没有。
     if (
         field.get("field_type") == "dimension"
         and (field_name == "team_username" or labels.intersection({"销售", "销售人员"}))
-        and field_semantics.has_broad_sales_metric_intent(normalized_query)
         and not field_semantics.sales_person_dimension_requested(normalized_query)
     ):
         return 0
@@ -161,9 +168,13 @@ def _field_score(
     for label in _field_labels(field):
         verbose_name = _normalize(label)
         base_name = re.split(r"[（(]", verbose_name, maxsplit=1)[0].strip()
-        if verbose_name and verbose_name in normalized_query:
+        if verbose_name and field_semantics.has_standalone_term_occurrence(
+            verbose_name, normalized_query
+        ):
             score = 90 + min(len(verbose_name), 9)
-        elif len(base_name) >= 2 and base_name in normalized_query:
+        elif len(base_name) >= 2 and field_semantics.has_standalone_term_occurrence(
+            base_name, normalized_query
+        ):
             score = 80 + min(len(base_name), 9)
         else:
             score = len(_tokens(base_name).intersection(query_tokens))
@@ -189,16 +200,49 @@ def _is_formula(field: dict) -> bool:
     )
 
 
+def _ordered_date_fields(dimensions: Iterable[dict]) -> list[dict]:
+    """日期类维度排序：规范业务日期字段排在首位。
+
+    调用方把 date_fields[0] 当作本数据集的主日期锚点——时间过滤、趋势分组和
+    环比对比全部落在它上面。原实现直接沿用元数据顺序，78 个数据集里有 20 个
+    的首个日期字段是「试算时间」「创建时间」「回传追踪号时间」这类流程时间戳，
+    「近7天」于是静默锚到了与业务口径不同的字段上（如转运账单按创建时间而非
+    账单日期）。这里把后端统一的业务日期列 date_id 提到最前，其次是展示名恰好
+    为「日期」的字段，其余保持元数据原序，保证锚点可解释且跨数据集一致。
+    """
+    rows = [
+        {
+            "field_name": row["field_name"],
+            "verbose_name": row.get("verbose_name", ""),
+        }
+        for row in dimensions
+        if _is_date_field(row)
+    ]
+
+    def rank(row: dict) -> int:
+        if row["field_name"] == "date_id":
+            return 0
+        if _normalize(row.get("verbose_name")) == "日期":
+            return 1
+        return 2
+
+    return sorted(rows, key=lambda row: (rank(row), rows.index(row)))
+
+
 def _is_date_field(field: dict) -> bool:
-    """判断日期类维度：技术名含 date/time 或中文名含 日期/时间。
+    """判断日期类维度：技术名含独立日期词元，或中文名含日期/时间。
 
     为什么需要：时间过滤与 dataComparison 都必须使用授权日期字段，
     但用户几乎从不口头点名日期字段，规划器必须无条件携带日期字段引用，
     否则模型只能靠扫盘或猜字段名补齐（e2e 实测的高频探查形态）。
     """
-    name = str(field.get("field_name", "")).casefold()
+    name_tokens = set(str(field.get("field_name", "")).casefold().split("_"))
     label = str(field.get("verbose_name", ""))
-    return "date" in name or "time" in name or "日期" in label or "时间" in label
+    return bool(
+        name_tokens.intersection(DATE_FIELD_NAME_TOKENS)
+        or "日期" in label
+        or "时间" in label
+    )
 
 
 def _is_snapshot(field: dict) -> bool:
@@ -237,6 +281,49 @@ def _compact_field(field: dict, selection_source: str, output_mode: str) -> dict
     return result
 
 
+def _base_name_only_field_names(
+    fields: Iterable[dict], normalized_query: str
+) -> set[str]:
+    """只靠去括号基名蹭中、且该基名正好是另一个字段完整标签的字段名集合。
+
+    数据集里常见「销售额」(price_cny) 与「销售额(原币)」(price) 并存。用户说
+    「销售额」时 _field_score 会同时给出 93（完整标签命中）和 83（基名命中），
+    两个字段一起选中，请求从单指标变成多指标，Top N 的排序字段随之无法唯一确定，
+    规划器只能放弃排序与行数——领导视角的「销售额前5」因此退化成无序全量。
+    完整标签精确命中时该词已有唯一归属，其余基名命中必须让位。
+    """
+    fields = list(fields)
+    exact_labels = {
+        normalize_label
+        for field in fields
+        for label in _field_labels(field)
+        if (normalize_label := _normalize(label))
+        and field_semantics.has_standalone_term_occurrence(normalize_label, normalized_query)
+    }
+    if not exact_labels:
+        return set()
+    demoted: set[str] = set()
+    for field in fields:
+        labels = [_normalize(label) for label in _field_labels(field)]
+        labels = [label for label in labels if label]
+        # 自身有完整标签命中的字段是正主，永不降级
+        if any(
+            field_semantics.has_standalone_term_occurrence(label, normalized_query)
+            for label in labels
+        ):
+            continue
+        for label in labels:
+            base = re.split(r"[（(]", label, maxsplit=1)[0].strip()
+            if (
+                len(base) >= 2
+                and base in exact_labels
+                and field_semantics.has_standalone_term_occurrence(base, normalized_query)
+            ):
+                demoted.add(str(field.get("field_name", "")))
+                break
+    return demoted
+
+
 def _select_fields(
     fields: Iterable[dict],
     query: str,
@@ -250,11 +337,47 @@ def _select_fields(
     其余字段按匹配分降序补足；仍不足 limit 时按原始顺序兜底填充，
     并用 selection_source 标注来源（explicit / query / fallback）。
     """
+    fields = list(fields)
     normalized_query = _normalize(query)
     query_tokens = _tokens(normalized_query)
     # 业务别名只在当前授权字段中兑现：例如用户说“销量”，表中存在
     # order_qty 时选中该字段；字段不存在时不会凭映射创造新字段。
-    semantic_fields = field_semantics.requested_canonical_fields(normalized_query)
+    protected_metric_labels = [
+        label
+        for field in fields
+        if field.get("field_type") == "metric"
+        for label in _field_labels(field)
+        if _normalize(label) in normalized_query
+    ]
+    semantic_fields = field_semantics.requested_canonical_fields(
+        normalized_query, protected_terms=protected_metric_labels
+    )
+    # 维度侧叫法（事业部 → 部门）只在字段选择这一层兑现：它不参与"点名指标完整性"
+    # 校验，否则一次正常的按部门分组会被判成「当前数据集没有请求的指标」。
+    # 传入的 fields 只含单一类型，因此这里加入维度字段对指标选择没有影响。
+    # 本数据集自己就有同名完整标签时（部分数据集的 org_name 就叫「事业部」），
+    # 该标签是权威归属，别名必须让位——否则会同时选中 org_name 与 dept_name，
+    # 凭空多出一个分组维度（行为快照实测）。
+    exact_field_labels = {
+        _normalize(label) for field in fields for label in _field_labels(field)
+    }
+    semantic_fields = {
+        **{
+            field_name: term
+            for field_name, term in field_semantics.dimension_alias_fields(
+                normalized_query
+            ).items()
+            if _normalize(term) not in exact_field_labels
+        },
+        **semantic_fields,
+    }
+    base_only_names = _base_name_only_field_names(fields, normalized_query)
+    # 全局别名表（销售额 → price）是跨数据集的经验映射，遇到本数据集里
+    # 「销售额」完整标签另有归属（如 price_cny）时必须让位，否则同一个词
+    # 会同时命中别名字段与精确字段，把单指标请求撑成多指标。
+    semantic_fields = {
+        name: term for name, term in semantic_fields.items() if name not in base_only_names
+    }
     ranked = [
         (
             (
@@ -263,7 +386,13 @@ def _select_fields(
                 else (
                     950
                     if field["field_name"] in semantic_fields
-                    else _field_score(field, normalized_query, query_tokens)
+                    # 只靠“去括号基名”蹭中、而同名完整标签另有其字段时判 0 分：
+                    # 该字段不是用户点名对象，混进来会把单指标请求变成多指标。
+                    else (
+                        0
+                        if field["field_name"] in base_only_names
+                        else _field_score(field, normalized_query, query_tokens)
+                    )
                 )
             ),
             index,
@@ -433,6 +562,41 @@ def _resolve_requested_fields(
         else:
             unknown.append(raw_value)
     return selected, unknown
+
+
+def _component_short_label_fields(fields: list[dict], query: str) -> set[str]:
+    """把组件字段的唯一自然短称解析为技术字段名。
+
+    仅处理可安全省略的展示名后缀；短称必须在全部组件字段标签中只命中一个
+    前缀，避免存在“渠道名称/渠道类型”时把“渠道”武断绑定到其中之一。
+    """
+    normalized_query = _normalize(query)
+    resolved = set()
+    for field in fields:
+        for label in _field_labels(field):
+            normalized_label = _normalize(label)
+            suffix = next(
+                (
+                    item
+                    for item in COMPONENT_FIELD_LABEL_SUFFIXES
+                    if normalized_label.endswith(item)
+                ),
+                "",
+            )
+            short_label = normalized_label[: -len(suffix)] if suffix else ""
+            if len(short_label) < 2 or short_label not in normalized_query:
+                continue
+            matches = {
+                candidate["field_name"]
+                for candidate in fields
+                if any(
+                    _normalize(candidate_label).startswith(short_label)
+                    for candidate_label in _field_labels(candidate)
+                )
+            }
+            if len(matches) == 1:
+                resolved.update(matches)
+    return resolved
 
 
 def _default_filters(
@@ -696,6 +860,9 @@ def build_guidance(
     explicit_names, unknown_fields = _resolve_requested_fields(
         dataset_fields, requested_fields
     )
+    category = dataset.get("dataset_category", "")
+    if category == "query_component":
+        explicit_names.update(_component_short_label_fields(dataset_fields, query))
     dimensions = [row for row in dataset_fields if row["field_type"] == "dimension"]
     metrics = [row for row in dataset_fields if row["field_type"] == "metric"]
     selected_dimensions = _select_fields(
@@ -712,7 +879,6 @@ def build_guidance(
         explicit_names,
         output_mode,
     )
-    category = dataset.get("dataset_category", "")
     status = (
         "clarify_required"
         if unknown_fields
@@ -747,14 +913,7 @@ def build_guidance(
             ),
             # 日期类维度无条件输出（上限 5 个）：时间过滤/dataComparison 的构造依据，
             # 不受点名/打分筛选影响
-            "date_fields": [
-                {
-                    "field_name": row["field_name"],
-                    "verbose_name": row.get("verbose_name", ""),
-                }
-                for row in dimensions
-                if _is_date_field(row)
-            ][:5],
+            "date_fields": _ordered_date_fields(dimensions)[:5],
             "truncated": (
                 len(dimensions) > len(selected_dimensions)
                 or len(metrics) > len(selected_metrics)

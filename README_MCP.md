@@ -920,3 +920,4 @@ MCP Server 的远程校验会立即拒绝该 Key 的后续请求。同时建议�
 ### Q5: 如何回退到单用户固定 API Key 模式？
 
 确保 `config.ini` 中没有配置 `ops_system_url`（或配置为无效地址），且启动时不提供 `--auth-verify-url`，服务器会自动回退到单用户模式，生成并使用固定 API Key。
+

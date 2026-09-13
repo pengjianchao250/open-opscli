@@ -294,6 +294,7 @@ def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> 
     assert git.init_calls[0][1] == {
         "repo_url": _repo_url("sales-dashboard"),
         "branch": "master",
+        "credential_username": "owner",
     }
     assert result["default_branch"] == "master"
     assert BindingStore().load(app_root).schema_version == 4
@@ -554,6 +555,23 @@ def test_init_rotates_credential_only_when_explicit(tmp_path: Path) -> None:
     assert git.auth_probe_calls[0][1]["token"] == "rotated-secret"
     assert result["credential_refreshed"] is True
     assert result["credential_rotated"] is True
+
+
+def test_init_requests_initial_credential_for_private_repository(tmp_path: Path) -> None:
+    """私有空仓库的伪装 404 应触发首次签发，不能提前报 GIT-010。"""
+    client = FakeClient()
+    original = client.get_git_config
+    client.get_git_config = lambda app_id: {**original(app_id), "bound": False}
+    git = FakeGit(credential_valid=False)
+    credentials = FakeCredentialStore()
+
+    result = _manager(client, git, credentials).init_git(tmp_path, app_id="Ab123")
+
+    assert git.probe_calls[0][1]["repository_not_found_is_auth"] is True
+    assert client.issue_calls == [False]
+    assert credentials.saved[0]["token"] == "rotated-secret"
+    assert result["credential_refreshed"] is True
+    assert result["credential_rotated"] is False
 
 
 def test_preflight_failure_keeps_binding_manifest_and_git_unchanged(tmp_path: Path) -> None:

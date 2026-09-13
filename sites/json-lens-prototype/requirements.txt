@@ -1,3 +1,0 @@
-# 本地与 Nixpacks 安装业务依赖和正式 opscli SDK；Docker 中 SDK 由基础镜像提供。
--r requirements-app.txt
-aukeys-opscli>=0.0.132
