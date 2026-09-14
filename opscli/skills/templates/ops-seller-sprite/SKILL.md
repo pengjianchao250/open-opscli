@@ -46,6 +46,29 @@ metadata:
 15. 只有用户明确要求使用“卖家精灵 Listing Analysis”“卖家精灵 AI 全景分析”或“卖家精灵全景分析”时才允许调用 submit；普通 Listing 优化、ASIN 分析、竞品分析或通用数据采集请求不得自动触发。status/result 只续查已有 `job_id`，不受本条触发限制。
 16. `competitor-lookup` 的 `asins` 只用于查询指定商品，结果可能展开父子体或变体，不代表从 ASIN 发现了竞品。用户要求“从 ASIN 找竞品”时，转入 `ops-commerce-playbooks` 的“如何找竞品”案例，使用流量词、关键词搜索、关联关系和 StyleSnap 建立候选。
 
+## AppHub REST 接入（仅数据层构建场景）
+
+当任务来自 `$ops-app-data-builder`，目标是为 AppHub 站点生成或维护后端数据层时，使用本节合同；普通用户查询仍按本文件既有 CLI/MCP 流程执行。
+
+### 请求与场景映射
+
+- 普通任务使用 `POST /api/v1/seller-sprite/jobs`；状态使用 `GET /api/v1/seller-sprite/jobs/{job_id}`，成功后使用 `GET /api/v1/seller-sprite/jobs/{job_id}/result`。
+- Listing Analysis 使用独立的 `/api/v1/seller-sprite/listing-analysis/jobs` 三段式接口，不能提交到普通 jobs。
+- 请求只使用正式的 `scenario`、`site`、`period`、`page_size`、`params` 等业务字段；不得把 `session_id`、`jwt`、Cookie、API Key、调度参数或本地路径放入请求体。
+- 自然语言先按现有场景和 `SCENARIO_PARAMS_ZH.md` 映射，再确认线上场景合同；不得根据页面字段名、旧项目实现或相似词猜测场景和参数。
+- `月份`、`数据月份` 和 `YYYY-MM` 放入顶层 `period`；只有“上架时间/上架月数/上架多久”才映射到 `params.putawayMonth`。
+- 单个 ASIN 的 `competitor-lookup` 仍归一化为 `params.asins`；它只查询指定商品及可能的父子体/变体，不代表已从 ASIN 发现竞品。
+
+### 异步任务与结果合同
+
+- HTTP 202 只表示任务已受理；必须保存 `job_id`，不能因为客户端超时或等待窗口结束而重复提交。
+- `queued`、`running` 和 `ready=false` 都是处理中；复用当前用户已有任务继续查询，不能把 pending 报告为成功或失败。
+- 只有 `succeeded` 才读取结果；JSON 业务结果读取 `data.result`。`failed` 或 `cancelled` 停止轮询并返回稳定错误。
+- 调用方同时检查 HTTP 状态、响应 `success` 和业务 `state`，错误分支依据 `error.code`，不能只解析错误文案。
+- 结果写入 AppHub 前按正式 `columns + rows` 结构解释 SellerSprite JSON v2；不要把行数组当成对象，也不要把导出下载 URL 当作内联 JSON 数据。
+
+本节为追加式 AppHub 适配规则，不改变本文件既有 CLI、MCP、任务续查、额度和导出逻辑。
+
 ## 链路区分
 
 ### A. 正式 CLI 代理链路（默认）
