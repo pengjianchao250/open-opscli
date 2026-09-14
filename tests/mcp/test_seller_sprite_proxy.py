@@ -245,15 +245,9 @@ def test_registration_does_not_apply_common_mcp_quota(monkeypatch):
     ]
 
 
-def test_apphub_proxy_uses_internal_gateway_key_and_forwards_request_auth(
-    monkeypatch,
-    tmp_path,
-):
+def test_apphub_proxy_forwards_trusted_identity_and_request_auth(monkeypatch):
     RecordingRemoteClient.calls = []
-    key_file = tmp_path / "collector-gateway.key"
-    key_file.write_text("collector-gateway-key", encoding="utf-8")
     monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
-    monkeypatch.setenv("OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE", str(key_file))
     monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", RecordingRemoteClient)
     token = mcp_request_ctx.set(
         {
@@ -278,7 +272,6 @@ def test_apphub_proxy_uses_internal_gateway_key_and_forwards_request_auth(
     assert result["success"] is True
     call = RecordingRemoteClient.calls[0]
     assert call["headers"] == {
-        "X-Collector-Gateway-Key": "collector-gateway-key",
         "X-AppHub-User-Email": "user@example.com",
         "X-AppHub-Auth-Mode": "session",
         "X-AppHub-User-Id": "u-1",
@@ -287,12 +280,9 @@ def test_apphub_proxy_uses_internal_gateway_key_and_forwards_request_auth(
     assert call["arguments"]["jwt"] == "apphub-jwt"
 
 
-def test_apphub_local_proxy_forwards_local_ops_credentials(monkeypatch, tmp_path):
+def test_apphub_local_proxy_forwards_local_ops_credentials(monkeypatch):
     RecordingRemoteClient.calls = []
-    key_file = tmp_path / "collector-gateway.key"
-    key_file.write_text("collector-gateway-key", encoding="utf-8")
     monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
-    monkeypatch.setenv("OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE", str(key_file))
     monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", RecordingRemoteClient)
     monkeypatch.setattr(
         "opscli.mcp.tools.helpers._get_auth_pair",
@@ -319,7 +309,6 @@ def test_apphub_local_proxy_forwards_local_ops_credentials(monkeypatch, tmp_path
     assert result["success"] is True
     call = RecordingRemoteClient.calls[0]
     assert call["headers"] == {
-        "X-Collector-Gateway-Key": "collector-gateway-key",
         "X-AppHub-User-Email": "local@example.com",
         "X-AppHub-Auth-Mode": "local",
         "X-AppHub-User-Id": "local",

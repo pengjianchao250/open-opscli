@@ -1,6 +1,6 @@
 # Keepa 与卖家精灵线上 API 使用指南
 
-> 文档日期：2026-09-08
+> 文档日期：2026-09-14
 >
 > 适用范围：opscli 场景 REST API v1
 >
@@ -21,7 +21,7 @@ OPSCLI_APPHUB_SESSION_ID=your_session_id
 OPSCLI_APPHUB_USER_EMAIL=user@aukeys.com
 ```
 
-Keepa 与 SellerSprite 使用同一个 REST Base URL 和 AppHub 登录态。不要把 Token、Session、Cookie 或 Collector 内部凭证写入代码、日志、任务参数或版本库。
+Keepa 与 SellerSprite 使用同一个 REST Base URL 和 AppHub 登录态。不要把 Token、Session 或 Cookie 写入代码、日志、任务参数或版本库。
 
 ### 1.2 鉴权
 
@@ -54,7 +54,7 @@ $headers = @{
 
 REST 认证与 MCP API Key 已分离。Keepa API Key 默认从 MySQL `api_credentials` 凭据池领取，不再通过当前 AppHub 用户的 OPS Token/Session 拉取集成账号。请求中的 OPS Token/Session 只用于用户身份治理和可选的导出文件上传。
 
-SellerSprite 由通用 REST 网关代理到 Collector。浏览器仍只提交 AppHub 登录态；网关与 Collector 之间使用权限受限文件 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 中的内部 Key，并转发已验证用户身份和任务级 Session/JWT。浏览器不得接触该内部 Key。
+SellerSprite 由通用 REST 网关代理到 Collector。浏览器仍只提交 AppHub 登录态；网关转发已验证用户身份和任务级 Session/JWT，Collector 显式信任该上游身份，不再要求单独的 Gateway Key。Collector MCP 端口必须通过防火墙、安全组、容器网络或反向代理限制为仅通用 opscli MCP 可访问，浏览器和公网不得直连。
 
 REST 请求体不接受 `session_id`、`jwt`、`output_dir` 等内部字段，也不会在响应中返回 Session 或 JWT。`auth_mcp_login` 仅属于 MCP 客户端流程，不是 REST 前置步骤。
 
