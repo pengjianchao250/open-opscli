@@ -1,3 +1,15 @@
+## 2026-09-14 SellerSprite - 增强 Collector 代理故障诊断日志
+
+**变更原因**：QA SellerSprite REST 提交返回 `COLLECTOR_MCP_CALL_FAILED` / 503 时，原日志只能看到统一错误码，无法区分 Collector 网络不可达、超时或远端工具调用异常。
+
+**改动点**：Collector 代理捕获异常时记录工具名、外层异常类型、异常组内部类型摘要和最终映射错误码；不记录异常文本、请求参数、Token、Session、JWT 或 Cookie。新增连接异常回归测试，验证 `ExceptionGroup` 内部的 `ConnectError` 可被识别。
+
+**验证结果**：SellerSprite 代理与 REST 相关回归 `29 passed`；`compileall` 与 `git diff --check` 通过；未执行真实 Collector 或 SellerSprite 线上任务。
+
+**影响范围**：仅增强 `opscli` Collector 代理服务端日志，公开错误响应和错误码映射保持不变。
+
+**回滚方式**：移除 Collector 代理日志字段及对应测试，不影响业务请求合同。
+
 ## 2026-09-14 SellerSprite - 移除 Collector Gateway Key
 
 **变更原因**：Collector MCP 已通过部署网络限制为仅允许通用 opscli MCP 访问，额外的 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 与现有信任边界重复，并会在服务器未配置凭证文件时阻断 SellerSprite REST 请求。

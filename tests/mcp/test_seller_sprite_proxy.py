@@ -103,6 +103,36 @@ def test_proxy_requires_collector_url(monkeypatch):
     assert result["error"]["code"] == "COLLECTOR_MCP_CONFIG_MISSING"
 
 
+def test_proxy_logs_returned_collector_failure(monkeypatch, caplog):
+    class FailedRemoteClient:
+        def __init__(self, url: str, *, headers: dict[str, str] | None = None) -> None:
+            self.url = url
+            self.headers = headers
+
+        async def call_tool(self, tool_name: str, arguments: dict) -> dict:
+            return {
+                "success": False,
+                "data": None,
+                "error": {
+                    "code": "COLLECTOR_MCP_CALL_FAILED",
+                    "message": "数据采集服务调用失败",
+                },
+            }
+
+    monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
+    monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", FailedRemoteClient)
+    token = mcp_request_ctx.set({"api_key": "mcp-user-key"})
+
+    try:
+        caplog.set_level("WARNING", logger="opscli.mcp.tools.collector_proxy")
+        result = _run(seller_sprite_proxy.seller_sprite_scenarios())
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["error"]["code"] == "COLLECTOR_MCP_CALL_FAILED"
+    assert "error_code=COLLECTOR_MCP_CALL_FAILED" in caplog.text
+
+
 def test_proxy_requires_current_user_api_key(monkeypatch):
     monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
 
@@ -128,7 +158,7 @@ def test_proxy_rejects_shared_api_key_in_collector_url(monkeypatch):
     assert result["error"]["code"] == "COLLECTOR_MCP_CONFIG_INVALID"
 
 
-def test_proxy_returns_unavailable_without_local_fallback(monkeypatch):
+def test_proxy_logs_and_returns_unavailable_without_local_fallback(monkeypatch, caplog):
     class UnavailableRemoteClient:
         def __init__(self, url: str, *, headers: dict[str, str] | None = None) -> None:
             self.url = url
@@ -146,12 +176,16 @@ def test_proxy_returns_unavailable_without_local_fallback(monkeypatch):
     token = mcp_request_ctx.set({"api_key": "mcp-user-key"})
 
     try:
+        caplog.set_level("WARNING", logger="opscli.mcp.tools.collector_proxy")
         result = _run(seller_sprite_proxy.seller_sprite_scenarios())
     finally:
         mcp_request_ctx.reset(token)
 
     assert result["success"] is False
     assert result["error"]["code"] == "COLLECTOR_MCP_UNAVAILABLE"
+    assert "error_type=ExceptionGroup" in caplog.text
+    assert "nested_types=ConnectError" in caplog.text
+    assert "mapped_code=COLLECTOR_MCP_UNAVAILABLE" in caplog.text
 
 
 def test_registered_proxy_returns_unavailable_without_local_execution(monkeypatch):
@@ -278,6 +312,40 @@ def test_apphub_proxy_forwards_trusted_identity_and_request_auth(monkeypatch):
     }
     assert call["arguments"]["session_id"] == "apphub-session"
     assert call["arguments"]["jwt"] == "apphub-jwt"
+
+
+def test_apphub_viewer_proxy_forwards_viewer_token_as_request_auth(monkeypatch):
+    RecordingRemoteClient.calls = []
+    monkeypatch.setenv("OPSCLI_COLLECTOR_MCP_URL", "http://127.0.0.1:8766/mcp")
+    monkeypatch.setattr(seller_sprite_proxy, "RemoteMcpClient", RecordingRemoteClient)
+    token = mcp_request_ctx.set(
+        {
+            "api_key": None,
+            "auth_mode": "apphub_viewer",
+            "user_id": "u-1",
+            "email": "user@example.com",
+            "jwt": "viewer-ticket",
+        }
+    )
+    try:
+        result = _run(
+            seller_sprite_proxy.seller_sprite_run(
+                scenario="keyword-reverse",
+                params={"asin": "B012345678"},
+            )
+        )
+    finally:
+        mcp_request_ctx.reset(token)
+
+    assert result["success"] is True
+    call = RecordingRemoteClient.calls[0]
+    assert call["headers"] == {
+        "X-AppHub-User-Email": "user@example.com",
+        "X-AppHub-Auth-Mode": "viewer",
+        "X-AppHub-User-Id": "u-1",
+    }
+    assert "session_id" not in call["arguments"]
+    assert call["arguments"]["jwt"] == "viewer-ticket"
 
 
 def test_apphub_local_proxy_forwards_local_ops_credentials(monkeypatch):
