@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Callable
 from typing import Any
@@ -22,6 +23,7 @@ from opscli.mcp_client import RemoteMcpClient
 from .helpers import _err
 
 ENV_COLLECTOR_MCP_URL = "OPSCLI_COLLECTOR_MCP_URL"
+_logger = logging.getLogger(__name__)
 
 
 class CollectorMcpProxyError(Exception):
@@ -50,7 +52,7 @@ async def call_collector(
             url,
             headers=headers,
         )
-        return await client.call_tool(
+        result = await client.call_tool(
             tool_name,
             _proxy_arguments(
                 tool_name,
@@ -58,6 +60,14 @@ async def call_collector(
                 include_apphub_auth=apphub_request,
             ),
         )
+        if isinstance(result, dict) and result.get("success") is not True:
+            error = result.get("error") if isinstance(result.get("error"), dict) else {}
+            _logger.warning(
+                "Collector MCP 代理返回失败 tool=%s error_code=%s",
+                tool_name,
+                str(error.get("code") or "UNKNOWN")[:128],
+            )
+        return result
     except CollectorMcpProxyError as exc:
         return _err(exc, tool=f"MCP → {tool_name}（Collector 代理）")
     except Exception as exc:  # noqa: BLE001
@@ -71,6 +81,15 @@ async def call_collector(
                 "COLLECTOR_MCP_CALL_FAILED",
                 f"数据采集服务调用失败：{type(exc).__name__}",
             )
+        cause = exc.__cause__ or exc.__context__
+        _logger.warning(
+            "Collector MCP proxy failed tool=%s error_type=%s cause_type=%s nested_types=%s mapped_code=%s",
+            tool_name,
+            type(exc).__name__,
+            type(cause).__name__ if cause is not None else "-",
+            _nested_exception_types(exc),
+            error.code,
+        )
         return _err(error, tool=f"MCP → {tool_name}（Collector 代理）")
 
 
@@ -200,3 +219,24 @@ def _is_collector_unavailable(error: BaseException) -> bool:
         if isinstance(nested, tuple):
             pending.extend(item for item in nested if isinstance(item, BaseException))
     return False
+
+
+def _nested_exception_types(error: BaseException) -> str:
+    """返回异常组和异常链中的类型摘要，不记录异常文本或凭证。"""
+    types: list[str] = []
+    pending = [error]
+    seen: set[int] = set()
+    while pending and len(types) < 8:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if current is not error:
+            types.append(type(current).__name__)
+        cause = current.__cause__ or current.__context__
+        if isinstance(cause, BaseException):
+            pending.append(cause)
+        nested = getattr(current, "exceptions", None)
+        if isinstance(nested, tuple):
+            pending.extend(item for item in nested if isinstance(item, BaseException))
+    return ",".join(types) if types else "-"
