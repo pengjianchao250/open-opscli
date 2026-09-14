@@ -1,12 +1,12 @@
 # API 凭据池管理指南
 
-本模块统一管理 SerpAPI、Canopy、scrape.do 的多个 API 账号。Keepa、卖家精灵继续使用原有集成账号配置，不受本模块影响。
+本模块统一管理 SerpAPI、Canopy、scrape.do、Keepa 和西柚的多个 API 账号。卖家精灵继续使用原有集成账号配置，不受本模块影响。
 
 ## 数据模型
 
 凭据池采用 `Provider 1:N Account 1:N Credential`：
 
-- Provider：`serpapi`、`canopy`、`scrape_do`。
+- Provider：`serpapi`、`canopy`、`scrape_do`、`keepa`、`xydc_mcp`、`xydc_openapi`。
 - Account：平台内的命名账号，包含启停状态、优先级和运行额度。
 - Credential：账号的 API Key 版本；轮换后旧版本保留为已撤销记录。
 - Runtime：剩余额度、重置时间、最近使用和最后错误。
@@ -90,6 +90,15 @@ opscli api-credentials delete --account-id 12 --actor "admin@example.com"
 ```
 
 同一 Provider 下可配置多个账号。运行时先选择最低优先级数值的可用账号，同优先级选择最久未使用的账号；冷却、禁用、失效、耗尽和已删除账号不参与正常领取。
+
+Keepa 账号使用 `keepa` Provider：
+
+```bash
+opscli api-credentials add --provider keepa --name primary --priority 10 --remark "Keepa 主账号"
+opscli api-credentials add --provider keepa --name backup-1 --priority 20 --remark "Keepa 备用账号"
+```
+
+Keepa 请求遇到 401/403 时会将当前账号标记为失效并切换备用账号；额度预检不足或上游限流时会记录剩余额度和 refill 冷却时间，再尝试其他账号。`OPSCLI_KEEPA_API_KEY` 仅作为凭据池不可用时的本地调试兜底，不参与 MySQL 账号优先级和运行状态管理。
 
 `add`、`rotate`、`enable`、`disable` 和 `delete` 都直接读写 MySQL，只需要日常 DML 权限。`delete` 是逻辑删除：账号状态变为 `deleted` 并立即退出账号池，但密钥版本和审计记录仍然保留。建议使用 CLI 管理账号，因为 CLI 会同时维护掩码、指纹、版本、运行状态和审计记录；直接修改单个数据库字段可能造成数据不一致。
 

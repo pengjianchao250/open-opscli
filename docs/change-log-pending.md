@@ -1,3 +1,17 @@
+## 2026-09-14 Git - 合并远端 release 并解决变更日志冲突
+
+**变更原因**：`feature/sellersprite` 需要同步最新 `origin/release` 的 AppHub MCP REST 环境变量与数据合同改动，同时保留功能分支刚完成的 Keepa MySQL 凭据池迁移。
+
+**改动点**：将 `origin/release` 合入 `feature/sellersprite`；解决 `docs/change-log-pending.md` 顶部并行新增记录的内容冲突，按日期倒序保留 9 月 13 日 App 记录与 9 月 11 日 Keepa 记录，并保留 release 对 9 月 10 日第三方数据 API 合同的更新；`ops-keepa` Skill 自动合并后同时包含 MySQL 凭据池说明和 AppHub REST 接入合同。
+
+**验证结果**：`tests/app` 回归 `115 passed`；API 凭据池、Keepa Manager 与 MCP Keepa Tool 定向回归 `53 passed`；Keepa Skill 与发行清单筛选回归 `2 passed`；App 建站 Skill 合同回归 `25 passed, 1 failed`，唯一失败的后端 `AGENTS.md` 模板断言在 `origin/release` 已存在且目标文件与 release 完全一致。相关模块 `compileall`、Skill 版本 JSON 解析和冲突标记扫描通过；`git diff --check` 仅报告两份 release 原有设计文档的 5 处 Markdown 行尾空格。
+
+**影响范围**：当前 `feature/sellersprite` 分支及其继承的 AppHub、Keepa 和 SellerSprite Skill/运行时合同；未改变双方原有业务意图。
+
+**回滚方式**：在未推送时回退本次 merge commit；推送后使用 `git revert -m 1 <merge_commit>` 撤销本次合并。
+
+---
+
 ## 2026-09-13 App - 初始化时自动配置 MCP REST 环境变量
 
 **变更原因**：AppHub 标准数据应用依赖 `OPSCLI_MCP_REST_API_BASE_URL` 调用 opscli-mcp REST，但应用初始化此前不会自动配置，容易导致 Viewer、Keepa 和 SellerSprite 在线上缺少运行时地址。
@@ -9,6 +23,20 @@
 **影响范围**：影响 `opscli app init` 和 `opscli app push` 的远端准备步骤，每次执行新增一次环境变量 GET，首次缺失时增加 PUT；不修改 Binding Schema、Git 凭据格式、应用模板、数据库或发布流程。环境变量在应用下次发布或重启后生效。
 
 **回滚方式**：移除 AppHub env 客户端方法、仓库准备链路中的自动配置调用、环境映射常量、对应测试和需求文档，并删除本节记录。
+
+---
+
+## 2026-09-11 Keepa - 账号来源迁移到 MySQL 凭据池
+
+**变更原因**：Keepa 仍通过 OPS 集成账号接口获取单个 API Key，账号来源与 Google Trends、Canopy、scrape.do 等凭据池模块不一致，也无法在鉴权失效或额度不足时自动切换备用账号。
+
+**改动点**：将 Keepa API Key Provider 改为从 MySQL `api_credentials` 凭据池领取 `keepa` 账号，保留 `OPSCLI_KEEPA_API_KEY` 作为池不可用时的本地兜底；凭据模型增加账号 ID 和密钥版本，401/403 自动标记失效并切换账号，额度不足或限流记录剩余额度和 refill 冷却时间后切换账号，成功请求回写额度状态；Keepa MCP 不再为获取账号强制建立 OPS 登录态，Session/JWT 仅保留给可选文件上传；同步更新管理 CLI、使用指南，并将 `ops-keepa` Skill 升级到 `v0.0.4`。
+
+**验证结果**：Keepa、API 凭据池、MCP Keepa Tool 和 REST App 定向回归 `184 passed`；Keepa/发行清单相关 Skill 回归 `11 passed, 296 deselected`；`compileall`、Skill 版本 JSON 解析和 `git diff --check` 通过。当前虚拟环境未安装 Ruff，因此未执行 Ruff 检查。
+
+**影响范围**：Keepa MCP/REST/内部 Manager 的账号来源、主备切换和运行状态回写；公开场景参数与成功响应合同不变。上线前需要在凭据池中创建至少一个 `keepa` Provider 账号。
+
+**回滚方式**：恢复 Keepa OPS 集成账号 Provider、MCP OPS 凭据前置逻辑、凭据池白名单和对应文档。
 
 ---
 

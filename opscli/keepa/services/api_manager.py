@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from opscli.keepa.accounts import KeepaApiKeyProvider
+from opscli.keepa.accounts import KeepaApiKey, KeepaApiKeyProvider
 from opscli.keepa.api.client import KeepaApiClient
 from opscli.keepa.api.scenarios import get_scenario, list_scenarios
 from opscli.keepa.best_sellers_formatter import (
@@ -27,7 +27,12 @@ from opscli.keepa.category_formatter import (
 )
 from opscli.keepa.config import KeepaSettings, load_settings
 from opscli.keepa.deal_formatter import FormattedDealExport, format_deal_export
-from opscli.keepa.domain.exceptions import KeepaApiError, KeepaConfigError, KeepaQuotaError
+from opscli.keepa.domain.exceptions import (
+    KeepaApiError,
+    KeepaConfigError,
+    KeepaError,
+    KeepaQuotaError,
+)
 from opscli.keepa.domain.models import (
     KeepaExportResult,
     KeepaScenarioRequest,
@@ -46,7 +51,6 @@ from opscli.keepa.search_insights_formatter import (
 from opscli.keepa.seller_formatter import FormattedSellerExport, format_seller_export
 from opscli.keepa.time import add_keepa_time_conversions
 from opscli.shared.file_uploads import FileUploadClient, FileUploadError
-from opscli.shared.integration_accounts import IntegrationAccountClient
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +112,7 @@ class KeepaApiManager:
         self.jwt = jwt
         self.session_id = session_id
         self.collection_submitter = collection_submitter
-        self.api_key_provider = api_key_provider or KeepaApiKeyProvider(
-            self.settings,
-            integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
-        )
+        self.api_key_provider = api_key_provider or KeepaApiKeyProvider(self.settings)
 
     def scenarios(self) -> list[dict[str, Any]]:
         """列出支持的接口场景。"""
@@ -119,9 +120,30 @@ class KeepaApiManager:
 
     async def token_status(self) -> dict[str, Any]:
         """读取 Keepa API token 状态。"""
-        credential = self.api_key_provider.get_default()
-        async with KeepaApiClient(api_key=credential.api_key) as client:
-            payload = await client.token_status()
+        attempted_account_ids: set[int] = set()
+        last_error: KeepaApiError | None = None
+        while True:
+            try:
+                credential = _get_provider_credential(
+                    self.api_key_provider,
+                    attempted_account_ids,
+                )
+            except KeepaConfigError:
+                if last_error is not None:
+                    raise last_error
+                raise
+            try:
+                async with KeepaApiClient(api_key=credential.api_key) as client:
+                    payload = await client.token_status()
+            except KeepaApiError as exc:
+                _report_provider_failure(self.api_key_provider, credential, exc)
+                if _can_rotate_credential(self.api_key_provider, credential, exc):
+                    attempted_account_ids.add(int(credential.account_id))
+                    last_error = exc
+                    continue
+                raise
+            _report_provider_success(self.api_key_provider, credential, extract_quota(payload))
+            break
         return {
             "account": credential.to_public_dict(),
             "quota": extract_quota(payload),
@@ -148,31 +170,107 @@ class KeepaApiManager:
         raw_path = root_dir / "raw.json"
         result_path = root_dir / "result.json"
 
-        credential = self.api_key_provider.get_default()
-        logger.info(
-            "[KEEPA-TRACE] credential_ready scenario=%s site=%s source=%s",
-            request.scenario,
-            site,
-            credential.source,
-        )
         normalized_params = scenario.build_params(params=request.params, site=site)
         estimated_tokens = scenario.estimate_tokens(request.params)
-        reserve_tokens = self.settings.reserve_tokens if request.reserve_tokens is None else request.reserve_tokens
+        reserve_tokens = (
+            self.settings.reserve_tokens
+            if request.reserve_tokens is None
+            else request.reserve_tokens
+        )
         warnings: list[dict[str, Any]] = []
-
-        async with KeepaApiClient(api_key=credential.api_key) as client:
-            logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=before", job_id)
-            before_status = await _safe_token_status(client, warnings)
-            logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=before", job_id)
-            before_quota = extract_quota(before_status)
-            quota_warning = _build_quota_warning(
-                before_quota=before_quota,
-                estimated_tokens=estimated_tokens,
-                reserve_tokens=reserve_tokens,
+        attempted_account_ids: set[int] = set()
+        last_credential_error: KeepaError | None = None
+        while True:
+            try:
+                credential = _get_provider_credential(
+                    self.api_key_provider,
+                    attempted_account_ids,
+                )
+            except KeepaConfigError:
+                if last_credential_error is not None:
+                    raise last_credential_error
+                raise
+            logger.info(
+                "[KEEPA-TRACE] credential_ready scenario=%s site=%s source=%s",
+                request.scenario,
+                site,
+                credential.source,
             )
-            if quota_warning:
-                warnings.append(quota_warning)
-                if not request.force and not request.wait:
+            try:
+                async with KeepaApiClient(api_key=credential.api_key) as client:
+                    logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=before", job_id)
+                    try:
+                        before_status = await client.token_status()
+                    except KeepaApiError as exc:
+                        if _can_rotate_credential(self.api_key_provider, credential, exc):
+                            _report_provider_failure(self.api_key_provider, credential, exc)
+                            attempted_account_ids.add(int(credential.account_id))
+                            last_credential_error = exc
+                            continue
+                        _append_token_status_warning(warnings, exc)
+                        before_status = {}
+                    logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=before", job_id)
+                    before_quota = extract_quota(before_status)
+                    quota_warning = _build_quota_warning(
+                        before_quota=before_quota,
+                        estimated_tokens=estimated_tokens,
+                        reserve_tokens=reserve_tokens,
+                    )
+                    if quota_warning:
+                        quota_error = _quota_error(quota_warning)
+                        if (
+                            not request.force
+                            and not request.wait
+                            and _provider_supports_rotation(self.api_key_provider)
+                            and credential.account_id is not None
+                        ):
+                            _report_provider_failure(
+                                self.api_key_provider,
+                                credential,
+                                quota_error,
+                                quota=before_quota,
+                            )
+                            attempted_account_ids.add(credential.account_id)
+                            last_credential_error = quota_error
+                            continue
+                        warnings.append(quota_warning)
+                        if not request.force and not request.wait:
+                            _write_json(
+                                params_path,
+                                _params_payload(
+                                    request=request,
+                                    scenario=scenario.to_public_dict(),
+                                    normalized_params=normalized_params,
+                                    account=credential.to_public_dict(),
+                                    estimated_tokens=estimated_tokens,
+                                    reserve_tokens=reserve_tokens,
+                                ),
+                            )
+                            raise quota_error
+                        if request.wait:
+                            before_status = await _wait_for_refill(client, before_quota, warnings)
+                            before_quota = extract_quota(before_status)
+                            refreshed_warning = _build_quota_warning(
+                                before_quota=before_quota,
+                                estimated_tokens=estimated_tokens,
+                                reserve_tokens=reserve_tokens,
+                            )
+                            if refreshed_warning and not request.force:
+                                warnings.append(refreshed_warning)
+                                _write_json(
+                                    params_path,
+                                    _params_payload(
+                                        request=request,
+                                        scenario=scenario.to_public_dict(),
+                                        normalized_params=normalized_params,
+                                        account=credential.to_public_dict(),
+                                        estimated_tokens=estimated_tokens,
+                                        reserve_tokens=reserve_tokens,
+                                        before_quota=before_quota,
+                                    ),
+                                )
+                                raise _quota_error(refreshed_warning)
+
                     _write_json(
                         params_path,
                         _params_payload(
@@ -182,60 +280,37 @@ class KeepaApiManager:
                             account=credential.to_public_dict(),
                             estimated_tokens=estimated_tokens,
                             reserve_tokens=reserve_tokens,
+                            before_quota=before_quota,
                         ),
                     )
-                    raise _quota_error(quota_warning)
-                if request.wait:
-                    before_status = await _wait_for_refill(client, before_quota, warnings)
-                    before_quota = extract_quota(before_status)
-                    refreshed_warning = _build_quota_warning(
-                        before_quota=before_quota,
-                        estimated_tokens=estimated_tokens,
-                        reserve_tokens=reserve_tokens,
+
+                    logger.info(
+                        "[KEEPA-TRACE] scenario_request_start job_id=%s endpoint=%s",
+                        job_id,
+                        scenario.endpoint,
                     )
-                    if refreshed_warning and not request.force:
-                        warnings.append(refreshed_warning)
-                        _write_json(
-                            params_path,
-                            _params_payload(
-                                request=request,
-                                scenario=scenario.to_public_dict(),
-                                normalized_params=normalized_params,
-                                account=credential.to_public_dict(),
-                                estimated_tokens=estimated_tokens,
-                                reserve_tokens=reserve_tokens,
-                                before_quota=before_quota,
-                            ),
-                        )
-                        raise _quota_error(refreshed_warning)
-
-            _write_json(
-                params_path,
-                _params_payload(
-                    request=request,
-                    scenario=scenario.to_public_dict(),
-                    normalized_params=normalized_params,
-                    account=credential.to_public_dict(),
-                    estimated_tokens=estimated_tokens,
-                    reserve_tokens=reserve_tokens,
-                    before_quota=before_quota,
-                ),
+                    raw_response = await client.get_json(scenario.endpoint, normalized_params)
+                    logger.info(
+                        "[KEEPA-TRACE] scenario_request_done job_id=%s endpoint=%s",
+                        job_id,
+                        scenario.endpoint,
+                    )
+                    logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=after", job_id)
+                    after_status = await _safe_token_status(client, warnings)
+                    logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=after", job_id)
+            except KeepaApiError as exc:
+                _report_provider_failure(self.api_key_provider, credential, exc)
+                if _can_rotate_credential(self.api_key_provider, credential, exc):
+                    attempted_account_ids.add(int(credential.account_id))
+                    last_credential_error = exc
+                    continue
+                raise
+            _report_provider_success(
+                self.api_key_provider,
+                credential,
+                extract_quota(after_status) or extract_quota(raw_response) or before_quota,
             )
-
-            logger.info(
-                "[KEEPA-TRACE] scenario_request_start job_id=%s endpoint=%s",
-                job_id,
-                scenario.endpoint,
-            )
-            raw_response = await client.get_json(scenario.endpoint, normalized_params)
-            logger.info(
-                "[KEEPA-TRACE] scenario_request_done job_id=%s endpoint=%s",
-                job_id,
-                scenario.endpoint,
-            )
-            logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=after", job_id)
-            after_status = await _safe_token_status(client, warnings)
-            logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=after", job_id)
+            break
 
         raw_payload = {
             "job_id": job_id,
@@ -435,6 +510,59 @@ class KeepaApiManager:
             _write_json(Path(result.result_path), result.to_dict())
 
 
+def _provider_supports_rotation(provider: Any) -> bool:
+    return callable(getattr(provider, "report_failure", None))
+
+
+def _get_provider_credential(
+    provider: Any,
+    attempted_account_ids: set[int],
+) -> KeepaApiKey:
+    if _provider_supports_rotation(provider):
+        return provider.get_default(exclude_account_ids=attempted_account_ids)
+    return provider.get_default()
+
+
+def _report_provider_success(
+    provider: Any,
+    credential: KeepaApiKey,
+    quota: dict[str, Any],
+) -> None:
+    reporter = getattr(provider, "report_success", None)
+    if callable(reporter):
+        reporter(credential, quota)
+
+
+def _report_provider_failure(
+    provider: Any,
+    credential: KeepaApiKey,
+    exc: Exception,
+    *,
+    quota: dict[str, Any] | None = None,
+) -> None:
+    reporter = getattr(provider, "report_failure", None)
+    if callable(reporter):
+        reporter(credential, exc, quota=quota)
+
+
+def _can_rotate_credential(
+    provider: Any,
+    credential: KeepaApiKey,
+    exc: KeepaApiError,
+) -> bool:
+    return bool(
+        _provider_supports_rotation(provider)
+        and credential.account_id is not None
+        and exc.code
+        in {
+            "KEEPA_AUTH_ERROR",
+            "KEEPA_FORBIDDEN",
+            "KEEPA_QUOTA_INSUFFICIENT",
+            "KEEPA_RATE_LIMITED",
+        }
+    )
+
+
 def extract_quota(payload: dict[str, Any] | None) -> dict[str, Any]:
     """提取 Keepa 响应中的额度字段。"""
     if not isinstance(payload, dict):
@@ -567,14 +695,21 @@ async def _safe_token_status(client: KeepaApiClient, warnings: list[dict[str, An
     try:
         return await client.token_status()
     except KeepaApiError as exc:
-        warnings.append(
-            {
-                "stage": "token_status",
-                "message": "读取 Keepa 可用额度状态失败，继续执行主请求",
-                "error": exc.to_dict(),
-            }
-        )
+        _append_token_status_warning(warnings, exc)
         return {}
+
+
+def _append_token_status_warning(
+    warnings: list[dict[str, Any]],
+    exc: KeepaApiError,
+) -> None:
+    warnings.append(
+        {
+            "stage": "token_status",
+            "message": "读取 Keepa 可用额度状态失败，继续执行主请求",
+            "error": exc.to_dict(),
+        }
+    )
 
 
 def _build_quota_warning(
