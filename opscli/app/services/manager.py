@@ -81,7 +81,6 @@ class AppManager:
         *,
         app_slug: str | None = None,
         app_id: str | None = None,
-        rotate_git_credential: bool = False,
     ) -> dict:
         """初始化已绑定应用，或通过明确的公开 ID 恢复已有应用。"""
         root = self.binding_store.prepare_root(path)
@@ -90,7 +89,6 @@ class AppManager:
                 root,
                 app_slug=app_slug,
                 app_id=app_id,
-                rotate_git_credential=rotate_git_credential,
             )
         )
         return {
@@ -139,7 +137,6 @@ class AppManager:
         *,
         app_slug: str | None = None,
         app_id: str | None = None,
-        rotate_git_credential: bool = False,
         manifest_policy: Literal["sync", "validate"] = "sync",
     ) -> tuple[SiteBinding, dict[str, Any], dict[str, Any], dict[str, Any]]:
         root.mkdir(parents=True, exist_ok=True)
@@ -161,7 +158,6 @@ class AppManager:
             root,
             binding,
             git_config,
-            rotate_git_credential=rotate_git_credential,
         )
         self.binding_store.save(root, binding)
         if manifest_policy == "sync":
@@ -296,40 +292,26 @@ class AppManager:
         root: Path,
         binding: SiteBinding,
         git_config: dict[str, Any],
-        *,
-        rotate_git_credential: bool,
     ) -> tuple[SiteBinding, dict[str, Any]]:
-        """验证本机凭据，必要时按平台状态签发或显式轮换。"""
+        """验证本机凭据，认证失败时按平台状态自动签发或轮换。"""
         username = _optional_text(git_config.get("username")) or binding.git_username
         bound = bool(git_config.get("bound"))
-        if not rotate_git_credential:
-            try:
-                self.git_service.probe_remote_branch(
-                    root,
-                    repo_url=binding.repo_url,
-                    branch=binding.default_branch,
-                    repository_not_found_is_auth=True,
-                )
-            except AppGitError as exc:
-                if exc.code != "GIT-002":
-                    raise
-                if bound:
-                    raise AppGitError(
-                        "GIT-CREDENTIAL-ROTATION-REQUIRED",
-                        "平台已有 Git 凭据，但本机凭据缺失或失效，已停止自动轮换。",
-                        fix_hint=(
-                            "确认其他机器旧凭据可以失效后，执行 "
-                            "opscli app init --rotate-git-credential。"
-                        ),
-                    ) from exc
-            else:
-                return binding.migrated(git_username=username), {
-                    "credential_refreshed": False,
-                    "credential_rotated": False,
-                }
+        try:
+            self.git_service.probe_remote_branch(
+                root,
+                repo_url=binding.repo_url,
+                branch=binding.default_branch,
+                repository_not_found_is_auth=True,
+            )
+        except AppGitError as exc:
+            if exc.code != "GIT-002":
+                raise
+        else:
+            return binding.migrated(git_username=username), {
+                "credential_refreshed": False,
+            }
 
-        rotate = bound and rotate_git_credential
-        issued = self.client.issue_git_credential(rotate=rotate)
+        issued = self.client.issue_git_credential(rotate=bound)
         token = _optional_text(issued.get("token"))
         issued_username = _optional_text(issued.get("username")) or username
         if token is None or issued_username is None:
@@ -342,6 +324,11 @@ class AppManager:
                 token=token,
                 branch=binding.default_branch,
             )
+            self.credential_store.erase_credential(
+                root,
+                repo_url=binding.repo_url,
+                username=username,
+            )
             self.credential_store.save_credential(
                 root,
                 repo_url=binding.repo_url,
@@ -352,7 +339,7 @@ class AppManager:
             issued.clear()
             token = ""
         binding = binding.migrated(git_username=issued_username)
-        return binding, {"credential_refreshed": True, "credential_rotated": rotate}
+        return binding, {"credential_refreshed": True}
 
     def _refresh_binding(
         self,

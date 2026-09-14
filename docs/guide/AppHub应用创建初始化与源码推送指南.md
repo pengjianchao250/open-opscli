@@ -101,8 +101,8 @@ opscli app init .\sales-dashboard
 1. 读取 schema v4 的 `.opscli/app.json`；只有目录完全没有 binding 时才能指定 `--app-id Ab123` 恢复已有应用。非法或旧 binding 必须人工核对，不能覆盖。`--app` 仅用于核对 slug。
 2. 调用 `GET /api/v1/apps/{app_id}` 和 `GET /api/v1/apps/{app_id}/git-config`，校验响应 ID 后刷新应用与仓库信息。禁止 ID 缺失时退回 slug。
 3. 首次绑定目标 origin 时调用 `GET /api/v1/apps/{app_id}/git-bind-preflight`，仅接受空仓库成功证据；相同 origin 的后续 init/push 不重复预检。
-4. 使用现有 Git 凭据执行 `ls-remote`。平台已绑定但本机凭据不可用时停止；只有显式传入 `--rotate-git-credential` 才轮换。
-5. 新签发凭据先通过仅对子进程生效的临时 Authorization Header 验证，成功后才保存到 credential helper。
+4. 使用现有 Git 凭据执行 `ls-remote`。明确属于认证失败时自动恢复：平台未绑定凭据则签发第一枚，平台已有凭据则由服务端吊销旧凭据并签发新凭据；网络、仓库状态和历史冲突等非认证错误不会刷新凭据。
+5. 新签发凭据先通过仅对子进程生效的临时 Authorization Header 验证，成功后才清理本机旧凭据并保存新凭据到 credential helper。
 6. 验证完成后才保存 binding、同步 `app.yaml`，并将 origin 的 fetch URL 和唯一 push URL 收敛到平台仓库。
 7. 远端已有 `master` 时获取并建立跟踪；远端分叉或无关历史必须人工处理，不自动执行 `ours` 合并。
 
@@ -161,7 +161,7 @@ push 成功只能说明：
 | `APP-MANIFEST-INVALID` | `app.yaml` 无法解析 | 修复 YAML 后重试 |
 | `APP-BINDING-TRACKED` | binding 可能进入 Git | 在 `.gitignore` 中加入 `.opscli/` 并从索引移除 |
 | `GIT-ORIGIN-MISMATCH` | `origin` 与 binding 不一致 | 重新执行 `opscli app init` |
-| `GIT-CREDENTIAL-ROTATION-REQUIRED` | 平台已绑定但本机凭据不可用 | 确认旧凭据可失效后执行 `app init --rotate-git-credential` |
+| `GIT-002` | Git 凭据自动刷新后仍不可用，或本机 credential helper 读写失败 | 检查 AppHub、Git 服务和本机 Git Credential Manager |
 | `GIT-003` | 远端 master 领先或历史分叉 | 人工核对并合并远端修改，禁止 force push |
 
 ## 9. 安全边界

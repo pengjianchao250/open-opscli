@@ -491,7 +491,7 @@ class GitService:
             raise AppGitError(
                 "GIT-002",
                 "Git 凭据缺失、失效或无仓库写权限。",
-                fix_hint="检查本机凭据；确需轮换时执行 opscli app init --rotate-git-credential。",
+                fix_hint="重新执行命令以自动刷新认证；持续失败请检查 AppHub 与 Git 服务。",
             )
         if any(
             marker in lowered
@@ -510,7 +510,7 @@ class GitService:
             raise AppGitError(
                 "GIT-002",
                 "Git 凭据缺失、失效或无仓库写权限。",
-                fix_hint="检查本机凭据；确需轮换时执行 opscli app init --rotate-git-credential。",
+                fix_hint="重新执行命令以自动刷新认证；持续失败请检查 AppHub 与 Git 服务。",
             )
         raise AppGitError("GIT-010", f"Git 远端操作失败：{detail}")
 

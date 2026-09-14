@@ -11492,3 +11492,30 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：当前功能分支与 `origin/release` 的合并结果，重点涉及 AppHub manifest、Git 凭据和规划器相关更新。
 **回滚方式**：在尚未推送时回退本次 merge commit；已推送后使用 revert 撤销该 merge commit。
 ---
+## 2026-09-14 App - Git 认证失败时自动刷新用户凭据
+
+**变更原因**：用户清空本机 Git credential helper 后，AppHub 仍可能报告当前用户存在有效凭据。此前 `app init` 和 `app push` 会返回 `GIT-CREDENTIAL-ROTATION-REQUIRED`，要求业务用户理解并显式传入 `--rotate-git-credential`，无法无感恢复。
+
+**改动点**：`opscli/app/services/manager.py` 在现有凭据 `ls-remote` 明确返回认证错误时自动恢复：服务端 `bound=false` 请求 `POST /api/v1/git/credentials` 的 `rotate=false` 首次签发，`bound=true` 请求 `rotate=true` 由服务端吊销旧凭据并签发新凭据；非认证类 Git 错误保持原样返回。新凭据先通过临时 Basic Authorization 验证，成功后由 `GitCredentialStore.erase_credential` 清理旧 helper 记录并保存新凭据，随后继续原 init/push 流程。删除 CLI 的 `--rotate-git-credential` 参数和 `credential_rotated` 输出，普通终端仅提示“Git 认证已自动刷新。”；同步更新 App 开发 Skill 与使用指南。
+
+**验证结果**：使用仓库虚拟环境和系统临时目录执行 `.venv/Scripts/python.exe -X utf8 -m pytest tests/app -q -p no:cacheprovider --basetemp <系统临时目录>`，完整 App 模块回归 `119 passed`。仓库默认 pytest 临时目录受 Windows ACL 影响，首次运行出现 92 个 fixture setup 权限错误；切换到系统临时目录后全部通过。
+
+**影响范围**：影响 `opscli app init` 与 `opscli app push` 的 Git 认证恢复。正常有效凭据不触发远端签发；自动轮换仍沿用 AppHub 的用户级单凭据合同，会使同一用户在其他机器上的旧凭据失效。
+
+**回滚方式**：恢复 `--rotate-git-credential` 参数、`GIT-CREDENTIAL-ROTATION-REQUIRED` 分支及显式轮换测试，删除自动 helper 清理与本节文档更新。
+
+---
+
+## 2026-09-14 ops-app-data-builder - 空远端不再阻塞业务代码开发
+
+**变更原因**：数据层 Skill 将远端存在 `origin/master` 设为代码生成硬门槛，导致已完成 `opscli app create/init` 的新项目必须先提交并推送纯模板，才能实现用户已经确认的业务需求；该门槛与 App 源码交付规范允许空远端尚无 `master` 的规则冲突。
+
+**改动点**：调整 `ops-app-data-builder` 初始化门禁，允许 binding、origin、标准模板和项目身份均正确的项目在尚无首次提交的本地 `master` 上继续开发；`origin/master` 仅作为存在时可用的远端基线，不再是开发前置条件。保留非 `master`、origin 不匹配、模板或身份不完整时的阻塞行为；明确首次提交与推送属于取得用户授权后的源码交付阶段。同步升级 Skill 至 `0.1.14`，更新契约测试与 eval 场景。
+
+**验证结果**：`pytest tests/skills/test_ops_app_data_builder_skill.py -q` 为 `12 passed`；`quick_validate.py` 返回 `Skill is valid!`；目标 JSON 可解析，包含 13 个 agent prompt 和 20 条 success criteria。完整 `tests/skills` 回归为 `45 failed, 262 passed, 1 skipped`，失败集中在 CLI 输出、Dashboard 模板漂移、feedback 日报和系统脚本等既有范围；相邻的 `ops-app-build-spec` 单测单独复跑仍因其 `assets/backend/AGENTS.md` 缺少既有期望文案失败，与本次改动无关。目标静态 eval 得分 `0.875`，本次新增三条门禁术语均已命中，但被 eval 原有的四个陈旧主文件术语要求（`查询组件只用于`、`确定性分页`、`断点续传`、`/api/v1/seller-sprite/jobs`）阻塞，未扩展本次范围修复。
+
+**影响范围**：只影响 `ops-app-data-builder` 对新建空远端项目的初始化判断。已有 `origin/master` 项目、项目身份校验、标准模板检查、数据合同验证和交付授权边界保持不变。
+
+**回滚方式**：恢复 `SKILL.md` 对 `origin/master` 的强制要求，将版本回退到 `0.1.13`，并还原对应契约测试与 eval 条目。
+
+---

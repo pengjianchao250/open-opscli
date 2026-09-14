@@ -21,6 +21,8 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         data = payload.get("data") or {}
         if data.get("message"):
             typer.echo(data["message"])
+        if data.get("credential_refreshed"):
+            typer.echo("Git 认证已自动刷新。")
         for key in (
             "app_id",
             "app_name",
@@ -98,11 +100,6 @@ def init_git(
     path: Path = typer.Argument(Path("."), help="应用源码目录"),
     app_slug: str | None = typer.Option(None, "--app", help="可选核对 slug；不能用于选择或创建应用"),
     app_id: str | None = typer.Option(None, "--app-id", help="恢复已有应用的五位公开 ID，区分大小写"),
-    rotate_git_credential: bool = typer.Option(
-        False,
-        "--rotate-git-credential",
-        help="显式轮换 Git 凭据；会使其他机器上的旧凭据失效",
-    ),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
     """恢复应用信息并初始化本地 Git，不生成或覆盖业务源码。"""
@@ -112,7 +109,6 @@ def init_git(
             path,
             app_slug=app_slug,
             app_id=app_id,
-            rotate_git_credential=rotate_git_credential,
         ),
         json_output=json_output,
     )

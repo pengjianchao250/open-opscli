@@ -28,26 +28,26 @@ def test_init_forwards_explicit_id_without_reinterpreting_app(monkeypatch) -> No
     assert captured == {
         "app_id": "Ab123",
         "app_slug": "sales",
-        "rotate_git_credential": False,
     }
 
 
-def test_init_forwards_explicit_credential_rotation(monkeypatch) -> None:
-    captured = {}
+def test_init_no_longer_exposes_manual_credential_rotation() -> None:
+    result = CliRunner().invoke(app, ["app", "init", "--help"])
 
+    assert result.exit_code == 0
+    assert "--rotate-git-credential" not in result.output
+
+
+def test_init_reports_automatic_credential_refresh(monkeypatch) -> None:
     class FakeManager:
         def init_git(self, path, **kwargs):
-            captured.update(kwargs)
-            return {}
+            return {"credential_refreshed": True}
 
         def close(self):
             pass
 
     monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
-    result = CliRunner().invoke(
-        app,
-        ["app", "init", ".", "--app-id", "Ab123", "--rotate-git-credential", "--json"],
-    )
+    result = CliRunner().invoke(app, ["app", "init", "."])
 
     assert result.exit_code == 0
-    assert captured["rotate_git_credential"] is True
+    assert "Git 认证已自动刷新。" in result.output

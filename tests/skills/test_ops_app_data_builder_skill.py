@@ -43,8 +43,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.13"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.13"}
+    assert frontmatter["metadata"]["version"] == "0.1.14"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.14"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -83,8 +83,11 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
         ".opscli/app.json",
         "binding 必须包含有效 `app_id/slug`",
         ".opscli/app.json.app_id == app.yaml.app_id",
-        "当前本地分支是 `master`",
-        "远端存在 `origin/master`",
+        "当前本地分支是 `master`（允许尚无首次提交的 unborn branch）",
+        "`origin/master` 存在时可作为远端基线",
+        "仅缺少 `origin/master` 不是阻塞条件",
+        "首次提交与推送属于源码交付阶段",
+        "不得要求用户先提交或推送后才开始数据层开发",
         "只有 binding 而没有模板代码",
         "backend/clients/ops_query_client.py",
         "backend/core/auth.py",
@@ -99,6 +102,8 @@ def test_ops_app_data_builder_requires_standard_template_and_project_identity():
     for forbidden in (
         "符合 `ops-app-build-spec` 的已有项目",
         "已有结构不同则复用现有命名",
+        "且远端存在 `origin/master`",
+        "缺少 `origin/master`，或项目身份不一致",
     ):
         assert forbidden not in text
 
@@ -297,7 +302,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.13"
+    assert templates[SKILL_NAME]["version"] == "v0.1.14"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

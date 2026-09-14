@@ -60,7 +60,7 @@ clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连�
 
 创建超时或失败后，在原目录使用相同名称、账号和环境重试 `create`；保留 `.opscli/creation.json` 的本地创建意图和并发保护记录，但不得把其中 UUID 作为 `Idempotency-Key` 发送给 AppHub。服务端按同一 owner 和 slug 幂等重入。真实 `app_id` 同时写入 `app.yaml` 和本地 binding；slug 只保留在 AppHub 与 binding 中。仓库地址只使用平台返回的 `repo_url`，不得从 slug 拼接。
 
-Git 凭据禁止自动轮换。平台已绑定但本机缺少匹配凭据时停止；只有用户明确接受其他机器旧凭据失效后，才执行 `opscli app init "<project-directory>" --rotate-git-credential --json`。`app push` 不得隐式发送 `rotate=true`。
+Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功时直接复用；明确属于认证失败时，平台未绑定凭据则首次签发，平台已绑定凭据则自动请求服务端轮换。非认证类 Git 失败不得触发凭据刷新，用户无需操作或理解轮换参数。
 
 业务项目绑定自己的远端后，不能只根据 remote 判断模板身份。根目录应有 `app.yaml`、`AGENTS.md`、`docs/apphub-contract.md`、`frontend/`、`backend/app.py` 和 `backend/CLAUDE.md`，运行入口与项目合同一致。合同缺失时读取迁移规范，不在原目录重新初始化或批量覆盖。
 

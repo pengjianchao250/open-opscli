@@ -60,6 +60,27 @@ class GitCredentialStore:
                 fix_hint="检查 Git Credential Manager 后重新执行 app init。",
             )
 
+    def erase_credential(
+        self,
+        root: Path,
+        *,
+        repo_url: str,
+        username: str | None,
+    ) -> None:
+        request = _credential_payload(repo_url, username=username)
+        result = self.runner.run(
+            root,
+            ["credential", "reject"],
+            check=False,
+            input_text=request,
+        )
+        if result.returncode != 0:
+            raise AppGitError(
+                "GIT-002",
+                "清理本机旧 Git 凭据失败。",
+                fix_hint="检查 Git Credential Manager 后重新执行 app init。",
+            )
+
 
 def _credential_payload(
     repo_url: str,

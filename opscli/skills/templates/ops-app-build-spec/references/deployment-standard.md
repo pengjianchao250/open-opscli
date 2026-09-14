@@ -40,7 +40,7 @@
 
 创建请求发送前将本地操作 UUID、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`；该 UUID 只用于目录级并发和创建意图保护，不作为 AppHub `Idempotency-Key`。失败后保留记录，在相同目录、名称、账号和环境下重试，由服务端同 owner/slug 幂等重入。此记录与 binding 一起被 `.opscli/` 忽略规则保护，不进入源码。
 
-首次绑定目标 `origin` 前必须取得 `GET /api/v1/apps/{app_id}/git-bind-preflight` 的 `{"repository_empty": true}` 成功证据；远端非空由平台返回 409。正常后续 push 不重复执行空仓库预检。Git 凭据默认不轮换；平台已绑定但本机无匹配凭据时停止，只有用户明确接受其他机器凭据失效后才能执行 `opscli app init "<project-directory>" --rotate-git-credential`。
+首次绑定目标 `origin` 前必须取得 `GET /api/v1/apps/{app_id}/git-bind-preflight` 的 `{"repository_empty": true}` 成功证据；远端非空由平台返回 409。正常后续 push 不重复执行空仓库预检。Git 凭据探测成功时直接复用；明确属于认证失败时由 `app init` 或 `app push` 自动首次签发或轮换，网络、仓库状态和历史冲突等非认证错误不得触发凭据刷新。
 
 `opscli app push "<project-directory>" --message "<summary>"` 会整体暂存、提交并普通推送 `HEAD:master`，不执行强制推送。`--message` 必填，用于存在修改时创建 commit。
 

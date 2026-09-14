@@ -139,6 +139,7 @@ class FakeClient:
 class FakeCredentialStore:
     def __init__(self, *, exists: bool = False) -> None:
         self.exists = exists
+        self.erased: list[dict] = []
         self.saved: list[dict] = []
 
     def has_credential(self, root, *, repo_url, username, token_hint=None):
@@ -149,6 +150,12 @@ class FakeCredentialStore:
             {"root": root, "repo_url": repo_url, "username": username, "token": token}
         )
         self.exists = True
+
+    def erase_credential(self, root, *, repo_url, username):
+        self.erased.append(
+            {"root": root, "repo_url": repo_url, "username": username}
+        )
+        self.exists = False
 
 
 class FakeGit:
@@ -503,9 +510,9 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
 
     assert client.issue_calls == []
     assert client.preflight_calls == []
+    assert credentials.erased == []
     assert credentials.saved == []
     assert result["credential_refreshed"] is False
-    assert result["credential_rotated"] is False
     assert git.push_calls[0][1]["message"] == "优化首页"
     assert git.push_calls[0][1]["branch"] == "master"
     assert "release_id" not in result
@@ -514,7 +521,7 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     assert "title: 本地标题" in (tmp_path / "app.yaml").read_text(encoding="utf-8")
 
 
-def test_push_never_rotates_invalid_bound_credential(tmp_path: Path) -> None:
+def test_push_auto_refreshes_invalid_bound_credential(tmp_path: Path) -> None:
     BindingStore().save(
         tmp_path,
         SiteBinding(
@@ -530,31 +537,29 @@ def test_push_never_rotates_invalid_bound_credential(tmp_path: Path) -> None:
     client = FakeClient()
     git = FakeGit(credential_valid=False)
     git.initialized_roots.add(tmp_path)
+    credentials = FakeCredentialStore()
 
-    with pytest.raises(AppGitError) as caught:
-        _manager(client, git).push(tmp_path, message="优化首页")
+    result = _manager(client, git, credentials).push(tmp_path, message="优化首页")
 
-    assert caught.value.code == "GIT-CREDENTIAL-ROTATION-REQUIRED"
-    assert client.issue_calls == []
-    assert git.push_calls == []
+    assert client.issue_calls == [True]
+    assert credentials.erased[0]["username"] == "owner"
+    assert credentials.saved[0]["token"] == "rotated-secret"
+    assert result["credential_refreshed"] is True
+    assert len(git.push_calls) == 1
 
 
-def test_init_rotates_credential_only_when_explicit(tmp_path: Path) -> None:
+def test_init_auto_refreshes_invalid_bound_credential(tmp_path: Path) -> None:
     client = FakeClient()
     git = FakeGit(credential_valid=False)
     credentials = FakeCredentialStore()
 
-    result = _manager(client, git, credentials).init_git(
-        tmp_path,
-        app_id="Ab123",
-        rotate_git_credential=True,
-    )
+    result = _manager(client, git, credentials).init_git(tmp_path, app_id="Ab123")
 
     assert client.issue_calls == [True]
+    assert credentials.erased[0]["username"] == "owner"
     assert credentials.saved[0]["token"] == "rotated-secret"
     assert git.auth_probe_calls[0][1]["token"] == "rotated-secret"
     assert result["credential_refreshed"] is True
-    assert result["credential_rotated"] is True
 
 
 def test_init_requests_initial_credential_for_private_repository(tmp_path: Path) -> None:
@@ -569,9 +574,28 @@ def test_init_requests_initial_credential_for_private_repository(tmp_path: Path)
 
     assert git.probe_calls[0][1]["repository_not_found_is_auth"] is True
     assert client.issue_calls == [False]
+    assert credentials.erased[0]["username"] == "owner"
     assert credentials.saved[0]["token"] == "rotated-secret"
     assert result["credential_refreshed"] is True
-    assert result["credential_rotated"] is False
+
+
+def test_non_auth_git_failure_does_not_refresh_credential(tmp_path: Path) -> None:
+    client = FakeClient()
+    git = FakeGit()
+    credentials = FakeCredentialStore()
+
+    def fail_probe(root, **kwargs):
+        raise AppGitError("GIT-010", "git service unavailable")
+
+    git.probe_remote_branch = fail_probe
+
+    with pytest.raises(AppGitError) as caught:
+        _manager(client, git, credentials).init_git(tmp_path, app_id="Ab123")
+
+    assert caught.value.code == "GIT-010"
+    assert client.issue_calls == []
+    assert credentials.erased == []
+    assert credentials.saved == []
 
 
 def test_preflight_failure_keeps_binding_manifest_and_git_unchanged(tmp_path: Path) -> None:
@@ -607,15 +631,12 @@ def test_issued_credential_failure_keeps_local_project_unchanged(tmp_path: Path)
     manifest_before = (tmp_path / "app.yaml").read_bytes()
 
     with pytest.raises(AppGitError) as caught:
-        _manager(client, git, credentials).init_git(
-            tmp_path,
-            app_id="Ab123",
-            rotate_git_credential=True,
-        )
+        _manager(client, git, credentials).init_git(tmp_path, app_id="Ab123")
 
     assert caught.value.code == "GIT-002"
     assert not BindingStore().is_bound(tmp_path)
     assert (tmp_path / "app.yaml").read_bytes() == manifest_before
+    assert credentials.erased == []
     assert credentials.saved == []
     assert git.init_calls == []
 
