@@ -9908,3 +9908,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：还原 `query_plan` 的 `top_n` 参数说明与 `query_flow` 的「参数边界」段落。
 ---
+
+## 2026-09-14 构建配置 - 新增 .gitleaks.toml 解除测试假密钥误报
+
+**变更原因**：master 合并 release 时被 `.git/hooks/pre-commit` 的 `gitleaks protect --staged` 阻断（leaks found: 1）。经定位，命中项为 `tests/shared/test_file_uploads.py:22` 的 `LTAI1234567890abc`，该值是验证 `opscli/shared/file_uploads.py:43` 脱敏正则 `(?:LTAI|AKIA)[A-Za-z0-9]+` 的测试占位样本，非真实凭证，属误报。
+**改动点**：新增仓库根目录 `.gitleaks.toml`，`[extend] useDefault = true` 继承默认规则集，`[allowlist].regexes` 精确放行 `LTAI1234567890abc` 一条。未按目录放行 `tests/`，以保留真密钥混入测试文件时的检测能力。钩子已有 `-c $CFG` 分支，文件落在 `$(git rev-parse --show-toplevel)` 即自动生效。
+**验证结果**：
+1. `gitleaks git --log-opts="master..release" -c .gitleaks.toml` → 命中数由 3 降至 2（剩余 2 条 `idempotency_key=` 仅存在于历史 commit，release 末端已不存在，不进入暂存区）。
+2. `git merge --no-commit --no-ff release` 后复刻钩子原命令 `gitleaks protect --staged --redact -c .gitleaks.toml` → `no leaks found`，扫描字节数 1948742（1.95 MB）与原始报错输出一致，确认为同一份暂存内容。
+3. 验证后已 `git merge --abort`，工作区追踪文件恢复干净。
+**影响范围**：仅影响本地 pre-commit 的 gitleaks 扫描与 CI 中读取该配置的扫描任务；不涉及任何运行时代码。
+**回滚方式**：`rm .gitleaks.toml`（钩子会自动回退到 gitleaks 默认规则集分支）。
+---
