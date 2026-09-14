@@ -75,18 +75,18 @@ opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --
 ## 链路区分
 
 - 本地 CLI 代理链路：默认指 `opscli keepa ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
-- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `keepa_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `keepa_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
+- 远端 MCP 直连链路：宿主拿远端 MCP `api_key` 连接 `keepa_*` tools 后即可执行 `keepa_run`；Keepa 账号由后端 MySQL 凭据池统一领取。
 
 ## 正式链路
 
 - 本地 CLI 代理链路：`opscli keepa ...`
 - 远端 MCP tools：`keepa_scenarios`、`keepa_quota_status`、`keepa_run`、`keepa_job_status`、`keepa_export`、`keepa_history`
-- 常见前置：确认本机 `opscli auth login` 已完成且登录态仍有效
+- 可选前置：需要 OPS 文件上传链接时确认 `opscli auth login` 已完成且登录态仍有效
 
 说明：
 
 - 正式 CLI 会自动拉取远端 MCP HTTP 配置并转发，不需要用户手写远端地址。
-- Keepa 额度和账号由后端统一管理；若后端没有 OPS 登录态，也可能使用服务器侧集成账号或 `OPSCLI_KEEPA_API_KEY` 兜底，但这不属于普通用户需要操作的内容。
+- Keepa 额度和账号由后端 MySQL 凭据池统一管理；`OPSCLI_KEEPA_API_KEY` 只作为服务端本地调试兜底，不属于普通用户需要操作的内容。
 
 ## 命令面
 

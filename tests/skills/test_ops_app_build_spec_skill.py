@@ -32,7 +32,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.18"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.19"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -386,7 +386,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.18"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.19"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

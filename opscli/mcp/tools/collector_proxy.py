@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -23,7 +22,6 @@ from opscli.mcp_client import RemoteMcpClient
 from .helpers import _err
 
 ENV_COLLECTOR_MCP_URL = "OPSCLI_COLLECTOR_MCP_URL"
-ENV_COLLECTOR_GATEWAY_API_KEY_FILE = "OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE"
 
 
 class CollectorMcpProxyError(Exception):
@@ -132,20 +130,7 @@ def _collector_headers() -> tuple[dict[str, str], bool]:
                 "COLLECTOR_MCP_IDENTITY_MISSING",
                 "当前 AppHub 请求缺少已验证用户身份",
             )
-        key_path = os.environ.get(ENV_COLLECTOR_GATEWAY_API_KEY_FILE, "").strip()
-        if not key_path:
-            raise CollectorMcpProxyError(
-                "COLLECTOR_MCP_CONFIG_MISSING",
-                f"缺少 {ENV_COLLECTOR_GATEWAY_API_KEY_FILE}，无法访问数据采集服务",
-            )
-        key = Path(key_path).expanduser().read_text(encoding="utf-8").strip()
-        if not key:
-            raise CollectorMcpProxyError(
-                "COLLECTOR_MCP_CONFIG_INVALID",
-                f"{ENV_COLLECTOR_GATEWAY_API_KEY_FILE} 指向的凭证文件为空",
-            )
         headers = {
-            "X-Collector-Gateway-Key": key,
             "X-AppHub-User-Email": email,
             "X-AppHub-Auth-Mode": auth_mode.removeprefix("apphub_"),
         }

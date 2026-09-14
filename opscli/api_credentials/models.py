@@ -8,7 +8,7 @@ from typing import Any
 
 # 只允许代码已识别或已预留迁移路径的 Provider，防止数据库出现无法消费的平台值。
 SUPPORTED_PROVIDERS = frozenset(
-    {"serpapi", "canopy", "scrape_do", "xydc_mcp", "xydc_openapi"}
+    {"serpapi", "canopy", "scrape_do", "keepa", "xydc_mcp", "xydc_openapi"}
 )
 # 账号状态与领取条件一一对应，cooldown 由运行状态时间字段表达。
 ACCOUNT_STATUSES = frozenset({"active", "disabled", "exhausted", "invalid", "deleted"})
