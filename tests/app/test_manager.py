@@ -7,6 +7,9 @@ from pathlib import Path
 
 import pytest
 
+from opscli.app.domain.constants import (
+    MCP_REST_API_BASE_URL_ENV_KEY,
+)
 from opscli.app.domain.exceptions import AppGitError, AppProjectError
 from opscli.app.domain.models import SiteBinding
 from opscli.app.services.binding import BindingStore
@@ -27,7 +30,11 @@ class FakeClient:
         self.detail_calls: list[str] = []
         self.git_calls: list[str] = []
         self.scope = "qa-owner-1"
+        self.control_plane_url = "https://apphub.qa.aukeyit.com"
         self.api_base_url = "https://apphub.example/api/v1"
+        self.env_calls: list[str] = []
+        self.env_update_calls: list[tuple[str, dict[str, str]]] = []
+        self.env_by_app: dict[str, dict[str, str]] = {}
         self.created_by_slug: dict[str, dict] = {}
         self.apps = {
             "Ab123": {
@@ -102,6 +109,20 @@ class FakeClient:
             "username": "owner",
             "bound": True,
         }
+
+    def get_app_env(self, app_id: str) -> dict:
+        self.env_calls.append(app_id)
+        env = self.env_by_app.setdefault(
+            app_id,
+            {MCP_REST_API_BASE_URL_ENV_KEY: "https://mcp.ops.aukeyit.com"},
+        )
+        return {"env": dict(env), "platform_env": {"PORT": "8000"}}
+
+    def update_app_env(self, app_id: str, env: dict[str, str]) -> dict:
+        saved = dict(env)
+        self.env_update_calls.append((app_id, saved))
+        self.env_by_app[app_id] = saved
+        return {"env": dict(saved), "platform_env": {"PORT": "8000"}}
 
     def preflight_git_bind(self, app_id: str) -> dict:
         self.preflight_calls.append(app_id)
@@ -278,6 +299,120 @@ def test_init_recovers_accessible_application_without_create(tmp_path: Path) -> 
     assert result["default_branch"] == "master"
     assert BindingStore().load(app_root).schema_version == 4
     assert client.preflight_calls == ["Ab123"]
+
+
+def test_init_configures_missing_mcp_rest_env_and_preserves_existing_keys(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    client.env_by_app["Ab123"] = {"EXISTING_KEY": "existing-value"}
+    git = FakeGit()
+
+    result = _manager(client, git).init_git(tmp_path, app_id="Ab123")
+
+    assert client.env_calls == ["Ab123"]
+    assert client.env_update_calls == [
+        (
+            "Ab123",
+            {
+                "EXISTING_KEY": "existing-value",
+                MCP_REST_API_BASE_URL_ENV_KEY: "https://mcp.ops.aukeyit.com",
+            },
+        )
+    ]
+    assert result["runtime_env_status"] == "configured"
+    assert result["runtime_env_updated"] is True
+    assert git.init_calls
+
+
+def test_init_preserves_existing_mismatched_mcp_rest_env(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.env_by_app["Ab123"] = {
+        MCP_REST_API_BASE_URL_ENV_KEY: "https://custom.example",
+    }
+
+    result = _manager(client, FakeGit()).init_git(tmp_path, app_id="Ab123")
+
+    assert client.env_update_calls == []
+    assert result["runtime_env_status"] == "mismatch_preserved"
+    assert result["runtime_env_value"] == "https://custom.example"
+    assert result["runtime_env_expected_value"] == "https://mcp.ops.aukeyit.com"
+
+
+def test_init_uses_production_mcp_rest_env_mapping(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.control_plane_url = "https://apphub.api.xenkee.com/"
+    client.env_by_app["Ab123"] = {}
+
+    result = _manager(client, FakeGit()).init_git(tmp_path, app_id="Ab123")
+
+    assert client.env_update_calls[0][1][MCP_REST_API_BASE_URL_ENV_KEY] == (
+        "https://ops.mcp.xenkee.com"
+    )
+    assert result["runtime_env_value"] == "https://ops.mcp.xenkee.com"
+
+
+def test_repeated_init_does_not_repeat_app_env_update(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.env_by_app["Ab123"] = {}
+    manager = _manager(client, FakeGit())
+
+    first = manager.init_git(tmp_path, app_id="Ab123")
+    second = manager.init_git(tmp_path)
+
+    assert first["runtime_env_status"] == "configured"
+    assert second["runtime_env_status"] == "existing"
+    assert len(client.env_update_calls) == 1
+
+
+def test_push_backfills_missing_mcp_rest_env(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.env_by_app["Ab123"] = {"EXISTING_KEY": "existing-value"}
+    BindingStore().save(
+        tmp_path,
+        SiteBinding(
+            app_id="Ab123",
+            app_name="销售看板",
+            slug="sales-dashboard",
+            repo_url=_repo_url("sales-dashboard"),
+            git_username="owner",
+            apphub_url=client.api_base_url,
+        ),
+    )
+    _write_manifest(tmp_path, app_id="Ab123")
+
+    result = _manager(client, FakeGit()).push(tmp_path, message="补齐环境变量")
+
+    assert result["runtime_env_status"] == "configured"
+    assert client.env_update_calls[0][1] == {
+        "EXISTING_KEY": "existing-value",
+        MCP_REST_API_BASE_URL_ENV_KEY: "https://mcp.ops.aukeyit.com",
+    }
+
+
+def test_unknown_apphub_environment_stops_before_local_git_changes(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.control_plane_url = "https://apphub.internal.example"
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).init_git(tmp_path, app_id="Ab123")
+
+    assert caught.value.code == "APPHUB-ENVIRONMENT-UNSUPPORTED"
+    assert client.env_calls == []
+    assert git.init_calls == []
+
+
+def test_invalid_app_env_payload_stops_before_local_git_changes(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.get_app_env = lambda app_id: {"env": [], "platform_env": {}}
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).init_git(tmp_path, app_id="Ab123")
+
+    assert caught.value.code == "APPHUB-PROTOCOL"
+    assert git.init_calls == []
 
 
 def test_init_requires_id_even_when_app_yaml_matches(tmp_path: Path) -> None:

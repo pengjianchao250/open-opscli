@@ -106,6 +106,6 @@
 | --- | --- | --- |
 | 63 | Keepa、SellerSprite 只使用请求级 `ThirdPartyApiClient`，通过 `Depends(get_query_credentials)` 复用模板已校验的 `QueryCredentials`；禁止重写模板鉴权或缓存跨请求凭证。 | data-access-standard §4 |
 | 64 | `viewer` 只发送 `X-Ops-Token` 与可信 `X-User-*`，`session` 只发送 `X-Session-Id` 与已有可选 Bearer JWT，`local` 只通过 `AuthClient` 标准方法转换为 Session/JWT Header；禁止盲目透传 Header、Cookie、请求体凭证和模式回退。 | data-access-standard §4 |
-| 65 | 第三方服务只读取 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产与预发布由部署环境显式注入；禁止默认环境、共享 API Key、provider 专属 Base URL 和旧变量回退。 | data-access-standard §5 |
+| 65 | OPS viewer、Keepa 和 SellerSprite 只读取 `OPSCLI_MCP_REST_API_BASE_URL`，生产与预发布由部署环境显式注入；只调用 `/api/v1/*` REST，禁止默认环境、共享 API Key、provider 专属 Base URL 和旧变量回退。 | data-access-standard §5 |
 | 66 | `third_party_source_snapshot` 与 `third_party_async_job` 的读写、索引、UPSERT 和 pending 复用必须包含 `owner_user_id`，唯一键固定为 `UNIQUE(owner_user_id, provider, request_hash)`。 | data-access-standard §5 |
 | 67 | SellerSprite HTTP 202 只表示受理；`queued/running` 继续轮询，`succeeded` 读取 JSON，`failed/cancelled` 停止；Listing Analysis 禁止提交到普通 jobs。 | data-access-standard §5 |

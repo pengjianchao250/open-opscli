@@ -43,8 +43,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.11"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.11"}
+    assert frontmatter["metadata"]["version"] == "0.1.13"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.13"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -52,7 +52,7 @@ def test_ops_app_data_builder_metadata_is_consistent():
 
 
 def test_ops_app_data_builder_has_narrow_project_scope():
-    """Skill 只处理标准站点数据层，不接管临时查询、普通页面或 Dashboard。"""
+    """Skill 只处理标准站点数据层，并按能力与对象识别 Dashboard 平台任务。"""
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
@@ -60,15 +60,16 @@ def test_ops_app_data_builder_has_narrow_project_scope():
         "只需要一次临时查询或导出",
         "只搭建静态页面、交互或样式",
         "只分析一次真实数据结果，不修改站点",
-        "创建、修改或分析当前 Dashboard 页面",
+        "dashboard_session_get_context",
+        "dashboard-tools.v2",
+        "普通 AppHub 仓库中的看板页面",
+        "URL、路由名、页面标题",
         "不要为了触发本 Skill，把单次查询扩展成站点数据工程任务",
     ):
         assert required in text
 
     for forbidden in (
-        "dashboard_session_get_context(",
         "dashboard_editor_",
-        "dashboard-tools.v2",
     ):
         assert forbidden not in text
 
@@ -115,6 +116,34 @@ def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
         "只获取足以验证合同的少量样本",
     ):
         assert required in text
+
+
+def test_ops_app_data_builder_requires_exact_ops_field_contracts():
+    """OPS 运行时代码必须使用已验证的精确字段合同并覆盖相似字段。"""
+    content = "\n".join(
+        (
+            SKILL_MD.read_text(encoding="utf-8"),
+            CONTRACT_FILE.read_text(encoding="utf-8"),
+            APPLICATION_GUIDE_FILE.read_text(encoding="utf-8"),
+        )
+    )
+
+    for required in (
+        "精确 `dataset_alias`",
+        "`table_id`",
+        "精确 `field_name`",
+        "`global_alias`",
+        "关键词打分",
+        "`includes`",
+        "最相近字段",
+        "`validate_fields=true`",
+        "前端只调用站点业务 API",
+        "asin/parent_asin",
+        "order_qty/orders",
+        "price/ads_sales_cny",
+        "metadata 漂移",
+    ):
+        assert required in content
 
 
 def test_ops_app_data_builder_separates_application_routing_from_query_execution():
@@ -166,7 +195,9 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
         "app.yaml",
         "opscli.datasets",
         "FakeGateway",
-        "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL",
+        "OPSCLI_MCP_REST_API_BASE_URL",
+        "/api/v1/query/simple",
+        "/api/v1/query/metadata",
         "QueryCredentials",
         "get_query_credentials",
         "X-User-Email",
@@ -193,6 +224,7 @@ def test_ops_app_data_builder_defines_safe_runtime_source_routing():
     ):
         assert required in content
 
+    assert "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL" not in content
     assert "OPSCLI_THIRD_PARTY_DATA_API_KEY" not in content
     assert "/api/v1/keepa/" + "scenarios" not in content
     assert "OPSCLI_" + "API_BASE_URL" not in content
@@ -265,7 +297,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.11"
+    assert templates[SKILL_NAME]["version"] == "v0.1.13"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))

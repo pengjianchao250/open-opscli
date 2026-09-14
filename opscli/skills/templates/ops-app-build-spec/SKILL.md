@@ -87,6 +87,7 @@ Git 凭据禁止自动轮换。平台已绑定但本机缺少匹配凭据时停�
 - 修改前端、后端、SQLite 或 opscli 接入时读取对应规范，只执行与当前改动相关的条款。
 - 前端请求或共享类型变化时，先确认后端路由、Schema 和 OpenAPI，再改前端；不得用前端兼容分支掩盖后端合同漂移。
 - 页面需要真实业务数据时必须读取取数规范并使用 `$ops-app-data-builder`；不选择或猜测数据集、字段、聚合、筛选、第三方场景、凭证、SDK 签名或运行时入口。
+- Dashboard 专用 Skill 只在当前会话同时提供 `dashboard_session_get_context` 和 `dashboard-tools.v2`、页面上下文返回真实平台仪表盘对象且用户目标是该对象时使用。URL、路由名、页面标题或“Dashboard/看板”字样不能作为判断依据；普通 AppHub 仓库中的看板源码仍按真实数据流程使用 `$ops-app-data-builder`。
 - 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite；所有线上取数都经过当前站点 FastAPI `/api`。
 - 只修改当前业务需要的代码，保留用户已有修改和模板基础能力。
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
@@ -98,6 +99,7 @@ Git 凭据禁止自动轮换。平台已绑定但本机缺少匹配凭据时停�
 ## 验证与源码交付
 
 - 完成后检查实际 diff，包括新增文件和已有暂存改动，确认没有无关重构、重复基础设施、调试残留或通过关闭规则绕过检查。
+- 真实 OPS 数据交付还必须确认正式查询使用在线验证后的精确 `dataset_alias`、`table_id` 和 `field_name`，不存在关键词打分、`includes`、子串搜索、`global_alias` 查询回退或最相近字段替换；相似字段、字段缺失和 metadata 漂移测试已经覆盖。
 - 按改动运行相关行为测试；Bug 修复应有能复现问题的验证。文案、间距等低风险改动不机械新增测试。已有无关失败要说明，不删测试以换取通过。
 - 源码交付前按部署规范执行前端测试、生产构建及项目合同要求的检查；命令取实际项目，不能编造尚不存在的 `lint/typecheck`。
 - 页面主流程、布局、真实联调、平台环境分别需要对应证据；构建通过不能代替浏览器或线上验收。
@@ -208,10 +210,11 @@ database:
 - SPA 嵌套路由刷新、API 访问和容器重启后的数据持久化通过。
 - 前端只调用当前站点 `/api`，没有直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - `VITE_*`、源码、构建产物、日志和 SQLite 中没有 API Key、JWT、Cookie 或完整鉴权头。
+- OPS viewer 运行时使用 `OPSCLI_MCP_REST_API_BASE_URL` 对应的 opscli-mcp REST 接口：查询固定为 `POST /api/v1/query/simple`，元数据固定为 `GET /api/v1/query/metadata`；不得生成 `/v1/data-metrics/viewer/*` 或让前端直连该服务。
 - OPS 使用实际项目中经过批准的应用运行时身份适配器，未隔离的 viewer 数据没有写入共享 SQLite。
 - Keepa 页面运行时只使用正式 `POST /api/v1/keepa/run`，请求级 `ThirdPartyApiClient` 复用模板 `get_query_credentials()` 解析出的 `viewer/session/local` 身份。
 - SellerSprite 使用正式异步 jobs 或 Listing Analysis 接口，按当前 `owner_user_id` 持久化并复用 pending `job_id`，成功 JSON 结果只进入当前用户私有快照。
-- Keepa 和 SellerSprite 只共用 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`；生产注入 `https://ops.mcp.xenkee.com`，预发布注入 `https://mcp.ops.aukeyit.com`，不得设置默认环境、读取共享 API Key 或旧变量别名。
+- OPS、Keepa 和 SellerSprite 只共用 `OPSCLI_MCP_REST_API_BASE_URL`；生产注入 `https://ops.mcp.xenkee.com`，预发布注入 `https://mcp.ops.aukeyit.com`，不得设置默认环境、读取共享 API Key 或旧变量别名。该地址只用于 `/api/v1/*` REST，不用于 `/mcp` 或 `/sse`。
 - 第三方调用只从已校验的 `QueryCredentials` 重建允许的 Header，不盲目透传浏览器 Header，不把凭证写入请求体、前端、日志、SQLite 或源码，也不在三种模式间回退。
 - `third_party_source_snapshot` 和 `third_party_async_job` 都使用 `UNIQUE(owner_user_id, provider, request_hash)`；XLS/XLSX 和临时下载 URL 不写入 SQLite。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。

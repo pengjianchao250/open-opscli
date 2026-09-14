@@ -236,6 +236,56 @@ def test_get_git_config_uses_case_sensitive_app_id_path() -> None:
     ]
 
 
+def test_get_app_env_uses_case_sensitive_app_id_path() -> None:
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(200, json={"env": {}, "platform_env": {"PORT": "8000"}})
+
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(["jwt"] * 2),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    for app_id in ("Ab123", "ab123"):
+        client.get_app_env(app_id)
+
+    assert paths == [
+        "/api/v1/apps/Ab123/env",
+        "/api/v1/apps/ab123/env",
+    ]
+
+
+def test_update_app_env_sends_complete_custom_env_without_cookie() -> None:
+    observed = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed["request"] = request
+        return httpx.Response(200, json={"env": json.loads(request.content)["env"]})
+
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    env = {
+        "EXISTING_KEY": "existing-value",
+        "OPSCLI_MCP_REST_API_BASE_URL": "https://mcp.ops.aukeyit.com",
+    }
+
+    payload = client.update_app_env("Ab123", env)
+
+    request = observed["request"]
+    assert request.method == "PUT"
+    assert request.url.path == "/api/v1/apps/Ab123/env"
+    assert request.headers["Authorization"] == "Bearer ops-jwt"
+    assert "cookie" not in request.headers
+    assert json.loads(request.content) == {"env": env}
+    assert payload == {"env": env}
+
+
 def test_preflight_git_bind_requires_empty_repository() -> None:
     paths = []
 

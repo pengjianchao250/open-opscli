@@ -1,3 +1,31 @@
+## 2026-09-14 Git - 合并远端 release 并解决变更日志冲突
+
+**变更原因**：`feature/sellersprite` 需要同步最新 `origin/release` 的 AppHub MCP REST 环境变量与数据合同改动，同时保留功能分支刚完成的 Keepa MySQL 凭据池迁移。
+
+**改动点**：将 `origin/release` 合入 `feature/sellersprite`；解决 `docs/change-log-pending.md` 顶部并行新增记录的内容冲突，按日期倒序保留 9 月 13 日 App 记录与 9 月 11 日 Keepa 记录，并保留 release 对 9 月 10 日第三方数据 API 合同的更新；`ops-keepa` Skill 自动合并后同时包含 MySQL 凭据池说明和 AppHub REST 接入合同。
+
+**验证结果**：`tests/app` 回归 `115 passed`；API 凭据池、Keepa Manager 与 MCP Keepa Tool 定向回归 `53 passed`；Keepa Skill 与发行清单筛选回归 `2 passed`；App 建站 Skill 合同回归 `25 passed, 1 failed`，唯一失败的后端 `AGENTS.md` 模板断言在 `origin/release` 已存在且目标文件与 release 完全一致。相关模块 `compileall`、Skill 版本 JSON 解析和冲突标记扫描通过；`git diff --check` 仅报告两份 release 原有设计文档的 5 处 Markdown 行尾空格。
+
+**影响范围**：当前 `feature/sellersprite` 分支及其继承的 AppHub、Keepa 和 SellerSprite Skill/运行时合同；未改变双方原有业务意图。
+
+**回滚方式**：在未推送时回退本次 merge commit；推送后使用 `git revert -m 1 <merge_commit>` 撤销本次合并。
+
+---
+
+## 2026-09-13 App - 初始化时自动配置 MCP REST 环境变量
+
+**变更原因**：AppHub 标准数据应用依赖 `OPSCLI_MCP_REST_API_BASE_URL` 调用 opscli-mcp REST，但应用初始化此前不会自动配置，容易导致 Viewer、Keepa 和 SellerSprite 在线上缺少运行时地址。
+
+**改动点**：`opscli app init` 与 `push` 的共享仓库准备链路新增 AppHub 环境变量检查；按控制面 origin 精确映射预发布 `https://mcp.ops.aukeyit.com` 和生产 `https://ops.mcp.xenkee.com`。目标变量缺失或为空时先读取完整自定义 `env`，合并后通过 `PUT /api/v1/apps/{app_id}/env` 全量保存并验证已有键；已有非空值保留且报告状态，未知环境停止。请求继续复用 ops JWT，不发送浏览器 Cookie 或平台只读 `platform_env`。
+
+**验证结果**：使用系统临时目录执行 `.venv/Scripts/python.exe -X utf8 -m pytest tests/app -q -p no:cacheprovider`，完整 `tests/app` 回归 `111 passed`。仓库内与 Codex 可写根下的 pytest 临时目录均受 Windows ACL 影响，改用沙箱外系统临时目录后通过。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：影响 `opscli app init` 和 `opscli app push` 的远端准备步骤，每次执行新增一次环境变量 GET，首次缺失时增加 PUT；不修改 Binding Schema、Git 凭据格式、应用模板、数据库或发布流程。环境变量在应用下次发布或重启后生效。
+
+**回滚方式**：移除 AppHub env 客户端方法、仓库准备链路中的自动配置调用、环境映射常量、对应测试和需求文档，并删除本节记录。
+
+---
+
 ## 2026-09-11 Keepa - 账号来源迁移到 MySQL 凭据池
 
 **变更原因**：Keepa 仍通过 OPS 集成账号接口获取单个 API Key，账号来源与 Google Trends、Canopy、scrape.do 等凭据池模块不一致，也无法在鉴权失效或额度不足时自动切换备用账号。
@@ -16,7 +44,7 @@
 
 **变更原因**：AppHub 标准数据项目使用的第三方数据 REST 服务已切换预发布入口，原 `https://ops.api.qa.aukeyit.com` 不再作为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 的预发布值。
 
-**改动点**：将 `ops-app-data-builder` 和 `ops-app-build-spec` 当前合同中的预发布 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 统一调整为 `https://mcp.ops.aukeyit.com`，生产值 `https://ops.mcp.xenkee.com` 保持不变；同步更新 Reference、静态评估和契约测试。Skill 版本分别升至 `v0.1.11` 和 `v0.0.16`。未修改第三方 REST 客户端、接口路径、鉴权 Header 或历史 OPS API 示例。
+**改动点**：AppHub Viewer 的 OPS Query、Keepa 与 SellerSprite 统一使用 `OPSCLI_MCP_REST_API_BASE_URL` 纯 origin；OPS Query 固定调用 `/api/v1/query/simple` 与 `/api/v1/query/metadata`，禁止生成不存在的 `/v1/data-metrics/viewer/*`，并明确站点 REST `/api/v1/*` 不使用 MCP `/mcp`、`/sse` 或共享 API Key。删除未进入调用链的 `ThirdPartyContractClient` 孤立实现，同步更新设计文档、Reference、静态评估和契约测试。Skill 版本分别升至 `v0.1.12` 和 `v0.0.17`；公共 Query CLI、MCP Tool、Keepa/SellerSprite 核心实现不变。
 
 **验证结果**：本次相关契约测试共 `7 passed`，其中 `ops-app-data-builder` 4 项、`ops-app-build-spec` 3 项；两份 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`，发行清单检查随专项测试通过。完整测试文件回归已尝试，但 Windows 临时目录 ACL 在 pytest 清理阶段触发 `PermissionError`；`ops-app-build-spec` 还命中既有且与本次地址调整无关的 `OPSCLI_API_BASE_URL` 旧断言。本次新地址、版本和部署合同相关节点均通过。
 

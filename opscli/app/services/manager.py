@@ -5,7 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, MESSAGE_MAX_LENGTH
+from opscli.app.domain.constants import (
+    BINDING_SCHEMA_VERSION,
+    MCP_REST_API_BASE_URL_BY_APPHUB_ORIGIN,
+    MCP_REST_API_BASE_URL_ENV_KEY,
+    MESSAGE_MAX_LENGTH,
+)
 from opscli.app.domain.exceptions import AppGitError, AppProjectError
 from opscli.app.domain.models import (
     AppCreateRequest,
@@ -80,11 +85,13 @@ class AppManager:
     ) -> dict:
         """初始化已绑定应用，或通过明确的公开 ID 恢复已有应用。"""
         root = self.binding_store.prepare_root(path)
-        binding, credential_result, git_result, _ = self._prepare_repository(
-            root,
-            app_slug=app_slug,
-            app_id=app_id,
-            rotate_git_credential=rotate_git_credential,
+        binding, credential_result, git_result, runtime_env_result = (
+            self._prepare_repository(
+                root,
+                app_slug=app_slug,
+                app_id=app_id,
+                rotate_git_credential=rotate_git_credential,
+            )
         )
         return {
             **self._binding_result(
@@ -94,14 +101,17 @@ class AppManager:
             ),
             **credential_result,
             **git_result,
+            **runtime_env_result,
         }
 
     def push(self, path: str | Path = ".", *, message: str) -> dict:
         summary = self._validate_message(message, command="push")
         root = self.binding_store.prepare_root(path)
-        binding, credential_result, git_init_result, _ = self._prepare_repository(
-            root,
-            manifest_policy="validate",
+        binding, credential_result, git_init_result, runtime_env_result = (
+            self._prepare_repository(
+                root,
+                manifest_policy="validate",
+            )
         )
         git_result = self.git_service.push_all(
             root,
@@ -118,6 +128,7 @@ class AppManager:
             **self._binding_result(root, binding, ""),
             **credential_result,
             **git_init_result,
+            **runtime_env_result,
             **git_result,
             "message": message_text,
         }
@@ -143,6 +154,7 @@ class AppManager:
             app_detail=app_detail,
             git_config=git_config,
         )
+        runtime_env_result = self._ensure_runtime_environment(binding.app_id)
         if not self.git_service.origin_matches(root, repo_url=binding.repo_url):
             self.client.preflight_git_bind(binding.app_id)
         binding, credential_result = self._ensure_credential(
@@ -160,7 +172,65 @@ class AppManager:
             branch=binding.default_branch,
             credential_username=binding.git_username,
         )
-        return binding, credential_result, git_result, app_detail
+        return binding, credential_result, git_result, runtime_env_result
+
+    def _ensure_runtime_environment(self, app_id: str) -> dict[str, Any]:
+        expected_value = self._expected_mcp_rest_api_base_url()
+        payload = self.client.get_app_env(app_id)
+        current_env = _custom_env(payload)
+        existing_value = current_env.get(MCP_REST_API_BASE_URL_ENV_KEY)
+        if existing_value is not None and existing_value.strip():
+            status = (
+                "existing"
+                if existing_value == expected_value
+                else "mismatch_preserved"
+            )
+            return {
+                "runtime_env_key": MCP_REST_API_BASE_URL_ENV_KEY,
+                "runtime_env_value": existing_value,
+                "runtime_env_expected_value": expected_value,
+                "runtime_env_status": status,
+                "runtime_env_updated": False,
+            }
+
+        updated_env = {
+            **current_env,
+            MCP_REST_API_BASE_URL_ENV_KEY: expected_value,
+        }
+        saved = self.client.update_app_env(app_id, updated_env)
+        saved_env = _custom_env(saved) if "env" in saved else None
+        if saved_env is None:
+            saved_env = _custom_env(self.client.get_app_env(app_id))
+        if saved_env.get(MCP_REST_API_BASE_URL_ENV_KEY) != expected_value:
+            raise AppProjectError(
+                "APPHUB-PROTOCOL",
+                f"AppHub 未保存环境变量 {MCP_REST_API_BASE_URL_ENV_KEY}。",
+            )
+        for key, value in current_env.items():
+            if saved_env.get(key) != value:
+                raise AppProjectError(
+                    "APPHUB-PROTOCOL",
+                    f"AppHub 保存环境变量时未保留已有键：{key}",
+                )
+        return {
+            "runtime_env_key": MCP_REST_API_BASE_URL_ENV_KEY,
+            "runtime_env_value": expected_value,
+            "runtime_env_expected_value": expected_value,
+            "runtime_env_status": "configured",
+            "runtime_env_updated": True,
+        }
+
+    def _expected_mcp_rest_api_base_url(self) -> str:
+        origin = self.client.control_plane_url.rstrip("/").lower()
+        expected = MCP_REST_API_BASE_URL_BY_APPHUB_ORIGIN.get(origin)
+        if expected is None:
+            supported = ", ".join(sorted(MCP_REST_API_BASE_URL_BY_APPHUB_ORIGIN))
+            raise AppProjectError(
+                "APPHUB-ENVIRONMENT-UNSUPPORTED",
+                f"当前 AppHub 环境未配置 MCP REST 地址：{self.client.control_plane_url}",
+                fix_hint=f"切换到受支持的 AppHub 环境后重试：{supported}",
+            )
+        return expected
 
     def _ensure_binding(
         self,
@@ -348,3 +418,20 @@ class AppManager:
         }
 def _optional_text(value: Any) -> str | None:
     return None if value in (None, "") else str(value)
+
+
+def _custom_env(payload: dict[str, Any]) -> dict[str, str]:
+    raw_env = payload.get("env")
+    if not isinstance(raw_env, dict):
+        raise AppProjectError("APPHUB-PROTOCOL", "AppHub 环境变量响应缺少 env 对象。")
+    env: dict[str, str] = {}
+    for key, value in raw_env.items():
+        if not isinstance(key, str) or not key:
+            raise AppProjectError("APPHUB-PROTOCOL", "AppHub 返回了无效的环境变量键。")
+        if not isinstance(value, str):
+            raise AppProjectError(
+                "APPHUB-PROTOCOL",
+                f"AppHub 环境变量 {key} 的值必须是字符串。",
+            )
+        env[key] = value
+    return env
