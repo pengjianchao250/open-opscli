@@ -110,6 +110,224 @@ def test_remote_binding_auto_logs_in_once_for_concurrent_requests(monkeypatch, t
     assert second.session_id == "auto-session"
 
 
+def test_remote_binding_repairs_stale_session_when_jwt_fetch_is_rejected(
+    monkeypatch,
+    tmp_path,
+):
+    from opscli.auth.domain.exceptions import TokenFetchError
+    from opscli.mcp import ops_credentials
+
+    state = {
+        "session_id": "stale-session",
+        "jwt": None,
+        "email": "user@example.com",
+    }
+    fetched_sessions = []
+    invalidations = 0
+    login_calls = 0
+
+    class FakeCache:
+        def is_authenticated(self):
+            return bool(state["session_id"])
+
+        def get_session_id(self):
+            return state["session_id"]
+
+        def get_jwt(self, system):
+            assert system == "ops"
+            return state["jwt"]
+
+        def get_email(self):
+            return state["email"]
+
+    async def fake_fetch(session_id, credential_dir):
+        assert credential_dir == tmp_path
+        fetched_sessions.append(session_id)
+        if session_id == "stale-session":
+            raise TokenFetchError("获取 ops JWT 失败: 401", status_code=401)
+        state["jwt"] = "fresh-jwt"
+        return "fresh-jwt"
+
+    def fake_invalidate(credential_dir):
+        nonlocal invalidations
+        assert credential_dir == tmp_path
+        invalidations += 1
+        state.update(session_id=None, jwt=None, email=None)
+
+    async def fake_login():
+        nonlocal login_calls
+        login_calls += 1
+        state.update(
+            session_id="fresh-session",
+            jwt=None,
+            email="user@example.com",
+        )
+        return {"success": True, "data": {"saved_locally": True}, "error": None}
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_isolated_credential_cache",
+        lambda credential_dir: FakeCache(),
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_authenticated_user_email",
+        lambda: "user@example.com",
+    )
+    monkeypatch.setattr(ops_credentials, "_fetch_and_store_ops_jwt", fake_fetch)
+    monkeypatch.setattr(ops_credentials, "_invalidate_ops_credentials", fake_invalidate)
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", fake_login)
+
+    binding = asyncio.run(ops_credentials.ensure_ops_credentials(require_jwt=True))
+
+    assert binding.session_id == "fresh-session"
+    assert binding.jwt == "fresh-jwt"
+    assert binding.refreshed is True
+    assert fetched_sessions == ["stale-session", "fresh-session"]
+    assert invalidations == 1
+    assert login_calls == 1
+
+
+def test_remote_binding_repairs_concurrent_stale_requests_with_one_login(
+    monkeypatch,
+    tmp_path,
+):
+    from opscli.auth.domain.exceptions import TokenFetchError
+    from opscli.mcp import ops_credentials
+
+    state = {
+        "session_id": "stale-session",
+        "jwt": None,
+        "email": "user@example.com",
+    }
+    login_calls = 0
+
+    class FakeCache:
+        def is_authenticated(self):
+            return bool(state["session_id"])
+
+        def get_session_id(self):
+            return state["session_id"]
+
+        def get_jwt(self, system):
+            assert system == "ops"
+            return state["jwt"]
+
+        def get_email(self):
+            return state["email"]
+
+    async def fake_fetch(session_id, credential_dir):
+        await asyncio.sleep(0)
+        if session_id == "stale-session":
+            raise TokenFetchError("获取 ops JWT 失败: 401", status_code=401)
+        state["jwt"] = "fresh-jwt"
+        return "fresh-jwt"
+
+    def fake_invalidate(credential_dir):
+        state.update(session_id=None, jwt=None, email=None)
+
+    async def fake_login():
+        nonlocal login_calls
+        login_calls += 1
+        await asyncio.sleep(0)
+        state.update(
+            session_id="fresh-session",
+            jwt=None,
+            email="user@example.com",
+        )
+        return {"success": True, "data": {"saved_locally": True}, "error": None}
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_isolated_credential_cache",
+        lambda credential_dir: FakeCache(),
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_authenticated_user_email",
+        lambda: "user@example.com",
+    )
+    monkeypatch.setattr(ops_credentials, "_fetch_and_store_ops_jwt", fake_fetch)
+    monkeypatch.setattr(ops_credentials, "_invalidate_ops_credentials", fake_invalidate)
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", fake_login)
+
+    async def scenario():
+        return await asyncio.gather(
+            ops_credentials.ensure_ops_credentials(require_jwt=True),
+            ops_credentials.ensure_ops_credentials(require_jwt=True),
+        )
+
+    first, second = asyncio.run(scenario())
+
+    assert login_calls == 1
+    assert first.jwt == "fresh-jwt"
+    assert second.jwt == "fresh-jwt"
+    assert {first.refreshed, second.refreshed} == {False, True}
+
+
+def test_remote_binding_does_not_relogin_for_non_auth_jwt_failure(
+    monkeypatch,
+    tmp_path,
+):
+    import pytest
+
+    from opscli.auth.domain.exceptions import TokenFetchError
+    from opscli.mcp import ops_credentials
+
+    class FakeCache:
+        def is_authenticated(self):
+            return True
+
+        def get_session_id(self):
+            return "current-session"
+
+        def get_jwt(self, system):
+            assert system == "ops"
+            return None
+
+        def get_email(self):
+            return "user@example.com"
+
+    async def failed_fetch(session_id, credential_dir):
+        raise TokenFetchError("获取 ops JWT 失败: 503", status_code=503)
+
+    async def unexpected_login():
+        raise AssertionError("非认证错误不得触发重新登录")
+
+    def unexpected_invalidation(credential_dir):
+        raise AssertionError("非认证错误不得清除有效 Session")
+
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: "mcp-api-key")
+    monkeypatch.setattr(ops_credentials, "_get_credential_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_isolated_credential_cache",
+        lambda credential_dir: FakeCache(),
+    )
+    monkeypatch.setattr(
+        ops_credentials,
+        "_get_authenticated_user_email",
+        lambda: "user@example.com",
+    )
+    monkeypatch.setattr(ops_credentials, "_fetch_and_store_ops_jwt", failed_fetch)
+    monkeypatch.setattr(
+        ops_credentials,
+        "_invalidate_ops_credentials",
+        unexpected_invalidation,
+    )
+    monkeypatch.setattr(ops_credentials, "auth_mcp_login", unexpected_login)
+
+    with pytest.raises(
+        ops_credentials.OpsCredentialBindingError,
+        match="503",
+    ):
+        asyncio.run(ops_credentials.ensure_ops_credentials(require_jwt=True))
+
+
 def test_remote_binding_rejects_authenticated_user_mismatch(monkeypatch, tmp_path):
     import pytest
 
@@ -207,6 +425,26 @@ def test_stdio_binding_preserves_explicit_runtime_credentials(monkeypatch):
     assert binding.session_id == "local-session"
     assert binding.jwt == "local-jwt"
     assert binding.runtime_auth == ("local-session", "local-jwt")
+
+
+def test_apphub_viewer_binding_accepts_trusted_jwt_without_session(monkeypatch):
+    from opscli.mcp import ops_credentials
+
+    monkeypatch.setattr(ops_credentials, "get_current_auth_mode", lambda: "apphub_viewer")
+    monkeypatch.setattr(ops_credentials, "get_current_user_email", lambda: "user@example.com")
+    monkeypatch.setattr(ops_credentials, "get_current_api_key", lambda: None)
+
+    binding = asyncio.run(
+        ops_credentials.ensure_ops_credentials(
+            provided_jwt="viewer-jwt",
+            require_jwt=True,
+        )
+    )
+
+    assert binding.session_id is None
+    assert binding.jwt == "viewer-jwt"
+    assert binding.user_email == "user@example.com"
+    assert binding.runtime_auth == (None, "viewer-jwt")
 
 
 def test_force_relogin_renews_session_even_when_locally_unexpired(monkeypatch, tmp_path):

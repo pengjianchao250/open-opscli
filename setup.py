@@ -28,6 +28,7 @@ _KEEP_SOURCE_MODULE_NAMES = {
     "app_factory",
     "cli",
     "instrumentation",
+    "migrate",
     "server",
     "report_skill_usage",
 }

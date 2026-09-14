@@ -102,6 +102,8 @@ class ApiKeyAuthMiddleware:
         *,
         api_key: str | None = None,
         auth_verify_url: str | None = None,
+        protected_path_prefixes: tuple[str, ...] | None = None,
+        trust_upstream_apphub_identity: bool = False,
     ):
         """
         Args:
@@ -109,10 +111,15 @@ class ApiKeyAuthMiddleware:
             api_key: 固定 API Key（单用户模式，向后兼容）
             auth_verify_url: OPS 后端校验地址（多用户模式），
                              如 https://ops.example.com/v1/mcp/verify-key
+            protected_path_prefixes: 仅对指定路径前缀执行鉴权
+            trust_upstream_apphub_identity: 信任上游注入的 AppHub 身份头；
+                                            仅限网络入口受控的内部服务启用
         """
         self.app = app
         self._api_key = api_key
         self._auth_verify_url = auth_verify_url
+        self._protected_path_prefixes = protected_path_prefixes
+        self._trust_upstream_apphub_identity = trust_upstream_apphub_identity
         # 缓存结构：api_key -> (last_verified_ts, user_data)
         # last_verified_ts 为最近一次远程校验成功的时间戳，用于计算新鲜期与宽限期。
         self._verify_cache: dict[str, tuple[float, dict]] = {}
@@ -125,6 +132,30 @@ class ApiKeyAuthMiddleware:
             _logger.info("MCP Server 运行在固定 API Key 模式")
         else:
             _logger.warning("MCP Server 未配置任何 API Key 鉴权！")
+
+    @staticmethod
+    def _header(scope: Scope, name: bytes) -> str | None:
+        for header_name, value in scope.get("headers", []):
+            if header_name.lower() == name:
+                normalized = value.decode("utf-8", errors="replace").strip()
+                return normalized or None
+        return None
+
+    def _is_protected_path(self, path: str) -> bool:
+        if self._protected_path_prefixes is None:
+            return True
+        return any(path.startswith(prefix) for prefix in self._protected_path_prefixes)
+
+    def _internal_identity(self, scope: Scope) -> dict[str, str | None] | None:
+        if not self._trust_upstream_apphub_identity:
+            return None
+        email = self._header(scope, b"x-apphub-user-email")
+        if not email:
+            return None
+        return {
+            "email": email.strip().lower(),
+            "user_id": self._header(scope, b"x-apphub-user-id"),
+        }
 
     def _extract_token(self, scope: Scope) -> str | None:
         """从 Query Param 或 Header 中提取 API Key。
@@ -180,6 +211,10 @@ class ApiKeyAuthMiddleware:
                 _logger.debug("客户端在 POST /messages/ 时断开连接，已忽略")
             return
 
+        if not self._is_protected_path(path):
+            await self.app(scope, receive, send)
+            return
+
         token = self._extract_token(scope)
         trace_keepa = path.startswith("/api/v1/keepa")
         auth_started_at = time.monotonic() if trace_keepa else 0.0
@@ -209,7 +244,15 @@ class ApiKeyAuthMiddleware:
             )
 
         # ── 校验逻辑 ────────────────────────────────────────────────
-        if self._auth_verify_url:
+        internal_identity = self._internal_identity(scope)
+        if internal_identity:
+            token = None
+            scope["mcp_auth_mode"] = "internal"
+            scope["mcp_user_id"] = internal_identity.get("user_id")
+            scope["mcp_user_email"] = internal_identity.get("email")
+            scope["mcp_allowed_tools"] = None
+            scope["mcp_permission_enabled"] = False
+        elif self._auth_verify_url:
             # 远程校验模式
             try:
                 user_info = await self._verify_remote(token)

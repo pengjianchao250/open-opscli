@@ -31,6 +31,7 @@ _quota_wrap = quota_wrap
 _telemetry_wrap = telemetry_wrap
 _TelemetryMcpProxy = InstrumentedMcpProxy
 
+from opscli.mcp.tools import amazon_reviews as _amazon_reviews_tools
 from opscli.mcp.tools import amazon_rufus as _amazon_rufus_tools
 from opscli.mcp.tools import asin_data as _asin_data_tools
 from opscli.mcp.tools import asin_review as _asin_review_tools
@@ -44,6 +45,7 @@ from opscli.mcp.tools import query as _query_tools
 from opscli.mcp.tools import scrape_do as _scrape_do_tools
 from opscli.mcp.tools import seller_sprite_proxy as _seller_sprite_proxy_tools
 from opscli.mcp.tools import skills as _skills_tools
+from opscli.mcp.tools import xydc as _xydc_tools
 from opscli.mcp.tools import yingyan_proxy as _yingyan_proxy_tools
 from opscli.shared.collection_storage import (
     build_collection_storage_runtime,
@@ -79,6 +81,7 @@ def _register_optional_amazon_tools(mcp_proxy) -> None:
 _REGISTRARS_BEFORE_KEEPA = (
     _auth_tools.register,
     _amazon_rufus_tools.register,
+    _amazon_reviews_tools.register,
     _beta_tools.register,
     _chatgpt_tools.register,
     _dashboard_tools.register,
@@ -92,6 +95,7 @@ _REGISTRARS_AFTER_KEEPA = (
     _asin_data_tools.register,
     _asin_review_tools.register,
     _skills_tools.register,
+    _xydc_tools.register,
     # 保留当前通用服务的历史可选注册顺序，不在本次迁移中清理。
     _register_optional_asin_review_tool,
     _register_optional_amazon_tools,

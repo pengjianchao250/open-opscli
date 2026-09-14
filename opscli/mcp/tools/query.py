@@ -337,7 +337,7 @@ async def query_build(
         skills_dir:        可选，自定义 Skills 目录
         global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），写入 payload 顶层
                            globalCurrency 由服务端换算金额指标；币种不是维度或筛选字段，
-                           未识别到币种意图时不传
+                           不要去元数据里找 currency 字段；未识别到币种意图时不传
     """
     # 容错：AI 有时将 list 参数以 JSON 字符串形式传入，统一解析
     try:
@@ -623,7 +623,7 @@ async def query_build_and_run(
         selection_source:  可选，选表来源：planner/intent_route/local_fallback/user_specified
         match_record_id:   可选，意图匹配记录ID，取自 query_intent_match 返回值的 match_record_id 字段
         global_currency:   可选，全局币种（USD/GBP/CAD/EUR/JPY/CNY），由服务端换算金额指标；
-                           币种不是维度或筛选字段，多币种须逐币种各执行一次
+                           币种不是维度或筛选字段，多币种须逐币种各执行一次，口径同 query_simple
 
     【反馈边界】仅当本工具**意外失败**（抛异常、success=false、超时或无法解释的服务错误）时，
     在同一请求内提交一次 feedback_submit；同一失败 30 分钟内去重。0 行、需要澄清、

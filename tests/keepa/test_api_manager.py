@@ -6,6 +6,7 @@ from openpyxl import load_workbook
 
 from opscli.keepa.accounts import KeepaApiKey
 from opscli.keepa.config import KeepaSettings
+from opscli.keepa.domain.exceptions import KeepaConfigError
 from opscli.keepa.domain.models import KeepaScenarioRequest
 from opscli.keepa.services import api_manager as api_manager_module
 from opscli.keepa.services.api_manager import KeepaApiManager
@@ -760,3 +761,183 @@ def test_manager_blocks_low_quota_without_force(monkeypatch, tmp_path: Path):
         raise AssertionError("expected quota precheck failure")
 
     assert (tmp_path / "low-quota" / "params.json").exists()
+
+
+def test_manager_rechecks_quota_after_wait_and_stops_if_still_low(
+    monkeypatch, tmp_path: Path
+):
+    """等待 refill 后额度仍不足时不得继续消耗 Keepa 请求。"""
+
+    class StillLowQuotaClient(DummyKeepaClient):
+        token_status_calls = 0
+        get_json_calls = 0
+
+        async def token_status(self):
+            self.__class__.token_status_calls += 1
+            return {"timestamp": 1000, "tokensLeft": 1, "refillIn": 300000, "refillRate": 5}
+
+        async def get_json(self, endpoint, params):
+            self.__class__.get_json_calls += 1
+            return await super().get_json(endpoint, params)
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", StillLowQuotaClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    monkeypatch.setattr(api_manager_module.asyncio, "sleep", no_sleep)
+    settings = KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10)
+    manager = KeepaApiManager(settings=settings, api_key_provider=DummyApiKeyProvider())
+
+    try:
+        _run(
+            manager.run(
+                KeepaScenarioRequest(
+                    scenario="product",
+                    site="US",
+                    params={"asin": "B0088PUEPK"},
+                    job_id="low-quota-after-wait",
+                    wait=True,
+                )
+            )
+        )
+    except Exception as exc:
+        assert exc.code == "KEEPA_QUOTA_INSUFFICIENT"
+        assert exc.retry_after_seconds == 301
+        assert exc.tokens_left == 1
+    else:
+        raise AssertionError("expected quota recheck failure")
+
+    assert StillLowQuotaClient.token_status_calls == 2
+    assert StillLowQuotaClient.get_json_calls == 0
+
+
+def test_manager_continues_when_token_status_has_non_account_error(monkeypatch, tmp_path: Path):
+    class TokenStatusUnavailableClient(DummyKeepaClient):
+        async def token_status(self):
+            raise api_manager_module.KeepaApiError("token endpoint unavailable", status_code=500)
+
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", TokenStatusUnavailableClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=DummyApiKeyProvider(),
+    )
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK"},
+                job_id="keepa-token-status-unavailable",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert [warning["stage"] for warning in result.warnings] == [
+        "token_status",
+        "token_status",
+    ]
+
+
+class RotatingApiKeyProvider:
+    def __init__(self):
+        self.credentials = [
+            KeepaApiKey(
+                name="primary",
+                api_key="keepa-primary-key",
+                source="api_credential_pool",
+                account_id=1,
+                secret_version=1,
+            ),
+            KeepaApiKey(
+                name="backup",
+                api_key="keepa-backup-key",
+                source="api_credential_pool",
+                account_id=2,
+                secret_version=1,
+            ),
+        ]
+        self.failures = []
+        self.successes = []
+
+    def get_default(self, *, refresh=False, exclude_account_ids=None):
+        excluded = exclude_account_ids or set()
+        for credential in self.credentials:
+            if credential.account_id not in excluded:
+                return credential
+        raise KeepaConfigError("没有可用 Keepa 账号")
+
+    def report_failure(self, credential, exc, *, quota=None):
+        self.failures.append((credential, exc, quota))
+
+    def report_success(self, credential, quota):
+        self.successes.append((credential, quota))
+
+
+def test_manager_rotates_to_backup_account_after_auth_failure(monkeypatch, tmp_path: Path):
+    class AuthRotatingClient(DummyKeepaClient):
+        async def get_json(self, endpoint, params):
+            if self.api_key == "keepa-primary-key":
+                raise api_manager_module.KeepaApiError("invalid key", status_code=401)
+            return await super().get_json(endpoint, params)
+
+    provider = RotatingApiKeyProvider()
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", AuthRotatingClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=provider,
+    )
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK"},
+                job_id="keepa-auth-rotation",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert provider.failures[0][0].account_id == 1
+    assert provider.failures[0][1].status_code == 401
+    assert provider.successes[0][0].account_id == 2
+
+
+def test_manager_rotates_to_backup_account_after_quota_precheck(monkeypatch, tmp_path: Path):
+    class QuotaRotatingClient(DummyKeepaClient):
+        async def token_status(self):
+            if self.api_key == "keepa-primary-key":
+                return {"tokensLeft": 1, "refillIn": 5000, "refillRate": 5}
+            return await super().token_status()
+
+    provider = RotatingApiKeyProvider()
+    monkeypatch.setattr(api_manager_module, "KeepaApiClient", QuotaRotatingClient)
+    monkeypatch.setattr(api_manager_module, "FileUploadClient", DisabledUploadClient)
+    manager = KeepaApiManager(
+        settings=KeepaSettings(output_dir=tmp_path, api_key=None, reserve_tokens=10),
+        api_key_provider=provider,
+    )
+
+    result = _run(
+        manager.run(
+            KeepaScenarioRequest(
+                scenario="product",
+                site="US",
+                params={"asin": "B0088PUEPK"},
+                job_id="keepa-quota-rotation",
+            )
+        )
+    )
+
+    assert result.row_count == 1
+    assert provider.failures[0][0].account_id == 1
+    assert provider.failures[0][2]["tokensLeft"] == 1
+    assert provider.successes[0][0].account_id == 2
+    assert provider.successes[0][1]["tokensLeft"] == 50
+    assert result.warnings == []

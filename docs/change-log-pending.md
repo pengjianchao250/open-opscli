@@ -1,4 +1,237 @@
-# 待归档变更记录
+## 2026-09-14 SellerSprite - 移除 Collector Gateway Key
+
+**变更原因**：Collector MCP 已通过部署网络限制为仅允许通用 opscli MCP 访问，额外的 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 与现有信任边界重复，并会在服务器未配置凭证文件时阻断 SellerSprite REST 请求。
+
+**改动点**：通用 MCP 代理不再读取或发送 `X-Collector-Gateway-Key`；Collector MCP 显式启用可信上游 AppHub 身份模式，直接接收通用 MCP 转发的 `X-AppHub-User-*` 身份和任务级 Session/JWT；普通 MCP 默认不信任这些身份头，原 API Key 鉴权保持不变；同步移除环境变量和部署文档要求。
+
+**验证结果**：MCP 鉴权、SellerSprite 工具/代理和服务生命周期回归 `130 passed`；完整 API 与 Collector 回归 `79 passed`；App 建站 Skill 版本、安装和文档镜像回归 `3 passed`；Python `compileall` 与 `git diff --check` 通过。扩展收集整个 `tests/mcp` 时被分支既有的 Shopify `_shopify_manager` 导入错误阻断；完整 App 建站 Skill 回归另有分支既有的后端 `AGENTS.md` 模板断言失败，均不在本次修改文件中。
+
+**影响范围**：SellerSprite REST 到 Collector MCP 的内部调用链。部署必须保证 Collector MCP 端口仅通用 opscli MCP 可访问，禁止浏览器、普通客户端或公网直连。
+
+**回滚方式**：恢复内部 Gateway Key 文件加载、代理 Header 和 Collector Key 校验，并重新配置 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。
+
+---
+
+## 2026-09-14 Git - 合并远端 release 并解决变更日志冲突
+
+**变更原因**：`feature/sellersprite` 需要同步最新 `origin/release` 的 AppHub MCP REST 环境变量与数据合同改动，同时保留功能分支刚完成的 Keepa MySQL 凭据池迁移。
+
+**改动点**：将 `origin/release` 合入 `feature/sellersprite`；解决 `docs/change-log-pending.md` 顶部并行新增记录的内容冲突，按日期倒序保留 9 月 13 日 App 记录与 9 月 11 日 Keepa 记录，并保留 release 对 9 月 10 日第三方数据 API 合同的更新；`ops-keepa` Skill 自动合并后同时包含 MySQL 凭据池说明和 AppHub REST 接入合同。
+
+**验证结果**：`tests/app` 回归 `115 passed`；API 凭据池、Keepa Manager 与 MCP Keepa Tool 定向回归 `53 passed`；Keepa Skill 与发行清单筛选回归 `2 passed`；App 建站 Skill 合同回归 `25 passed, 1 failed`，唯一失败的后端 `AGENTS.md` 模板断言在 `origin/release` 已存在且目标文件与 release 完全一致。相关模块 `compileall`、Skill 版本 JSON 解析和冲突标记扫描通过；`git diff --check` 仅报告两份 release 原有设计文档的 5 处 Markdown 行尾空格。
+
+**影响范围**：当前 `feature/sellersprite` 分支及其继承的 AppHub、Keepa 和 SellerSprite Skill/运行时合同；未改变双方原有业务意图。
+
+**回滚方式**：在未推送时回退本次 merge commit；推送后使用 `git revert -m 1 <merge_commit>` 撤销本次合并。
+
+---
+
+## 2026-09-13 App - 初始化时自动配置 MCP REST 环境变量
+
+**变更原因**：AppHub 标准数据应用依赖 `OPSCLI_MCP_REST_API_BASE_URL` 调用 opscli-mcp REST，但应用初始化此前不会自动配置，容易导致 Viewer、Keepa 和 SellerSprite 在线上缺少运行时地址。
+
+**改动点**：`opscli app init` 与 `push` 的共享仓库准备链路新增 AppHub 环境变量检查；按控制面 origin 精确映射预发布 `https://mcp.ops.aukeyit.com` 和生产 `https://ops.mcp.xenkee.com`。目标变量缺失或为空时先读取完整自定义 `env`，合并后通过 `PUT /api/v1/apps/{app_id}/env` 全量保存并验证已有键；已有非空值保留且报告状态，未知环境停止。请求继续复用 ops JWT，不发送浏览器 Cookie 或平台只读 `platform_env`。
+
+**验证结果**：使用系统临时目录执行 `.venv/Scripts/python.exe -X utf8 -m pytest tests/app -q -p no:cacheprovider`，完整 `tests/app` 回归 `111 passed`。仓库内与 Codex 可写根下的 pytest 临时目录均受 Windows ACL 影响，改用沙箱外系统临时目录后通过。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：影响 `opscli app init` 和 `opscli app push` 的远端准备步骤，每次执行新增一次环境变量 GET，首次缺失时增加 PUT；不修改 Binding Schema、Git 凭据格式、应用模板、数据库或发布流程。环境变量在应用下次发布或重启后生效。
+
+**回滚方式**：移除 AppHub env 客户端方法、仓库准备链路中的自动配置调用、环境映射常量、对应测试和需求文档，并删除本节记录。
+
+---
+
+## 2026-09-11 Keepa - 账号来源迁移到 MySQL 凭据池
+
+**变更原因**：Keepa 仍通过 OPS 集成账号接口获取单个 API Key，账号来源与 Google Trends、Canopy、scrape.do 等凭据池模块不一致，也无法在鉴权失效或额度不足时自动切换备用账号。
+
+**改动点**：将 Keepa API Key Provider 改为从 MySQL `api_credentials` 凭据池领取 `keepa` 账号，保留 `OPSCLI_KEEPA_API_KEY` 作为池不可用时的本地兜底；凭据模型增加账号 ID 和密钥版本，401/403 自动标记失效并切换账号，额度不足或限流记录剩余额度和 refill 冷却时间后切换账号，成功请求回写额度状态；Keepa MCP 不再为获取账号强制建立 OPS 登录态，Session/JWT 仅保留给可选文件上传；同步更新管理 CLI、使用指南，并将 `ops-keepa` Skill 升级到 `v0.0.4`。
+
+**验证结果**：Keepa、API 凭据池、MCP Keepa Tool 和 REST App 定向回归 `184 passed`；Keepa/发行清单相关 Skill 回归 `11 passed, 296 deselected`；`compileall`、Skill 版本 JSON 解析和 `git diff --check` 通过。当前虚拟环境未安装 Ruff，因此未执行 Ruff 检查。
+
+**影响范围**：Keepa MCP/REST/内部 Manager 的账号来源、主备切换和运行状态回写；公开场景参数与成功响应合同不变。上线前需要在凭据池中创建至少一个 `keepa` Provider 账号。
+
+**回滚方式**：恢复 Keepa OPS 集成账号 Provider、MCP OPS 凭据前置逻辑、凭据池白名单和对应文档。
+
+---
+
+## 2026-09-10 Skills - 调整第三方数据 API 预发布地址
+
+**变更原因**：AppHub 标准数据项目使用的第三方数据 REST 服务已切换预发布入口，原 `https://ops.api.qa.aukeyit.com` 不再作为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL` 的预发布值。
+
+**改动点**：AppHub Viewer 的 OPS Query、Keepa 与 SellerSprite 统一使用 `OPSCLI_MCP_REST_API_BASE_URL` 纯 origin；OPS Query 固定调用 `/api/v1/query/simple` 与 `/api/v1/query/metadata`，禁止生成不存在的 `/v1/data-metrics/viewer/*`，并明确站点 REST `/api/v1/*` 不使用 MCP `/mcp`、`/sse` 或共享 API Key。删除未进入调用链的 `ThirdPartyContractClient` 孤立实现，同步更新设计文档、Reference、静态评估和契约测试。Skill 版本分别升至 `v0.1.12` 和 `v0.0.17`；公共 Query CLI、MCP Tool、Keepa/SellerSprite 核心实现不变。
+
+**验证结果**：本次相关契约测试共 `7 passed`，其中 `ops-app-data-builder` 4 项、`ops-app-build-spec` 3 项；两份 Skill 的 `quick_validate.py` 均返回 `Skill is valid!`，发行清单检查随专项测试通过。完整测试文件回归已尝试，但 Windows 临时目录 ACL 在 pytest 清理阶段触发 `PermissionError`；`ops-app-build-spec` 还命中既有且与本次地址调整无关的 `OPSCLI_API_BASE_URL` 旧断言。本次新地址、版本和部署合同相关节点均通过。
+
+**影响范围**：影响预发布环境配置以及后续安装或升级新版 Skill 后创建、更新的标准 AppHub 数据项目；不影响生产环境、数据库结构、前端合同和 `opscli/app` 运行时代码。
+
+**回滚方式**：将预发布地址恢复为 `https://ops.api.qa.aukeyit.com`，回退两份 Skill 版本、Reference、评估和测试改动，并删除本节记录。
+
+---
+
+## 2026-09-09 App - AppHub 查询接口统一使用 app_id
+
+**变更原因**：AppHub 已将应用详情和 Git 配置接口从 slug 定位统一调整为大小写敏感的五位 `app_id`，现有客户端实现已符合新契约，但测试和当前规范文档仍保留 slug 或 `/by-id/` 旧路径。
+
+**改动点**：更新 `tests/app/test_client.py`，分别校验 `GET /api/v1/apps/{app_id}` 与 `GET /api/v1/apps/{app_id}/git-config` 并保留大小写敏感覆盖；同步更新 AppHub 使用指南、开发规范和 2026-09-05 两份当前定稿文档；为 2026-09-02 两份历史方案增加接口已被取代说明。未改动 release 接口文档，等待 AppHub 单独确认其身份参数契约。
+
+**验证结果**：修改前执行 `python -m pytest tests/app/test_client.py -q -p no:cacheprovider` 为 `1 failed, 8 passed`，失败原因为旧 `/by-id/` 路径断言；修改后专项测试为 `10 passed`，完整 `tests/app` 回归为 `76 passed`。完整回归首次受沙箱临时目录 ACL 限制，改用仓库内专用临时目录并在受控权限下重跑通过。
+
+**影响范围**：仅影响 `opscli app` 的 AppHub 查询接口契约测试和相关文档，不修改运行时代码、binding 格式、CLI 参数、Git 凭据逻辑或 release API。
+
+**回滚方式**：恢复客户端路径测试中的 `/by-id/` 断言及相关文档旧路径，并删除两份历史文档新增的 2026-09-09 废弃说明和本节变更记录。
+
+---
+
+## 2026-09-09 ops-app - 创建应用时省略未填写的 contact
+
+**变更原因**：AppHub 文档将 `contact` 定义为可选字段，但部分已部署服务版本尚未接收该字段；客户端此前固定发送 `contact: null`，会触发服务端 `extra_forbidden` 并阻塞应用创建。
+
+**改动点**：`AppCreateRequest.to_dict()` 仅在调用方显式提供 `contact` 时写入请求体；创建请求测试新增默认省略和显式值保留断言，不过滤其他合同允许的 `null` 字段。
+
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/app/test_client.py -q` 通过，`11 passed`；使用全新可写 `--basetemp` 运行完整 `tests/app`，`77 passed`。修复后的真实 `opscli app create` 重试不再出现 `contact` 的 `YAML-INVALID`，已进入后续用户资料校验阶段。当前虚拟环境未安装 `ruff`，未执行该静态检查。
+
+**影响范围**：仅影响 `opscli app create` 的请求体序列化；默认创建不再发送 `contact`，显式设置时行为保持不变。
+
+**回滚方式**：恢复 `AppCreateRequest.to_dict()` 固定写入 `contact`，并撤销对应测试和本条记录。
+
+---
+
+## 2026-09-09 App - AppHub 绑定改用 app_id 查询
+
+**变更原因**：AppHub 最新模板已使用顶层 `app_id`，线上应用 `test-keepa` 可通过 ID `1kKLO` 访问，但 `opscli app push` 仍使用 slug 请求应用详情和 Git 配置，导致已有应用返回 `NOT_FOUND`，并向新版清单注入旧版 `name` 字段。
+**改动点**：已绑定应用改用 binding 的 `app_id` 获取应用详情和 Git 配置；从可访问应用恢复 binding 时优先使用响应中的应用 ID；清单同步兼容新版 `app_id/title`，并移除混入的旧版顶层 `name`；补充 manager 与 manifest 回归测试。
+**验证结果**：`tests/app/test_manager.py`、`test_manifest.py`、`test_client.py` 专项回归 `23 passed`，目标文件 `compileall` 与 `git diff --check` 通过；使用 `test-keepa / 1kKLO` 实际 binding 执行 `opscli app push` 成功，远端 `master` 更新到 `462020678f747c938c66ed68849cde22921bce90`。
+**影响范围**：`opscli app create/init/push` 的应用身份解析和 `app.yaml` 身份同步；旧版 `name/title` 清单继续兼容。
+**回滚方式**：回退 `opscli/app/services/manager.py`、`opscli/app/services/manifest.py` 及对应测试和本条记录。
+
+---
+
+## 2026-09-08 Skills - AppHub 第三方取数支持三模式鉴权
+
+**变更原因**：Keepa 和 SellerSprite 已支持与 OPS 相同的 viewer、session、local 三种鉴权。原 AppHub 建站规范仍要求站点共享 API Key，并按站点共享第三方快照和异步任务，无法保持当前用户权限边界。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 改为复用最新模板 `QueryCredentials`，由请求级 `ThirdPartyApiClient` 按 viewer、session、local 重建允许的 Header；删除 `OPSCLI_THIRD_PARTY_DATA_API_KEY` 合同，只保留由部署环境显式注入的 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`，生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://ops.api.qa.aukeyit.com`；`third_party_source_snapshot` 和 `third_party_async_job` 改为 `UNIQUE(owner_user_id, provider, request_hash)`；同步更新 Reference、静态评估、需求文档和契约测试。Skill 版本分别升至 `v0.1.10` 和 `v0.0.15`。
+
+**验证结果**：`ops-app-data-builder` 完整契约测试 `11 passed`；`ops-app-build-spec` 完整契约测试 `12 passed, 1 failed`，唯一失败为既有迁移资产 `assets/backend/AGENTS.md` 标题与旧断言不一致，与本次改造无关；本次相关建站测试及安装门禁 `6 passed`；静态 eval 与发行清单检查通过。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；不修改 `opscli/app` 和最新模板仓库，不兼容旧模板项目，也不保留共享 API Key 或跨模式回退。
+
+**回滚方式**：整体回退两份 Skill 的本次版本、Reference、评估和测试改动；不得在新生成项目中局部恢复共享 API Key，以免重新引入跨用户数据复用。
+
+---
+
+
+## 2026-09-08 Skills - 精简 AppHub 前端与源码交付规范
+
+**变更原因**：业务项目持续用 Codex 开发时，需要具体的维护规则；原主文件混有旧部署配置和重复检查，前端缺少明确的职责与数据边界。
+
+**改动点**：`ops-app-build-spec` 升至 v0.0.13，主入口按任务读取 references，补充范围、复用和实际改动检查；前端明确职责、状态、请求、分页、样式与行为验证。部署细节引用实际模板合同，移除旧清单字段、旧资产路径与依赖要求，保留空白模板库和源码推送边界。安装和调用入口由模板项目维护，当前 Skill 不增加每轮加载或规则注入机制。
+
+**验证结果**：`tests/skills/test_ops_app_build_spec_skill.py` 与 `tests/skills/test_ops_app_template_clone.py` 合计 15 通过、3 失败；与改前 13 通过、4 失败相比，主入口数据路由断言已修复，新增引用路径完整性检查通过。剩余 3 项为改前已有的后端红线、opscli 接入及后端规范资产断言失败，未改动或跳过这些测试。Skill 校验、安装完整性与差异检查通过，只读审查无新增实质问题；未提交、推送或部署。
+
+**影响范围**：仅内置 Skill 主文件、前端/部署参考、版本和相关校验；不修改后端规范、克隆脚本、模板项目或用户全局配置。
+
+**回滚方式**：恢复本次 Skill、版本和专项测试差异，无项目或数据迁移。
+## 2026-09-08 Skills - 第三方数据 API 环境变量收窄命名
+
+**变更原因**：原第三方数据 API 根地址与密钥变量当前只服务于站点后端调用 Keepa 与 SellerSprite，但命名过于通用，容易被误解为整个 OPSCLI 平台的公共 API 配置。
+
+**改动点**：`ops-app-data-builder` 和 `ops-app-build-spec` 将新项目运行时合同统一改为 `OPSCLI_THIRD_PARTY_DATA_API_BASE_URL`、`OPSCLI_THIRD_PARTY_DATA_API_KEY`；同步更新数据层合同、运行时路由、静态评估、设计文档和契约测试。新合同不读取旧变量别名，不修改线上 API 使用指南，也不迁移已有数据项目。Skill 版本分别升至 `v0.1.9` 和 `v0.0.14`。
+
+**影响范围**：仅影响后续由新版 Skill 新建或更新的标准 AppHub 数据项目；已有项目继续保持原配置，不提供兼容回退。
+
+**回滚方式**：恢复两份 Skill 及其 Reference、版本、评估、测试和设计文档中的旧变量合同，并删除本节记录。
+
+## 2026-09-08 AppHub 站点 - 按 ops-app-build-spec 迁移 test-keepa
+
+**变更原因**：`test-keepa` 现有仓库由旧建站流程生成，前端文件位于根目录且缺少统一 AppHub 项目合同；用户确认应使用 `ops-app-build-spec` 进行存量项目迁移。
+**改动点**：将 JSON Lens 的 Vite 页面、npm 清单、Playwright 配置和前端测试迁入 `sites/json-lens-prototype/frontend/`；同步 Dockerfile、Nixpacks、FastAPI 静态目录、忽略规则和部署合同测试；Docker 只安装业务依赖并复用基础镜像 SDK，Nixpacks 校验实际使用的 Keepa 模块；补齐根 `AGENTS.md`、`backend/CLAUDE.md`、`docs/apphub-contract.md` 及 `docs/ops-app/` 迁移、项目、数据、开发和部署说明。项目无 SQLite 需求，未复制数据库、Alembic 或 Compose 示例。
+**验证结果**：本地隔离环境中，Node 单元测试 6 项通过，Playwright 36 项通过，Vite 8.2.2 生产构建通过；Python 3.12 部署合同与后端冒烟通过，真实 `frontend/dist` 静态托管冒烟通过，`aukeys-opscli 0.0.132` 的 Keepa 模块导入通过，Python compileall 与 `git diff --check` 通过。本机未安装 Docker，未执行镜像构建。
+**影响范围**：仅 `sites/json-lens-prototype` 的源码目录和构建路径；页面业务行为、Keepa API、AppHub Viewer 身份模式及远端绑定不变。
+**回滚方式**：回退站点本次迁移改动，将 `frontend/` 中原有文件恢复到仓库根并恢复 Dockerfile、Nixpacks 和 FastAPI 的根级 `dist` 路径。
+---
+
+## 2026-09-08 AppHub 站点 - 删除浏览器认证 SDK 并使用相对 API
+
+**变更原因**：AppHub 应用以 `/ops-app/{appId}/{slug}/` 同源前缀运行，浏览器 Cookie 由平台网关验证，网关注入 Viewer 身份头并在转发到应用前清除原始 Cookie。站点前端继续读取 localStorage、拼装认证头和使用根级 `/api/v1` 会重复平台职责，并绕过应用部署前缀。
+**改动点**：删除 `sites/ops-mcp-api-sdk`；JSON Lens 与 SellerSprite Lens 改为请求 `./api/v1/*` 相对地址，不再读取、保存或发送 AppHub Token、Session 和用户头；删除自定义 API 地址输入；SellerSprite 保留服务及额度检查按钮；两个 Vite 开发服务器增加 `/api` 到本地 `127.0.0.1:8765` 的代理；同步清理依赖、测试和使用说明。
+**验证结果**：JSON Lens 单元测试 `6 passed`、Playwright `36 passed`，SellerSprite Lens 单元测试 `11 passed`、Playwright `8 passed`；两个 Vite 生产构建通过，产物脚本和样式均使用 `./assets/*` 相对地址；浏览器回归确认同源 Cookie 自动随相对 API 请求发送，前端不再生成 `X-Ops-Token`、`X-Session-Id` 或 `X-User-*`；SDK 与旧认证配置引用扫描零残留，`git diff --check` 通过。
+**影响范围**：两个 `sites/*-lens-prototype` 的浏览器请求与本地联调方式；FastAPI 的 AppHub viewer/session/local 鉴权、SellerSprite Collector 内部网关 Key，以及 `/mcp`、`/sse` MCP API Key 鉴权均不变。
+**回滚方式**：恢复 `sites/ops-mcp-api-sdk`、两个站点的包依赖和认证头注入，并把相对 API 请求恢复为可配置的独立 REST 地址。
+---
+
+## 2026-09-08 AppHub 站点 - 修复 test-keepa 发布声明与运行入口
+
+**变更原因**：`test-keepa` 远端提交缺少 AppHub 根级 `app.yaml`，页面发布报 `YAML-INVALID`；补齐声明后的 release #72 原始事件进一步指出仓库根目录缺少平台必需的 `Dockerfile`，release #73 又指出声明 SQLite 的新应用必须包含 `compose.apphub.yaml`。该站点实际无数据库，因此移除无效数据库声明。完整导入 `opscli.api` 还会在 Python 3.12 环境加载无关路由并触发依赖兼容错误。
+**改动点**：为 `sites/json-lens-prototype` 增加无数据库的 AppHub YAML、Dockerfile、Docker 忽略清单、Nixpacks、Python 依赖和 FastAPI 启动入口；Docker 多阶段构建使用 Node 24 生成 Vite 产物，并由 AppHub opscli 基础镜像启动单 FastAPI 进程；后端改为独立应用，惰性加载 Keepa MCP 同源实现，接收 AppHub Viewer/Session 凭证并保留额度与遥测治理，同时托管 Vite 构建产物；新增部署合同和后端接口冒烟测试。
+**验证结果**：Python 3.12 隔离部署合同与后端冒烟测试通过；Node 单元测试 6 项通过；Vite 生产构建通过；Python compileall 与 `git diff --check` 通过。本机未安装 Docker。源码提交 `e909fc62140ad4679975562d58dcb83afab83bf5` 的 AppHub release #74 与手工重试 #75 均通过 YAML 校验、gitleaks 和打 tag，确认 `YAML-INVALID` 已解决；两次最终均因 Coolify 控制面 `ConnectError: [Errno 111] Connection refused` 失败，属于平台上游故障。
+**影响范围**：仅 `sites/json-lens-prototype` 的 AppHub 构建、启动、认证转发和 Keepa 请求；不修改 opscli 服务端已有 API。
+**回滚方式**：回退该站点新增的 AppHub/Python 文件及 `.gitignore`、`package.json`、`README.md` 改动，并删除本条记录。
+---
+
+## 2026-09-08 REST API - Keepa 与 SellerSprite 统一 AppHub 认证
+
+**变更原因**：Keepa、SellerSprite 的浏览器 REST 接口仍通过 OPS 配置接口换取 MCP API Key，和 AppHub 标准的 viewer/session/local 认证重复；SellerSprite 又由通用 MCP 代理到 Collector，不能直接把浏览器凭证当 Collector MCP Key 使用。
+**改动点**：新增 AppHub principal 依赖，REST 支持 `X-Ops-Token + X-User-*` viewer、`polarisUserToken`/`X-Session-Id` session 和显式本地回退；组合服务只对 `/mcp`、`/sse` 保留 MCP API Key 鉴权。Keepa 显式使用请求 JWT/session；SellerSprite 使用受限文件中的内部 Collector 网关 Key，并透传已验证用户身份及任务级 JWT/session。浏览器 SDK 删除 `/api/v1/mcp-api-keys/config` 换 Key逻辑，改为直接携带 AppHub 认证且包含 Cookie。
+**验证结果**：API/MCP/query 专项回归 163 项、额外 Keepa/SellerSprite MCP 回归 119 项、SDK Node 测试 10 项、JSON Lens 单测 6 项与 E2E 36 项、SellerSprite Lens 单测 11 项与 E2E 8 项全部通过；模板 API 文档镜像一致性、两个原型生产构建、SDK 语法检查、Python compileall 和 `git diff --check` 通过。真实进程冒烟确认 health/Keepa 公开端点 200、未认证 SellerSprite 与无 Key `/mcp` 均 401、AppHub viewer SellerSprite 经内部 Collector 通道返回 200。Collector 内部 Key、viewer/session、JWT-only 调度与本地凭证转发均有回归覆盖。
+**影响范围**：`/api/v1/*` REST 调用方需使用 AppHub 登录态；现有 `/mcp`、`/sse` 客户端继续使用原 MCP API Key，不改变协议和 Key 校验方式。部署 SellerSprite REST 时，通用 MCP 与 Collector 需配置相同的 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。
+**回滚方式**：恢复全局 API Key 中间件、SDK 配置换取流程及 Collector 用户 Key 透传；移除 AppHub principal 和内部网关 Key 配置。
+---
+
+## 2026-09-08 tests - 删除 Keepa 与 SellerSprite debug CLI 用例
+
+**变更原因**：Keepa 与 SellerSprite 的 debug CLI 已停用，相关测试持续验证不再公开的入口并形成已知失败基线。
+**改动点**：从 `tests/keepa/test_cli_split.py` 删除 5 个 Keepa debug 用例，从 `tests/seller_sprite/test_cli_split.py` 删除 2 个 SellerSprite debug 用例及对应 import；保留正式远端 CLI 的帮助、参数隔离、任务状态、导出和远端适配器合同测试。
+**验证结果**：Keepa/SellerSprite 的 CLI split、正式 CLI、远端适配器与刷新相关回归共 `40 passed`；两个测试文件已无 debug 模块或 debug 命令引用，`git diff --check` 通过。
+**影响范围**：仅测试覆盖范围，不修改 Keepa、SellerSprite 或 debug 模块运行时代码。
+**回滚方式**：恢复两个 `test_cli_split.py` 中删除的 debug 用例和 import。
+---
+
+## 2026-09-08 Git - 合并远端 release 到 feature/sellersprite
+
+**变更原因**：当前功能分支需要同步远端 release 的 AppHub、Rufus、认证、REST API 与发布改动，同时保留 SellerSprite、JSON Lens、预取计划和统一凭据自愈能力。
+**改动点**：合并 `origin/release`，以 release 的模块化 REST 路由和 0.0.161 版本为基线；保留 SellerSprite REST 路由、局域网 CORS、认证预热/JWT 自愈、Commerce Playbooks 清单及预取计划工具，并合并双方测试断言和变更记录。
+**验证结果**：冲突标记扫描、JSON/TOML 解析和目标模块 `compileall` 通过；冲突面专项回归 `97 passed, 4 failed`，扩大回归 `1799 passed, 5 failed`。4 个 `ops-app-build-spec` 失败已在 `origin/release` 复现，另 5 个 MCP/Rufus/SellerSprite 失败已在合并前 `ORIG_HEAD` 复现，均非本次合并新增；Shopify Tool 仍有双方共同存在的 `_shopify_manager` 导入收集错误。
+**影响范围**：feature/sellersprite 分支及其继承的 release 功能；未推送远端。
+**回滚方式**：回退本次合并提交。
+---
+
+## 2026-09-08 AppHub 镜像 - 发布名称增加 release
+
+**变更原因**：基础镜像名称需要标明 release 分支，流水线旧校验仍要求已从运行镜像移除的 Node、pnpm、uv 和 UID 10001。
+
+**改动点**：已通过 Jenkins 配置页将 `opscli-ops-apphub-base-image` 任务的 `IMAGE_REPOSITORY` 改为 `ops-apphub/opscli-base-release`，继续发布提交前 6 位及 `latest` 标签；镜像验证改为 Python 3.12、构建工具不存在、UID/GID 1000、依赖目录不可写。下游模板同步镜像引用。
+
+**验证结果**：保存后重新打开配置页，完整脚本回读与预期一致；新运行环境与权限检查在本地 `localhost/opscli-base:verify-20260908` 镜像上通过，未触发 Jenkins 构建或推送镜像。新名称需等待下一次成功构建发布后可用。
+
+**影响范围**：基础镜像发布地址及运行验收；任务名、Webhook 地址、release 分支和凭证引用保持不变。
+
+**回滚方式**：将 Jenkins 的 `IMAGE_REPOSITORY` 与下游引用同时恢复为 `ops-apphub/opscli-base`；如恢复旧 Dockerfile，应同时恢复旧运行校验。
+
+## 2026-09-08 AppHub 镜像 - 分离构建工具与运行环境
+
+**变更原因**：下游应用将使用本仓库基础镜像，需要对齐 Python 3.12 与 UID/GID 1000，并避免把 Node、编译器和开发依赖带入业务容器。
+
+**改动点**：`opscli/docker/ops-apphub/template.dockerfile` 改为 Python 3.12 公共层、SDK builder 与精简 runtime；按 `uv.lock` 分层安装运行依赖和内部纯 Python SDK。opscli 仍取当前发行源码、不硬编码版本；可通过构建参数 `VCS_REF` 记录 OCI revision。最终环境由 root 持有，app 用户只读依赖、可写应用与数据目录。
+
+**验证结果**：`git diff --check` 通过。Podman 实际构建基础镜像（197,785,632 字节，Python 3.12.14 / opscli 0.0.161），`uv sync --locked` 解析 108 个包，运行环境不含 pytest/respx、Node/pnpm/uv/git/编译器；SDK 目录 6.36 MiB，无 `.c/.so/.pyd`；app UID/GID 1000 可写应用与数据目录、不可写依赖目录。下游镜像构建及 `uv pip check` 88 包一致性检查通过，新 SDK 环境运行后端快速档 131 条通过（忽略已由本地 156 条回归覆盖的 Git 绑定脚本测试），前端 11 条及本地/容器构建通过。隔离卷下 HTTP、静态资源、SQLite 初始化/WAL、健康检查与重建容器后任务持久化验证通过。未发布镜像或修改外部 Jenkins/Harbor 任务。
+
+**影响范围**：AppHub 基础镜像；最终镜像不再提供 Node、pnpm、uv 或编译工具，下游应在构建阶段自行使用。发版流程继续构建当前源码并更新 `latest`，下游构建需拉取新基础镜像。
+
+**回滚方式**：恢复本次 Dockerfile 改动并重新构建基础镜像；不修改 SDK 源码或运行数据库。
+## 2026-09-07 App - 支持空远端仓库首次推送自动创建提交
+
+**变更原因**：新建应用通过 `app init` 绑定空远端后，本地仓库尚无 HEAD；原 `app push` 在自动暂存和提交前直接返回 `GIT-NO-COMMIT`，导致默认模板无法完成首次源码推送。
+
+**改动点**：调整 `GitService.push_all()` 的检查顺序，无 HEAD 但工作区存在源码时先执行 `git add -A` 并创建初始提交；只有无 HEAD 且无任何可提交内容时继续返回 `GIT-NO-COMMIT`。新增空远端首次推送和空仓库拒绝推送的回归测试。
+
+**验证结果**：新增用例定向运行 `2 passed`；完整 `tests/app` 回归 `47 passed`；使用现有项目环境运行 Ruff 检查 `opscli/app/services/gitops.py` 与 `tests/app/test_gitops.py`，结果通过。
+
+**影响范围**：仅影响 `opscli app push` 对无 HEAD 新仓库的首次提交处理；已有提交、非 fast-forward 拒绝、binding 忽略检查和普通推送逻辑保持不变。
+
+**回滚方式**：还原本节记录、`GitService.push_all()` 的首次提交分支及对应两项测试。
+
+---
 
 ## 2026-09-09 ops-dataset-query / 组件列表与英文枚举最终收敛（v1.4.7）
 
@@ -1560,13 +1793,13 @@ Agent 在真实降级场景里拿到的多数候选根本执行不了。
 
 **切换前的对照验证**（21 条 `routing_eval_cases.json` 用例，同一套打分算法只换数据源）：
 
-| 指标 | 画像 | 意图目录 |
-| --- | --- | --- |
-| top-1 路由命中 | 16/21 | 16/21（打平，无回退） |
-| 候选可执行（能解析出 table_id） | **4/21** | **21/21** |
-| alias 有效率 | 2/15 | 36/36 |
-| 覆盖当前 44 个数据集 | 2 个（5%） | 36 个（82%） |
-| 意图条数 | 16 | 41 |
+| 指标                            | 画像       | 意图目录              |
+| ------------------------------- | ---------- | --------------------- |
+| top-1 路由命中                  | 16/21      | 16/21（打平，无回退） |
+| 候选可执行（能解析出 table_id） | **4/21**   | **21/21**             |
+| alias 有效率                    | 2/15       | 36/36                 |
+| 覆盖当前 44 个数据集            | 2 个（5%） | 36 个（82%）          |
+| 意图条数                        | 16         | 41                    |
 
 另测了「catalog + use_cases/scenario_description/priority 全信号」变体：对 21 条用例
 零增益，还把 case_013 的首选从活动数据集带偏到即时综合数据集，故**只换数据、不改算法**。
@@ -6813,111 +7046,35 @@ Skill 版本恢复为 1.3.17。
 **回滚方式**：回退本次 Skill 文档、Dashboard MCP 聚合逻辑、定向测试和本条变更记录。
 ---
 
-## 2026-07-30 Collector MCP - SellerSprite 额度设置迁移 SQL
+## 2026-07-28 skills/ops-dataset-query - 清理上一代孤儿文件 + core.py 搜索死代码
 
-**变更原因**：SellerSprite 拆分到 Collector MCP 后，新服务器需要复用生产环境的基础额度和邮箱日加额设置，但不应迁移当日已用次数。
-**改动点**：新增 `scripts/export_seller_sprite_quota_settings.sql`；在生产 quota SQLite 上执行即可生成供新服务器直接导入的 SQL，仅包含 SellerSprite policy 和 bonus 设置。补充 Collector MCP 运维步骤。
-**验证结果**：使用临时源库和目标库执行 SQL 导出、导入回归，基础策略和邮箱日加额正确迁移，Keepa 设置及 `mcp_quota_daily` 保持不变；`git diff --check` 通过。
-**影响范围**：仅新增离线运维 SQL 和说明；不改变 MCP 运行时额度逻辑和现有数据库。
-**回滚方式**：删除迁移 SQL 和运维说明，并移除本条变更记录。
----
-
-## 2026-08-03 Collector Monitor - 新增关键词反查场景测试
-
-**变更原因**：仅做连通性嗅探无法验证 API Key 是否具备 `seller_sprite_run` 权限，也无法确认真实任务能否进入 Collector 队列。
-**改动点**：新增默认关闭的场景测试开关、`GET/POST /api/v1/commands/scenario-test` 接口和独立“场景测试”Tab；服务端固定调用 `seller_sprite_run` 的 `keyword-reverse`（关键词反查）场景，仅允许修改 ASIN、站点、周期和每页数量，并强制 `export_format=json`。提交前必须显式提供临时 Key，并确认会创建真实任务和消耗额度；受保护 Key 文件只用于 Collector 探测，场景不借用。401/403 分别映射为 Key 无效和缺少场景权限。单次提交加锁且成功后冷却 10 秒，不自动重试；请求超时返回结果未知并在底层调用结束前继续持锁。Collector 探测与场景测试共用同一个可选浏览器本地 Key。
-**验证结果**：`tests/collector_monitor` 完整回归 `138 passed`；`compileall` 与 `git diff --check` 通过；浏览器验证 1440x900 和 390x844 布局无横向溢出、表单裁切或控制台错误，未提交真实任务。代码审查后补充了取消路径持锁、Monitor/Collector 明文 Key 阻断、场景强制显式 Key、ASCII/支持站点校验、流式请求体上限和稳定异常映射测试。
-**影响范围**：仅影响 Collector Monitor；功能默认关闭，不改变 Collector MCP 和既有只读监控行为。
-**回滚方式**：移除场景测试配置、服务接口、页面 Tab、测试及相关文档。
----
-
-## 2026-08-03 Collector Monitor - 自动发现企业微信 Webhook 文件
-
-**变更原因**：本地与同机部署不应每次启动都重复配置 Webhook 环境变量；经项目所有者确认，该机器人地址可作为项目默认消息接收端。
-**改动点**：新增随包分发的 `opscli/collector_monitor/wecom-webhook`，未配置环境变量时自动使用；显式 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 优先，设置为空可禁用。同步补充 wheel/sdist package data。
-**验证结果**：新增默认发现、环境覆盖和显式禁用配置测试；Collector Monitor 完整回归结果见本次交付验证。
-**影响范围**：仅影响 Webhook 文件路径解析；通知规则、去重、冷却和消息内容不变。
-**回滚方式**：恢复 `WEBHOOK_FILE` 仅从环境变量读取的逻辑，并删除本条文档。
----
-
-## 2026-08-03 SellerSprite - JSON 与 XLSX 共用格式化工作表
-
-**变更原因**：卖家精灵 JSON 导出此前直接保存接口字段，而 XLSX 使用中文列、字段 fallback、值转换和多 Sheet，导致两种格式的字段含义与数据结构割裂。
-**改动点**：新增跨格式工作表模型，将 SellerSprite 通用主表、数字显示格式、词频表、ASIN 辅助表以及流量词对比动态表收口到同一份格式化数据；普通任务与 Listing Analysis 三段式 JSON 均改为 schema v2，以 `columns + rows` 保留列顺序和重复表头，通过 `number_formats` 暴露 XLSX 同列数字格式，并通过 `additional_sheets` 表达 XLSX 辅助表；Skill 增加 JSON v2 读取规则和 AI 分析优先 JSON 的导出建议，版本升至 `v0.0.19`。
-**验证结果**：Skill 校验通过；普通 JSON、数字格式、三 Sheet 拓词、关键词挖掘、动态流量词对比以及普通/三段式 Listing Analysis 已补充 schema v2 断言；聚焦回归 `137 passed`；SellerSprite 与相关 MCP 全量回归 `523 passed, 2 failed`，两项失败均为仓库已注释 `seller-sprite-debug` 注册但既有测试仍要求该命令存在，与本次改动无关。
-**影响范围**：SellerSprite 本地格式化导出；官方原样 XLSX 场景不变。
-**回滚方式**：回退 SellerSprite 工作表模型、导出器、JSON 接入及对应测试。
----
-
-## 2026-08-04 SellerSprite - 账号源失败关闭与认证失败隔离
-
-**变更原因**：生产任务在废弃账号认证失败后可能继续使用旧本地账号，且进程重启会丢失账号不可用状态，最终表现为任务卡住或重复登录失败。
-**改动点**：生产调度器禁止远程账号源异常时静默回退本地账号，并区分账号源不可用、无合格账号、备用账号繁忙和全部凭据认证失败；SQLite 队列升级到 v7，按账号散列和凭据版本散列保存 24 小时隔离；认证失败会关闭会话并把未被 Worker 或 Chromium 锁定的持久 Profile 移入诊断隔离目录；隔离持久化失败时降级为进程内隔离，不中断已完成的任务改绑。
-**验证结果**：账号 Provider、账号池、任务队列、调度器和浏览器 Worker 聚焦回归通过；项目全量测试受仓库既有同名测试模块收集冲突及 Shopify helper 导入错误阻断，与本次 SellerSprite 改动无关。
-**影响范围**：SellerSprite 公共账号池的账号加载、故障切换、SQLite 队列 schema 和认证失败浏览器 Profile；本地显式账号调试仍保持兼容。
-**回滚方式**：回退 SellerSprite 账号 Provider、账号池、调度器、队列 v7 隔离表、Profile 隔离逻辑及对应测试；SQLite 新增表可保留，不影响旧版本读取。
----
-
-## 2026-08-04 SellerSprite - 统一 JSON 与 XLSX 场景化导出命名
-
-**变更原因**：流量词对比和 ABA 数据选品的 XLSX 已使用场景化文件名，JSON 却仍使用 job_id，同一场景的两种格式不一致。
-**改动点**：流量词对比和 ABA 数据选品的路径构造函数改为按扩展名生成跨格式主名；JSON 导出复用对应 XLSX 的场景化命名，普通场景和官方 XLSX-only 场景不变。
-**验证结果**：新增 ABA 导出格式参数化覆盖和流量对比 JSON 文件名断言；聚焦回归 `5 passed`，`test_api_manager.py` 完整回归 `39 passed`，SellerSprite 全量回归 `439 passed, 2 failed`；两项失败均为仓库既有 `seller-sprite-debug` 命令注册与旧测试期望不一致，与本次改动无关。`git diff --check` 通过。
-**影响范围**：仅影响 SellerSprite `keyword-comparison` 和 `aba-research` 新任务的 JSON 导出文件名；JSON 内容、XLSX 文件名、旧任务及其他场景不变。
-**回滚方式**：恢复 JSON 分支统一使用 `{job_id}.json`，并恢复两个场景路径函数固定生成 `.xlsx`。
----
-
-## 2026-08-04 SellerSprite - 调度消费运行时失活检测与自恢复
-
-**变更原因**：生产出现 MCP 主进程仍存活、SellerSprite 队列持续入队但无 Worker 消费的问题；现有健康检查只验证心跳协程，消费监督任务退出后仍会错误报告 ready。
-**改动点**：运行时健康摘要增加消费监督任务存活判定、当前消费错误计数和脱敏 `consumer_alive` / `consumer_error_count` 字段；Generic 与 Listing Worker 在临时领取异常后记录错误并继续消费，持续异常或默认 Listing 账号不可用期间健康状态降级；每个故障周期仅记录首条完整异常，恢复后复发才再次记录，避免高频重试形成日志风暴；消费 Supervisor 隔离单轮账号维护或会话回收异常，并立即重建意外退出的 Generic/Listing 工作槽；独立心跳发现消费监督任务意外结束时，在启动锁保护下自动重建并发布恢复后的运行态，账号池与兼容单账号路径重复启动时均复用现有心跳，避免长期等待缓存刷新、重复创建后台任务或人工重启。
-**验证结果**：新增消费监督任务退出、心跳自动重建、启动与自恢复并发、Generic/Listing 持续领取异常、单轮领取异常、持续异常日志抑制及单轮/持续维护异常回归用例，均已确认关键失败路径修改前失败；监督后端覆盖 `consumer_alive` 和 `consumer_error_count` 的 Collector 脱敏透传；监督后端与任务调度器 `63 passed`，Collector MCP `29 passed`，SellerSprite 全量 `446 passed, 3 failed`，三项失败均为仓库既有导出文件名期望及已注释 `seller-sprite-debug` 注册问题；`compileall` 与 `git diff --check` 通过（测试代码同步补齐新增覆写方法类型标注）。
-**影响范围**：SellerSprite 调度器运行时健康判断和 Collector Bundle 脱敏健康输出。
-**回滚方式**：回退调度器消费存活与错误判定、Generic/Listing 领取重试、Supervisor 单轮异常隔离、工作槽重建、启动锁自恢复，移除 Bundle 公开字段及对应测试。
----
-## 2026-08-05 SellerSprite - Collector 空闲启动延迟账号池初始化
-
-**变更原因**：Collector MCP 在没有任务和用户凭据作用域时仍周期请求 OPS 集成账号，导致终端重复输出账号接口刷新失败告警。
-**改动点**：为 SellerSprite 调度器补充空闲启动与首个公共任务的回归测试；默认远程 Provider 的首次启动及 TTL 刷新仅在公共账号池存在需求时访问账号源，空账号池收到公共任务后立即触发刷新；显式注入 Provider 继续保留启动预热语义。
-**验证结果**：修复前定向回归为 `2 failed`；修复后空闲启动测试 `2 passed`，调度器 `45 passed`、监督健康 `20 passed`、Collector Bundle 与账号审计 `12 passed`、MCP SellerSprite 工具合同 `89 passed`，相关文件 `compileall` 通过；本地环境未安装 Ruff。
-**影响范围**：SellerSprite 持久调度器启动、公共账号池刷新时机与 Collector MCP 空闲日志。
-**回滚方式**：回退本条测试、调度器刷新条件及对应变更记录。
----
-## 2026-08-06 feedback - 标准化 Observation Schema V2
-
-**变更原因**：反馈提交依赖自由结构 context，缺少统一事件标识、链路标识、耗时、重试次数和运行时信息，不利于跨来源聚合与后续周月统计。
-**改动点**：新增 Observation V2 规范化模块；FeedbackManager 的字段模式和文件模式统一写入 `context.observation`，自动补齐事件、UTC 时间、来源、操作、结果、客户端与运行时字段，并校验调用方提供的链路和数值字段；新增脱敏 taxonomy 持久化，保留有意义的状态/错误码，只归一化明确动态 ID，错误信号仅保存 SHA-256，高置信度分类跨运行命中时跳过模型；taxonomy 写入增加跨进程锁和存储身份校验；feedback insight 与 Codex 两阶段日报支持 `--taxonomy-file`；新增基于已完成日报 `manifest.json + clusters.json` 的周报/月报生成器，输出 coverage、处置快照、问题生命周期、复发和优先级理由等指标；本地浏览服务支持周报命名。
-**验证结果**：反馈域、日报、周期报告、浏览服务、部署和 Skill 契约聚焦回归 `137 passed`；`compileall` 与 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突、Shopify `_shopify_manager` 导入缺失及全局 capture 关闭异常阻断；当前环境未安装 Ruff。
-**影响范围**：feedback CLI、MCP `feedback_submit`、直接使用 FeedbackManager 的提交 payload，以及内部 `ops-feedback` / `ops-feedback-query` Skill；沿用 context JSON，不要求现有后端新增字段。本轮不包含 canonical Problem 与 GitLab Issue 映射。
-**回滚方式**：回退 Observation 规范化、taxonomy 存储与两阶段接入、周期报告生成器、浏览服务周报识别、Skill 文档/版本及对应测试。
----
-## 2026-08-07 Keepa - 支持与 XLSX 同源的 JSON 导出
-
-**变更原因**：Keepa 原先只允许 XLSX 用户导出，多任务编排和分析报告需要重复解析工作簿，缺少与可读表格一致的结构化交付格式。
-**改动点**：CLI 与 MCP 的 `export_format` 增加 `json`；提取 XLSX/JSON 共用的格式化工作表模型和唯一 Sheet 命名规则，JSON 以 `sheets.Sheet1`、`Sheet2` 顺序页保存表名、列、行数和行数据；Keepa 采集沉淀 Parser 支持该 JSON 合同并升级为 v3；同步更新 Keepa/卖家精灵 Skill 的单任务 XLS、多任务 JSON 选择指引。
-**验证结果**：Keepa JSON 导出、Manager、MCP 和采集沉淀聚焦回归 `36 passed`，新增 Sheet 名碰撞一致性测试；Keepa Skill 校验、`compileall` 和 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突及 Shopify `_shopify_manager` 导入缺失阻断；wheel 构建受本机缺少 Microsoft Visual C++ 14+ 阻断；当前环境未安装 Ruff。
-**影响范围**：Keepa CLI/MCP 导出格式、用户导出文件、采集沉淀 Parser 合同及相关 Skill；默认 XLSX 行为和内部原始 `raw.json` 不变。
-**回滚方式**：回退 Keepa JSON 导出器、共享工作表模型、格式校验、Parser v3、Skill 文档和对应测试。
-## 2026-07-28 ci - 发布流程排障：twine 增加 --verbose 并新增临时 debug workflow
-
-**变更原因**：v0.0.119 / v0.0.120 / v0.0.121 连续三次发布被 PyPI 以 400 拒绝，但 CI 日志只有 `400 Bad Request / Bad Request` 这一句，看不到根因。经本地实测确认：twine 6.2.0 在非 verbose 模式下只打印 HTTP 状态短语，服务端返回的真实拒绝原因仅出现在 `--verbose` 的响应体中（用错误 token 复现时，非 verbose 结尾行同样只有 `403 Forbidden / Forbidden`）。
+**变更原因**：ops-dataset-query 目录残留 2026-07-13「二代规划管线收敛」时应删未删的上一代孤儿——9 个 worktree 磁盘残骸（HEAD 已删除、追踪外），以及删除 search.py 后 core.py 内失去唯一消费者的关键词搜索死代码。
 **改动点**：
-- `.github/workflows/build-and-publish.yml`：`twine upload` 增加 `--verbose`，并注释说明不可删除的原因。
-- `.github/workflows/debug-publish-verbose.yml`（新增，临时排障用）：`workflow_dispatch` 触发，通过 `actions/download-artifact@v4` 的 `run-id` 跨 run 复用已有构建产物，不重新编译，直接以 verbose 模式重跑上传以捕获原始报错；排障结束后应删除。
-**验证结果**：本地已验证产物本身无问题——`twine check --strict` 对 v0.0.121 全部 8 个 macOS wheel 全部 PASSED；v0.0.121 与已成功发布的 v0.0.119 的 METADATA 逐行比对仅差版本号与 README 新增章节；847 字节探针 wheel（0.0.121.dev999）上传返回 200 OK，证明 token 与项目写权限正常。workflow 改动待 debug workflow 实跑验证。
-**影响范围**：仅影响 GitHub Actions 发布流程的日志输出，不改变构建产物、上传参数语义和发布结果；`--verbose` 不会打印 token（twine 输出 `password: <hidden>`）。
-**回滚方式**：移除 `build-and-publish.yml` 中的 `--verbose`，删除 `.github/workflows/debug-publish-verbose.yml`。
+1. 删除 9 个未追踪孤儿：scripts/route_intent.py、scripts/search.py、references/cli-simple-guide.md、references/mcp-simple-guide.md、data 下 5 个无消费 YAML（intent_taxonomy/dataset_profiles/field_semantic_index/dataset_relationships/routing_eval_cases）。
+2. core.py（关键词搜索死代码）：删除 filter_rows_by_dataset、search_rows、_tokenize、_score_row、_token_match_score 共 5 个函数（原仅服务已删的 search.py）；连带删除仅 _tokenize 使用的 `import re`；同步修正模块 docstring 与 section 注释（去除"过滤/搜索打分"表述）。保留 load_csv_rows（被 load_local_index 复用）。
+**验证结果**：`python3 -m py_compile core.py` 通过；grep 确认 5 个函数 + core.py 的 re 引用零残留；chart_map/chart_analyze/excel_export（及 _core/_mcp 变体）、updater_mcp 语法解析全部 OK；git status 该目录已无 untracked。
+**影响范围**：仅 ops-dataset-query Skill 模板；core.py 对外导出的图表/Excel/别名/升级/格式化函数全部保留，下游脚本不受影响。
+**回滚方式**：`git checkout HEAD -- opscli/skills/templates/ops-dataset-query/scripts/core.py`；被删的 9 个孤儿如需恢复，从 HEAD 之前含 route_intent.py 的历史提交（如 cfa964f 之前）checkout。
 ---
 
-## 2026-07-28 ci - Linux wheel 剥离调试符号 + 上传前单文件体积门禁
+## 2026-07-28 query/manager - simple 查询自动补齐 alias 修复后端 422
 
-**变更原因**：v0.0.119~v0.0.122 连续四次发布失败，经 CI verbose 日志确认根因为 `400 File too large. Limit for project 'aukeys-opscli' is 100 MB`。逐条目比对 v0.0.119 的 Linux 与 macOS wheel（内容完全相同、均为 232 个 .so）：macOS 解压后 30.1 MB、压缩后 11.1 MB，Linux 解压后 238.5 MB、压缩后 66.7 MB，相差 8 倍，系 setuptools 在 Linux 下默认带 `-g` 编译且 auditwheel 默认不 strip，调试符号被打进 wheel，导致 manylinux wheel 涨到 103~109 MB 超过 PyPI 单文件上限。
+**变更原因**：部门枚举等 simple 手工路线（CLI `query simple --json` / MCP `query_simple`）常只传 field 不传 alias，构建出的 dimensions/metrics 项缺 alias，后端 `/api/v1/data-metrics/cli-query/simple` 因 `dimensions.*.alias`/`metrics.*.alias` 必填（required_with）返回 422；规划器路线因 `_build_query_template` 自带 alias 而正常，掩盖了 simple 路线缺陷。
 **改动点**：
-- `.github/workflows/build-and-publish.yml`：新增 `CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} --strip"`，仅对 Linux 生效，剥离调试符号，不影响运行。
-- 同文件 publish job 新增 `Check file size limit before upload` 步骤：上传前逐个校验产物不超过 100 MB，超限则中止且不向 PyPI 发送任何文件。必要性是 twine 顺序上传、中途失败会留下已上传文件，而 PyPI 文件名用过即永久不可复用（删除后重传报 `previously used by a file that has since been deleted`），会直接废掉一个版本号。
-**验证结果**：改动前 v0.0.122 实测 4 个 manylinux wheel 分别为 103M/107M/109M/107M，全部超限；macOS 38M、Windows 36~37M、sdist 25M 均正常。strip 后的实际体积以本次 v0.0.123 构建日志的 `List dist contents` 为准。
-**影响范围**：仅影响 Linux wheel 的构建产物（不含调试符号，无法用于 gdb 符号级调试）和发布流程的前置校验；macOS/Windows 产物与包内容不变。
-**回滚方式**：删除 `CIBW_REPAIR_WHEEL_COMMAND_LINUX` 与 `Check file size limit before upload` 两处改动。
+1. `opscli/query/services/manager.py`（类 ScopedQueryManager）：新增 `_fill_simple_alias()` classmethod，对缺失/空 alias 的项以 field 末段兜底补齐（`ds_xxx.dept_name`→`dept_name`，保留原大小写，与规划器 `alias=field_name` 约定一致，无 f_ 前缀）；`build_simple()` 在组装 payload 前调用，覆盖 CLI+MCP 两条 simple 收敛点；复用现有 `_extract_simple_field_ref`；同步补 docstring。已显式 alias 的项原样保留，返回新 dict 不改入参。
+2. `tests/query/test_manager.py`：新增 3 个回归测试（缺 alias 自动补 / 带前缀取末段保留大小写 / 显式 alias 不覆盖）。
+**验证结果**：`pytest tests/query/test_manager.py -k "alias"` 相关 3 新测试全通过；`pytest tests/query/` 148 passed，仅 2 个既存基线失败（test_cli 的 catalog/intent，已 git stash 验证与本次无关）；manager.py import OK。
+**影响范围**：仅 simple 查询构建路径；规划器 `run_query_template`（template 已带 alias）不受影响；后端不改。
+**回滚方式**：`git checkout HEAD -- opscli/query/services/manager.py tests/query/test_manager.py`。
+---
+
+## 2026-07-28 dashboard - 批量队列合同与编辑分析边界
+
+**变更原因**：旧编辑规范仍要求模型规划宽度、坐标和创建后移动，并把真实数据分析与页面编辑混在同一流程，导致模型逐图调用和分析模式写页面。
+**改动点**：`ops-dashboard-ai-bridge` 升级到 `1.0.21`，新建图表统一为单次批量调用，输入只保留可选高度；选图合同改为 editor 工具；`ops-dashboard-data-analysis` 升级到 `1.0.6` 并收敛为严格只读；新增大小、重复流程和冲突扫描；本地包版本准备为 `0.0.150`。
+**验证结果**：`tests/skills/test_dashboard_skills.py` 9 项通过；版本一致性与 Dashboard MCP 规范测试 7 项通过。通用 Skill 快速校验器因不接受项目发布所需的 `version/compatibility` frontmatter 报规则不兼容。完整 wheel/sdist 清单检查被本机无 Git 跟踪文件的残留目录 `ops-methods-card`、`ops-test-form` 阻断；Dashboard 两个 Skill 的发布 profile 矩阵已由定向测试验证通过。
+**影响范围**：两个 Dashboard 内置 Skill、对应模板测试和本地 release 版本元数据；未修改 MCP/ops-agent 逻辑，未发布线上版本。
+**回滚方式**：回退本次四份 Skill 文档、两个 VERSION、模板测试、包版本和本条变更记录。
 ---
 
 ## 2026-07-29 skills/ops-dataset-query - 修复 Windows GBK 环境下的编码崩溃
@@ -7794,11 +7951,11 @@ merge-base 复现完全相同的 filters，属既存缺陷。
 **变更原因**：形态/词表碰撞扫描（拿账号真实授权枚举 1436 个值 + 2038 个字段标签
 与各字段形态/词表做交叉命中）找出三个生产值会被误读，均已实测确认：
 
-| 真实授权值 | 字段 | 命中词 | 实测后果 |
-|---|---|---|---|
+| 真实授权值       | 字段     | 命中词             | 实测后果                                   |
+| ---------------- | -------- | ------------------ | ------------------------------------------ |
 | `亚马逊-运营C组` | 销售小组 | `亚马逊`(platform) | 凭空多出平台范围 `['亚马逊SC','亚马逊VC']` |
-| `SC-BCH-0002` | 产品型号 | `sc`(amazon_sc) | 凭空多出平台范围 `['亚马逊SC']` |
-| `SD-51709` | 渠道SKU | `sd`(ad_type) | 选表候选归零，dataset 未定，查询彻底不可用 |
+| `SC-BCH-0002`    | 产品型号 | `sc`(amazon_sc)    | 凭空多出平台范围 `['亚马逊SC']`            |
+| `SD-51709`       | 渠道SKU  | `sd`(ad_type)      | 选表候选归零，dataset 未定，查询彻底不可用 |
 
 前两者是静默缩范围（组件值本身正确锁定，但多出用户从未提的平台口径，
 披露还会声称"本次默认按亚马逊SC + 亚马逊VC处理"）；第三者更重——
@@ -9406,6 +9563,207 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：删除新增脚本及对应输出目录，并移除本条变更记录。
 
 ---
+## 2026-08-31 AppHub - 新增 D9 Git 直连发布命令
+
+> 历史中间态：该命令形态已于 2026-09-01 被三指令方案取代，最终仓库与发布行为以 2026-09-03 的“一站点一仓库与正式发布闭环”为准。
+
+**变更原因**：用户在 Codex 中完成站点开发后，需要通过 opscli 将项目按 AppHub 当前 D9 架构推送到应用仓库，并显式创建 release、持续读取部署状态；原仓库没有 `opscli app` 命令和本地 Git/gitleaks/SSE 编排。
+
+**改动点**：新增 `opscli app publish [PATH] -m/--message`、`--resume`、`--json`，以及 `opscli app git status/bind/revoke`；严格同构校验 `app.yaml` 并在任何 Git 副作用前阻断 Codex Node/static 项目；实现 Git 2.30 前置检查、受控 credential helper、Windows ACL/POSIX 0600、gitleaks 工作区与领先提交双扫描、NOOP、普通 commit/非强制 push、AppHub 无 Cookie session 客户端、SSE 去重与 release id 双通道校验、原子发布句柄和断线续订。新增 PyYAML 直接依赖、使用指南和 `tests/app/` 专项回归。
+
+**验证结果**：`.venv\\Scripts\\python.exe -m pytest tests/app -q -p no:cacheprovider` 通过 22 项；`python -m compileall -q opscli/app` 通过。当前工作区 `.git` 元数据不可用，无法执行可靠的 `git diff --check`；改用编译、专项测试和文本检查完成验证。真实 AppHub/Gitea/Coolify、真实 gitleaks 二进制分发哈希和 Windows 全链路仍需在联调环境验收。
+
+**影响范围**：新增独立 `app` 命令组并在顶层注册，不改变现有 auth/query/skills 等模块；当前仅支持 AppHub MVP 的 streamlit/fastapi/gradio，Node/static Codex 站点会明确失败，不会产生 commit/push。
+
+**回滚方式**：该历史中间态不再单独回滚；如需回退当前实现，应以 2026-09-03 最终条目的回滚边界为准，已经产生的普通 Git commit/push 不自动回退。
+
+---
+
+## 2026-09-01 AppHub - 精简为 create/init/push 三指令
+
+> 历史中间态：本条只记录用户命令面收敛过程；最终仓库地址、Git 凭据和 release/SSE 行为以 2026-09-03 条目为准。
+
+**变更原因**：Codex 站点面向用户只需要创建并绑定站点、初始化 Git 项目和一键推送发布。原 `opscli app` 暴露的运行时 SDK、校验、扫描、版本运维和应用管理命令超出第一阶段需求并增加维护成本。
+
+**改动点**：命令树收敛为 `opscli app create/init/push`；新增 `.opscli/app.json` 本地绑定；空目录获取模板，已有项目跳过模板且不覆盖源码；删除旧 `publish/run/validate/pull/versions/rollback/logs/git/env/secret/members/db` 等用户命令。该步骤形成的过渡实现随后于 2026-09-03 升级为 AppHub 独立仓库、受控 Git 凭据和由 `app push` 内部执行的 release/SSE 闭环。
+
+**影响范围**：这是 `opscli app` 的破坏性精简，旧 `publish/run/validate/pull/versions/rollback/logs/git/env/secret/members/db` 命令不再提供；其他 opscli 模块不受影响。
+
+**回滚方式**：不恢复已经删除的旧用户命令；如需回退当前实现，应以 2026-09-03 最终条目的回滚边界为准，源码普通 Git commit/push 不自动回退。
+
+---
+
+## 2026-09-01 query/api - 取数模块全量 CLI 指令支持 REST API，api 模块重构为 FastAPI 规范结构
+
+**变更原因**：产品化场景需要通过 HTTP API 调用取数能力，此前 REST 外壳只开放了 query/flow 一个端点；同时 api/app.py 单文件已承载合同、路由、业务转换混排，需要按 FastAPI 规范拆分目录。
+
+**改动点**：
+- `opscli/api/` 重构为规范结构：`app.py`（应用工厂，create_api_app/wrap_mcp_app 入口签名不变）、`routers/`（health/query/keepa 三个 APIRouter）、`schemas/`（query/keepa 请求合同，extra="forbid"）、`deps.py`（require_authenticated_user/build_query_manager 共享依赖）、`errors.py`（统一 success/data/error 信封、ApiAuthError/RequestValidationError 异常处理器、domain 异常→400/404/503/502 状态码映射）
+- 新增 12 个 query 端点对齐全部 CLI 指令：plan/flow/preferences/metadata/catalog/intents/match/run/build/simple + charts/{uuid} 三件套；文件传参（--payload/--query-file）改 JSON 请求体，落盘参数（--result-file/--save-result/--output）与 skills_dir 等服务端本地路径不进 REST 合同
+- `QueryManager` 新增 `run_payload()`（dict 直执行，run() 委托之）；`_inner_result_error`/`_field_level_reasons` 从 commands/cli.py 下沉为 `services/result_errors.py`（CLI 与 REST 共用）；`mcp/tools/helpers._query_manager` 增加可选 timeout 参数
+- keepa 场景表保持公开端点，keepa/run 与全部 query 端点要求已验证账号（401 统一信封）
+- 测试：更新 tests/api/test_app.py 打桩位置；新增 tests/api/test_query_routers.py（39 项：鉴权边界/合同转换/错误映射/内层失败语义）与 tests/query/test_run_payload.py（6 项）
+
+**验证结果**：`uv run pytest tests/api tests/query tests/mcp`（排除 4 个 HEAD 上既有损坏用例：test_flow_parity、test_shopify_tools 收集失败，test_pure_units 缺 intent_rules.json、test_seller_sprite_proxy 遥测断言——已用 git stash 验证与本次改动无关）757 passed；OpenAPI 自检确认 15 路径（12 query + 2 keepa + health）；wrap_mcp_app 组合后 health/MCP 路由鉴权行为不变。E2E 验收：① 真实 uvicorn 进程（API Key 中间件全栈）18/19 通过，唯一未过项为脚本断言错误（未认证请求 401 先于 body 校验 422，属正确的安全顺序，422 合同已由已认证单测覆盖）；② stdio 模式真实后端链路 8/8 通过——preferences/metadata/catalog/intents 真实远端调用、simple 真实执行返回 5 行（totalCount=4542）、后端业务错误（缺时间范围）正确映射为 502 统一信封、CLI 与 API 同源 parity 一致。
+
+**影响范围**：REST API 面（新增端点）；CLI 输出行为不变（simple 的内层错误提取逻辑仅迁移位置）；MCP 工具不受影响（_query_manager 新参数向后兼容）；既有调用 create_api_app/wrap_mcp_app 的 opscli-mcp 启动链无需改动。
+
+**回滚方式**：还原 opscli/api/ 目录至单文件 app.py、opscli/query/commands/cli.py、opscli/query/services/manager.py、opscli/mcp/tools/helpers.py 及两个测试文件，删除 opscli/api/{routers,schemas,deps.py,errors.py}、opscli/query/services/result_errors.py、tests/api/test_query_routers.py、tests/query/test_run_payload.py。
+
+---
+## 2026-09-01 docs - 新增 SDK 调用规范与 SDK 使用文档
+
+**变更原因**：opscli 已从"CLI 工具"扩展为"CLI + SDK"双形态（40+ 子模块），但缺少统一的 SDK 调用约束与面向使用者的 API 参考文档；且"授权使用显式调用"原则（显式发起/显式传入/显式检查）此前仅散落在显式授权中间件设计文档中，需要上升为 SDK 层的强制规范。
+
+**改动点**：
+- 新增 `docs/spec/SDK调用规范.md`：确立"授权使用显式调用"核心原则（E-1~E-5）；定义三种合法授权方式（A 本地登录态 / B 无状态显式凭证 / C 进程级显式凭证上下文）及优先级与选型决策；统一鉴权调用规范（`build_request_auth` 单点、禁止行为表）；Client/Manager 构造范式（auth_client/jwt/session_id）；平台自有凭证模块的例外清单（keepa/seller_sprite/google_trends/xiyou/sif/scrape_do/notify、app 运行时 OpsClient）；异常处理与 407 环境一致性说明；测试规范与合规自查清单；各模块鉴权速查表。
+- 新增 `docs/guide/SDK使用文档.md`：安装、快速开始、三种显式授权方式操作步骤（含 CLI 全局参数 `--session-id/--ops-jwt-token/--polaris-jwt-token`）、AuthClient 全量 API 参考（11 个方法的签名/返回/示例）、显式凭证上下文 API、业务模块 SDK 总览（走 AuthClient 与平台自有凭证两类）、QueryManager 查询示例、典型场景（脚本/定时任务/多租户服务端）、异常参考表、Token 生命周期（session 30 天、JWT 7200s/上限 86400s、刷新阈值 300s）与凭证存储、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——AuthClient 方法面与 `opscli/auth/__init__.py` 一致；ExplicitCredentials/CLI argv 注入与 `opscli/auth/context.py`、`opscli/cli.py:180-248` 一致；各模块 SDK 类与构造签名经 Explore 代理逐模块核对源码（shopify/query/shared/integration_accounts 等）；Token TTL 常量与 `opscli/auth/core/token_manager.py:54-56,123-125` 一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI 行为或测试。
+
+**回滚方式**：删除 `docs/spec/SDK调用规范.md`、`docs/guide/SDK使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
+## 2026-09-02 docs - 新增 API 调用规范与 API 使用文档
+
+**变更原因**：0.0.129 起 opscli-mcp 以服务端形态对外提供 REST API（query 全量指令 + keepa 场景），网站与业务系统将直接通过 HTTP 集成，但缺少统一的 API 调用约束与端点参考文档；同时需要把"授权显式调用"原则延伸到 API 形态（身份只来自传输层 API Key，不接受请求体自报凭证）。
+
+**改动点**：
+- 新增 `docs/spec/API调用规范.md`：服务形态边界（opscli-mcp 组合服务 / stdio 无 REST / collector 系列纯 MCP / create_api_app 裸应用须外挂鉴权）；鉴权规范 A-Auth（API Key 三种传递位置、固定 Key 与远程校验两模式、401/503 语义、身份不自报、隔离目录、重试纪律）；统一信封规范 A-Envelope（success/data/error、query/simple 内层 200+success=false 特例、状态码语义表、错误信息脱敏边界）；请求合同规范 A-Contract（extra=forbid、无本地路径参数、结构化优先、timeout≤300/limit≤500000 显式上限、分页纪律 P-1/P-2、keepa 幂等 job_id 与额度治理）；安全规范 A-Security（Key 只显示一次、HTTPS、日志脱敏、CORS 约束、权限白名单）；部署与扩展规范 A-Deploy（schemas/ 合同先行、MCP 与 REST 同源、错误映射、版本演进纪律）；客户端合规自查清单与端点鉴权速查表。
+- 新增 `docs/guide/API使用文档.md`：服务简介与 15 端点概貌、单用户/多用户两种启动方式、业务账号准备（MCP auth 登录）、快速开始（curl flow 示例）、鉴权说明、统一信封与错误码速查、全部端点逐一参考（参数表 + curl/JSON 示例：plan/flow/preferences/metadata/catalog/intents-match/run/build/simple/charts 三件套/keepa 两组）、4 个典型对接流程（一句话取数、三步精确查询、图表直连、错误处理伪代码）、FAQ。
+- 更新 `CLAUDE.md` 文档索引，追加两条目。
+
+**验证结果**：文档内容经代码核对——15 个端点与 `opscli/api/routers/{query,keepa,health}.py` 一一对应；请求合同字段/上限与 `opscli/api/schemas/{query,keepa}.py` 一致（MAX_QUERY_LIMIT=500000、MAX_QUERY_TIMEOUT=300、extra="forbid"）；鉴权中间件行为与 `opscli/mcp/auth_middleware.py` 一致（三种 Key 提取顺序、固定/远程两模式、401/503 响应体、60s 新鲜期/300s 宽限）；启动参数与 `opscli/mcp/app_factory.py run_mcp_app` 一致（--transport/--host/--port/--auth-verify-url，默认端口 8765，collector_mcp 无 app_wrapper 故无 REST）；身份解析与 `opscli/mcp/tools/helpers.py` 一致（remote transport 邮箱 / fixed 隔离缓存 / stdio 共享默认存储）；用户管理与 `opscli/mcp/cli.py`（user list/add/remove/rotate，Key 只显示一次）一致。纯文档变更，无代码改动，无需运行测试。
+
+**影响范围**：仅新增文档与索引，不影响任何运行时代码、CLI/API 行为或测试。
+
+**回滚方式**：删除 `docs/spec/API调用规范.md`、`docs/guide/API使用文档.md`，还原 `CLAUDE.md` 文档索引两行及本条变更记录。
+
+---
+
+## 2026-09-02 skills - ops-app-build-spec 按后端规范文档补齐 FastAPI + SQLite 规范与项目模板
+
+**变更原因**：`ops-app-build-spec` 的 `references/backend-standard.md` 只有 65 行，目录结构（`app/db/`、`/api` 前缀）与团队新发布的《FastAPI后端开发通用规范》《SQLite数据库使用通用规范》《AI开发通用规范 CLAUDE.md/AGENTS.md》以及 OPSCLI SDK/API 规范不一致，AI 按 Skill 初始化后端时缺少可执行的规范依据与项目级 CLAUDE.md 模板。用户中途收窄范围：不做脚手架脚本与代码模板，只沉淀规范文档。
+**改动点**：
+- 重写 `references/backend-standard.md`（技术栈、目录、分层事务、API、异常日志、配置、定时任务、迁移、测试、容器、验收）；新增 `references/sqlite-standard.md`（路径、PRAGMA、`BEGIN IMMEDIATE`、单写者、Alembic batch、类型命名、备份恢复、安全）、`references/backend-redlines.md`（合并 26 条铁律 + FastAPI 附录 D + SQLite 硬规则，统一编号 62 条）、`references/opscli-integration-standard.md`（方式 B 每请求 Manager、cookie `polarisUserToken` / `X-Session-Id` 鉴权依赖、异常映射、REST 重试纪律）。
+- 小改 `initialization-standard.md`（`/health` 存活 + `/ready` 就绪、前缀 `/api/v1`、指向后端规范落地）、`deployment-standard.md`（`uv sync --locked --no-dev`、healthcheck 用 `/ready`）、`migration-standard.md`。
+- 新增 `assets/backend/`：`AGENTS.md`（路径固定，追加 4 份 OPSCLI 文档）、`CLAUDE.md`（基于用户提供模板做 SQLite/uv/ops-app 特化，新增 4.8 opscli 接入，保留项目特化 `〈…〉` 占位符）、`docs/开发指南/` 6 份全文（FastAPI、SQLite 来自用户文档；4 份 OPSCLI 文档复制自仓库 `docs/spec`、`docs/guide`，仅改写头部相对链接）。
+- `SKILL.md`：description、Reference 路由、`初始化后端` 意图、新增 4.1 后端规范落地流程、输出规范补充。
+- `data/VERSION.json` v0.0.1 → v0.0.2；`tests/skills/test_ops_app_build_spec_skill.py` 同步版本断言并新增 3 个测试（后端 references 契约、模板占位符状态、OPSCLI 文档漂移守卫）。
+**验证结果**：`pytest --noconftest tests/skills/test_ops_app_build_spec_skill.py`：12 passed（本机 .venv，Python 3.13）。`validate_release_manifest()` 返回空；`SkillsManager.install` 冒烟确认 `assets/backend/` 6 份文档与 2 份模板随安装复制。注意：`tests/skills/conftest.py` 依赖的 `ops-dataset-query/scripts/enum_cache.py` 在 release 分支不存在，整个 `tests/skills` 目录在不加 `--noconftest` 时全部 ERROR，为预存问题，与本次改动无关。长期记忆 MCP 本会话连接失败，未写入 MCP，恢复后补录。
+**影响范围**：仅 `ops-app-build-spec` Skill 内容与其契约测试；不涉及 opscli 运行时代码、打包配置与其他 Skill。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-app-build-spec tests/skills/test_ops_app_build_spec_skill.py` 并删除新增的 `assets/backend/` 与 3 份新 references。
+---
+
+## 2026-09-03 AppHub - 接入一站点一仓库与正式发布闭环
+
+**变更原因**：共享源码仓库无法满足“一站点一仓库”、独立权限、版本追踪和发布回滚要求；同时旧 `push` 只执行 Git 推送，没有形成 AppHub release 与 SSE 进度闭环。
+**改动点**：移除 `OPSCLI_APP_REPO_URL` 及固定共享仓库作为仓库事实源的逻辑；`POST /api/apphub/v1/apps` 创建或返回站点独立仓库，`GET /api/apphub/v1/apps/{slug}/git-config` 返回并刷新完整 `repo_url`；每个站点绑定独立的 `apps/{slug}` 和 `main`；`app push` 在普通 fast-forward Git push 成功后比较 release baseline，按需调用 AppHub release 并通过 SSE 跟踪进度；AppHub 服务根地址统一且仅使用 `OPSCLI_APPHUB_URL`；建站模板统一使用 `OPSCLI_APP_TEMPLATE_REPO` 与 `OPSCLI_APP_TEMPLATE_BRANCH`，当前地址为 `http://10.1.13.143:3000/aukeys-admin/template.git`、分支为 `main`。空项目按当前环境配置拉取模板，已有源码保留原模板元数据；模板 fetch 显式禁用 Git credential helper，避免复用站点仓库 token。预发布和生产当前暂定使用同一组 AppHub 与模板配置，正式域名确定后分别替换对应生产配置。
+**验证结果**：`python -m pytest tests/auth/test_config.py tests/app -q -p no:cacheprovider` 通过，`34 passed`；`python -m compileall -q opscli/app opscli/auth/config.py` 通过；AppYaml、binding v1 到 v2 迁移、独立 `repo_url`、模板配置优先级、空项目模板刷新、已有源码模板元数据保留、匿名模板 fetch、Git 凭据、origin/main 初始化、non-fast-forward 阻断、NOOP、release 与 SSE 续订均有专项覆盖。
+**影响范围**：影响 `opscli app create/init/push`、AppHub 与模板地址配置、站点本地 binding 和 Git origin；不增加新的用户命令，不增加同义环境变量，不在 opscli 中保存 Gitea 管理凭据。
+**回滚方式**：回退 AppHub 客户端、模板统一配置、binding v2、Git 凭据与发布编排相关改动；已经绑定到独立仓库的站点不得自动回退到共享仓库，需由管理员逐站点确认迁移策略。
+---
+
+## 2026-09-03 opscli app - 固化全新项目模板先行建站流程
+
+**变更原因**：全新项目如果先由 Codex 或 Skill 写入 assessment、README、前后端或部署文件，再执行 `opscli app init`，目录会被识别为已有源码并跳过模板，导致标准模板失去代码基线意义，并可能产生两套冲突脚手架。
+
+**改动点**：新增 `docs/design/2026-09-03-opscli-app模板先行建站流程需求定稿.md`；`ops-app-build-spec` 增加新项目模板门禁，要求全新项目在任何文件写入前执行 `opscli app create → opscli app init`，模板成功后重新盘点并在模板上开发，不再运行 `create-vue` 生成替代脚手架；应用身份统一从 `.opscli/app.json.app_id/slug` 同步并校验到 `ops-app.config.appId/appName`，首次发布不再调用未定义的注册工具；`ops-app-data-builder` 增加 binding、模板结构和项目身份前置检查，未初始化空项目不得生成数据层；同步两个 Skill 的 UI 元数据、版本、契约测试和使用文档。用户命令仍固定为 `create/init/push`，现有 AppHub API、模板拉取 Python 行为和 release/SSE 闭环不变。
+
+**验证结果**：`python -m pytest tests/auth/test_config.py tests/app -q -p no:cacheprovider` 通过，`34 passed`；`python -m pytest tests/skills/test_ops_app_build_spec_skill.py tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest` 通过，`20 passed`；两个 Skill 分别通过 skill-creator `quick_validate.py`。直接加载 `tests/skills/conftest.py` 的测试命令仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻塞，本次未修改该无关问题。
+
+**影响范围**：影响全新 opscli app 项目的 Codex/Skill 执行顺序、项目身份来源和数据层启动前置条件；不改变已有源码项目的保留策略，不修改 AppHub、Gitea 或发布服务。
+
+**回滚方式**：回退两个 Skill、版本、测试和对应流程文档；无需回滚 AppHub 应用、站点仓库、binding 或已经推送的源码。
+
+---
+
+## 2026-09-03 opscli app - 固化自然语言新建站点编排
+
+**变更原因**：用户在 Codex 中通常通过“新建站点”“新建看板”“从零开发运营数据应用”等自然语言表达建站意图。最新同步的 `ops-app-build-spec` 仍允许自行初始化空项目并运行 `create-vue`，可能在 `opscli app init` 前写入文件，导致标准模板被跳过。
+
+**改动点**：新增 `docs/design/2026-09-03-opscli-app自然语言建站编排需求定稿.md`；`ops-app-build-spec` 升级到 `v0.0.4`，作为自然语言建站的统一入口并增加新项目模板门禁；阶段 0 只编排 `opscli app create → opscli app init`，首次初始化确认 `template_applied=true` 后，同一个 Skill 才进入正式盘点和开发；`initialization-standard.md` 改为模板先行规范，不再运行 `pnpm create vue` 或复制第二套脚手架；已有源码项目继续保留现有代码并跳过模板。同步 AppHub 使用指南、开发规范、数据层需求文档、既有模板先行定稿、Skill 版本和契约测试。`opscli app` Python 行为、三个用户命令、AppHub API、环境配置和 release/SSE 闭环均未修改。
+
+**验证结果**：模板先行元数据、初始化门禁和安装契约测试 `3 passed`；`ops-app-data-builder` 回归 `10 passed`；`tests/app` 回归 `21 passed`；Skill Creator 使用 Python UTF-8 模式校验通过。`ops-app-build-spec` 全量契约当前为 `5 passed, 5 failed`，剩余失败来自 Git 同步后既有的 Compose/Nginx 旧测试与当前 Nixpacks 单应用内容不一致，以及既有“无后端”迁移断言，不属于本次自然语言模板先行范围。
+
+**影响范围**：影响 Codex 对全新站点意图的执行顺序和 `ops-app-build-spec` 的空项目入口；不影响已有项目、`opscli app` 运行时代码、AppHub、Gitea 或已发布站点。
+
+**回滚方式**：回退 `ops-app-build-spec` 的模板门禁、初始化 Reference、版本与相关文档测试；无需回滚应用、仓库、binding 或发布记录。
+
+---
+
+## 2026-09-04 mcp/query + ops-dataset-query Skill - 币种改为可传的服务端换算参数，并纠正"币种=字段"的错误心智
+
+**变更原因**：用户以"不走规划器"手工路线要求"分别用美元和欧元查昨天销售额和毛利"时，Agent 先去 `query_metadata` 里找 `currency` 维度字段，没找到就判定"综合数据集不支持按币种查询"。根因有两条：
+① 代码层——`QueryManager.build_simple()/build()` 早已支持 `global_currency`（写 payload 顶层 `globalCurrency`）、CLI 也有 `--global-currency`，但 MCP 的 `query_simple` / `query_build` / `query_build_and_run` 三个工具都没暴露该参数，MCP 手工路线实际无任何方式传币种；
+② 文档层——SKILL 让 MCP "改用 `query_run` 手写 payload"，而 MCP-only 环境既无写文件能力、`query_build` 也没有该参数，这条指引不可执行；同时 `field_semantic_index.yml` 的 `currency` 规则写反（"用户提到美元时使用原币字段"），把币种引导成字段选择问题。
+
+**改动点**：
+- `opscli/mcp/tools/query.py`：`query_simple` / `query_build` / `query_build_and_run` 各新增 `global_currency` 参数并透传至 `QueryManager`（内核已就绪，仅缺签名）；docstring 补【币种】说明——币种是服务端换算参数，不是维度/筛选字段，元数据无 `currency` 字段属正常，多币种须逐币种各调用一次。
+- `tests/mcp/test_query_tools.py`：新增 3 个用例，覆盖 `query_simple` 透传、不传时为 `None`、`query_build` / `query_build_and_run` 透传。
+- Skill `opscli/skills/templates/ops-dataset-query/`：
+  - `SKILL.md` 铁律十五改标题与首条为正面定义（"币种是服务端换算参数，不是字段"），补 CLI / MCP / 手写 payload 三种传法对照表；工作流第 5 步同步 MCP 传法。
+  - `QUERY_SPEC.md` 新增核心铁律第 15 条、第七章参数表补 `global_currency` 行并新增「币种 global_currency（换算参数，不是字段）」小节（含双币种示例）、第十章歧义表把"原币 vs CNY"限定为字段口径歧义、第十四章自检清单补币种参数项。
+  - `references/simple-query-guide.md` 参数表 MCP 列由"暂无该参数"改为 `global_currency`；「全局币种」章节补"它不是字段"条目与 MCP 传法；MCP 段旧备注（指路 `query_run` 手写 payload）改写为可执行示例。
+  - `references/rules.md` 第四章开头新增"换算参数 vs 字段口径歧义"边界说明，处理策略补 MCP 传法；第九章自检清单与 15.4 币种口径同步。
+  - `data/field_semantic_index.yml` 修正 `currency` 歧义规则；`amount_original_currency_keywords` 移除"美元/USD"，新增 `target_currency_keywords` 与 `currency_conversion_rule`。
+
+**验证结果**：
+- `pytest tests/mcp/test_query_tools.py -q` → 5 passed（新增 3 例）。
+- 端到端（无网络）：`QueryManager.build_simple(global_currency="eur")` → payload `{'tableId': 1, ..., 'globalCurrency': 'EUR'}`；`HKD` 抛 `不支持的币种: HKD，仅支持 USD/GBP/CAD/EUR/JPY/CNY`；不传时 payload 无该键。
+- `pytest tests/mcp/ tests/query/ -q`（排除 2 个预存收集错误）→ 6 failed / 681 passed，6 条失败在 stash 掉本次改动后同样复现，属预存基线。
+- YAML 与 Python 语法均校验通过。
+
+**影响范围**：MCP 手工取数路线（不走规划器）现可按币种取数与做多币种查询；CLI 与规划器路线行为不变；Skill 文档口径统一。未改动版本号（`VERSION.json` / SKILL frontmatter 当前 1.3.19 为工作区既有改动），远端发布前需按发布流程 bump。
+
+**回滚方式**：`git checkout -- opscli/mcp/tools/query.py tests/mcp/test_query_tools.py opscli/skills/templates/ops-dataset-query/`（本次改动均为未提交工作区变更）。
+
+---
+
+## 2026-09-04 ops-dataset-query Skill - 基于合并 master 后的最新基线重做币种优化，并补齐 CLI 脚本/提问指南两处缺口
+
+**变更原因**：上一版币种优化基于合并 master 之前的 Skill 文档，release 合并 master 后 Skill 目录整体切换为 master 版，文档侧改动被覆盖（`opscli/mcp/tools/query.py` 的 `global_currency` 参数随 release 提交保留）。按最新基线重做，同时新基线暴露出两处上一版未覆盖的缺口：Skill 转发脚本 `scripts/query.py` 的 `simple` 子命令没有 `--global-currency`（走脚本路径同样无法传币种）；`references/ask-user-question-guide.md` 3.4 节把"用户提到美金/USD"列为提问触发条件，与同节"直接传参不必再问"自相矛盾，会把目标币种换算误导成需要澄清的字段口径问题。
+
+**改动点**（均在 `opscli/skills/templates/ops-dataset-query/`）：
+- `scripts/query.py`：`simple` 子命令新增 `--global-currency` 并转发给 `opscli query simple`，白名单校验仍由 opscli 负责；模块 docstring 补用法示例。
+- `SKILL.md`：铁律十五改为正面定义（币种是换算参数不是字段），传法对照表覆盖 MCP / CLI / Skill 脚本 / 手写 payload 四种；工作流第 5 步同步。
+- `QUERY_SPEC.md`：新增核心铁律第 15 条；第七章参数表补 `global_currency` 行并新增「币种 global_currency（换算参数，不是字段）」小节（含双币种示例）；第十章歧义表把"原币 vs CNY"限定为字段口径歧义；第十四章自检清单补币种参数项。
+- `references/simple-query-guide.md`：参数表 MCP 列由"暂无该参数"改为 `global_currency`；补"它不是字段"条目与四种传法；MCP 段旧备注（指路 `query_run` 手写 payload，MCP-only 不可执行）改为可执行示例。
+- `references/rules.md`：第四章开头新增"换算参数 vs 字段口径歧义"分流说明；处理策略补 MCP 传法；第九章自检清单与 15.4 同步。
+- `references/ask-user-question-guide.md`：3.4 币种改为分流表——目标币种换算不问直接传，原币/`_cny` 字段口径才用 AskUserQuestion。
+- `references/cli-simple-guide.md`：`opscli query simple` 选项表补 `--global-currency`，并加双币种执行示例。
+- `data/field_semantic_index.yml`：修正写反的 `currency` 规则；`amount_original_currency_keywords` 移除"美元/USD"，新增 `target_currency_keywords` 与 `currency_conversion_rule`。
+
+**验证结果**：
+- `pytest tests/mcp/test_query_tools.py -q` → 5 passed。
+- 端到端（无网络）：`QueryManager.build_simple(global_currency="eur")` → payload 含 `'globalCurrency': 'EUR'`；`HKD` 抛「不支持的币种」；不传时 payload 无该键。
+- Skill 脚本：`build_command` 产出 `... --json ... --global-currency USD --run --pretty`，`python3 scripts/query.py simple --help` 正常显示新选项。
+- 残留错误表述扫描（"暂无该参数""使用原币字段"等）→ 无残留；币种传法已覆盖 SKILL.md / QUERY_SPEC.md / 4 个 references / field_semantic_index.yml / scripts/query.py。
+- YAML 与 Python 语法校验通过。
+
+**影响范围**：MCP、CLI、Skill 脚本三条手工取数路线的币种传参与文档口径统一；规划器路线不变。未改动版本号。
+
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/`（本次改动均为工作区未提交变更）。
+
+---
+
+## 2026-09-04 ops-app-data-builder Skill - 统一 Keepa 与 SellerSprite 线上取数根域名
+
+**变更原因**：Keepa 与 SellerSprite 的线上取数服务已经确认统一使用 `https://ops.mcp.xenkee.com`，但当时的 Skill 只约束两者共用一组通用第三方数据 API 根地址与密钥变量，未锁定生产根域名、纯根域名格式和统一 URL 拼接方式，生成站点仍可能出现 provider 专属 Base URL、重复 `/api/api` 或配置漂移。
+
+**改动点**：`ops-app-data-builder` 明确当时通用第三方数据 API 根地址变量的生产默认值和纯根域名约束，要求 Keepa 与 SellerSprite 共用同一个 `ThirdPartyApiClient`，统一使用 `base_url.rstrip("/") + path` 拼接固定接口路径；对应密钥变量继续只从后端 Secret 注入并在缺失时快速失败。运行时路由文档补充生产环境变量和三个主要线上完整地址，数据层合同补充统一来源配置字段；Skill 版本由 `0.1.4` 升至 `0.1.5`，同步更新静态评估和契约测试。URL 安全断言由禁止所有 HTTPS 地址收紧为只允许 `https://ops.mcp.xenkee.com` 白名单。`opscli app` 的 AppHub 控制面配置未修改。
+
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/skills/test_ops_app_data_builder_skill.py -q -p no:cacheprovider --noconftest --basetemp .tmp/pytest-ops-app-data-builder-noconftest` 通过，`10 passed`；`ops-app-data-builder.json` 与 `data/VERSION.json` JSON 解析校验通过。直接加载 `tests/skills/conftest.py` 仍受仓库既有缺失模块 `ops-dataset-query/scripts/enum_cache.py` 阻断，因此沿用既有基线使用 `--noconftest` 验证。
+
+**影响范围**：影响后续由 `ops-app-data-builder` 生成或改造的站点第三方数据 Client 配置；不影响 AppHub 控制面、现有 Keepa/SellerSprite CLI/MCP 调用和已发布站点。
+
+**回滚方式**：回退 `ops-app-data-builder` 的 Skill、Reference、版本、静态评估和测试改动即可；无需修改 `opscli/app` 或 AppHub 配置。
+
+---
+
 ## 2026-09-07 tests - 测试与回归脚本对齐"规划器内核唯一"现状
 
 **变更原因**：ops-dataset-query Skill 的本地规划器脚本（query_plan.py / agent_query_planner.py / dataset_guidance.py / time_scope.py / typed_schema_linking.py / scoped_dataset_reader.py / enum_cache.py / run_query.py / query_flow.py / local_fallback.py 等）及其 data 静态资源已被移除，规划器改为只使用内核 `opscli/query/services/planner/`。tests/skills 下 20 余个测试文件与 3 个回归脚本仍 import 这些已删除模块，`tests/skills/conftest.py` 的 autouse fixture 也在 import `enum_cache`，导致整个 tests/skills 目录全部 ERROR、`tests/query/planner/test_flow_parity.py` 收集失败。
@@ -9530,6 +9888,1265 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：规划合同新增键 `execution_ref.snapshot_policy`、`model_view.field_alias_mappings_zh`、澄清码 `snapshot_metric_window_conflict` / `dimension_not_in_dataset`；执行结果新增 `result_disclosures.freshness_disclosure_zh`，`order_disclosure_zh` 文案改为中文标签；快照指标多日请求的时间过滤由多日改为单日；趋势/时间粒度查询多一条 `orderBy`；图表执行结果多 `evidence_contract` 键；未授权国家点名的请求由 planned 变为澄清。
 
 **回滚方式**：`git revert` 本次提交；或 `git checkout -- opscli/query/services/planner opscli/query/commands/cli.py opscli/mcp/tools/query.py opscli/skills/templates/ops-dataset-query tests/query tests/skills/test_dataset_query_template.py && rm tests/query/planner/test_snapshot_policy.py tests/query/planner/test_round2_defects.py`，再重新安装 Skill。
+---
+
+## 2026-09-07 ops-app - 新应用建站链路统一使用 master 分支
+
+**变更原因**：AppHub 后端自动部署读取应用源码仓库的 `master`，而 `opscli app`、统一模板配置和建站 Skill 仍默认使用 `main`，可能导致源码推送成功但自动部署读取不到对应提交。
+
+**改动点**：`opscli app` 默认分支改为 `master`，Git 初始化、远端探测、fetch、upstream、fast-forward 校验和 push 改为按 binding 的 `default_branch` 执行；binding 从 AppHub 响应刷新 `default_branch`，缺失时默认 `master`，初始化返回字段改为通用的 `remote_branch*`。模板配置和安全 clone 脚本默认分支同步改为 `master`；`ops-app-build-spec` 明确模板与业务仓库均使用 `master`，版本升至 `v0.0.12`；`ops-app-data-builder` 增加本地 `master`、业务 `origin` 和 `origin/master` 门禁，版本升至 `v0.1.7`。新增决策文档并在旧设计文档顶部标记原 `main` 约定已被替代。
+
+**兼容边界**：只处理新应用，不增加旧应用分支迁移；模板仓库 clone URL 仍为 `http://10.1.13.143:3000/aukeys-admin/template.git`，`/template/master` 仅是 Gitea 页面路径；不修改参考脚本 `bind-apphub-git.py`。
+
+**验证结果**：`tests/app tests/auth/test_config.py` 通过，`54 passed`；build-spec 版本/模板/master 部署契约/安装、模板 clone 和 data-builder 定向测试通过，`18 passed`。完整 build-spec 契约文件另有 4 条与本次分支修改无关的既有文档断言失败，本次未扩展处理。
+
+**回滚方式**：回退 `opscli/app` 分支参数化、模板默认分支、两份 Skill 版本与门禁、相关测试及本条设计文档。
+---
+## 2026-09-08 amazon-rufus - 修复报告丢失回答正文
+
+**变更原因**：`get-backend B0CSN6FR1W US -q "这个商品适合送礼吗？"` 实际取得完整 Rufus 回答，但报告优先取商品链接并套用标题诊断模板，正文丢失。
+
+**改动点**：共享报告格式化器按题目要求的固定章节识别诊断题，普通问题复用已有逐题渲染；诊断正文提取先读取正文、blocks 和总结，再回退到链接。补充原始 SSE 同时包含正文和链接、单题及六/七题普通问答、三类诊断正文来源、内置七题报告的回归测试；上传 BOM 测试改为断言送礼问答格式。
+
+**验证结果**：修改前现有报告用例为 4 failed、1 passed；首批新增 4 条回归全部先复现失败。最终 `.venv/Scripts/python.exe -X utf8 -m pytest tests/amazon_rufus tests/mcp/test_amazon_rufus_tools.py -q -k "not test_get_platform_cookie_sends_platform_query"` 为 169 passed、1 deselected，采集器精简诊断报告定向测试另有 1 passed，`git diff --check` 通过。排除项是预存平台 Cookie 超时断言失败（期望 10，实际 180），已用原 HEAD 格式化器复核。原命令在项目虚拟环境实跑成功，生成 `output/amazon-rufus/B0CSN6FR1W-20260908-112545-46abaddde2b14c79b6efbded2e80edf3.md` 并上传，已读取正文确认包含完整送礼回答。未运行全库测试。
+
+**影响范围**：CLI、MCP 和采集报告共用的 Rufus 报告渲染；普通问答恢复逐题显示，默认诊断报告保留原有章节。
+
+**回滚方式**：撤销本次报告格式化器、新增回归测试及本条记录的变更，保留其他已有修改。
+
+---
+
+## 2026-09-09 amazon-rufus - 兼容 Alexa 名称触发
+
+**变更原因**：商品页购物助手 Rufus 改名为 Alexa，需要让 Agent 在用户使用新名称时找到原有 Skill 和 MCP 工具。
+
+**改动点**：内置及项目内 ops-amazon-rufus Skill 同步补充 Alexa/Rufus 触发词、名称映射和智能音箱场景边界；9 个 Rufus MCP 工具描述补充 Alexa 名称，获取工具明确引导先使用原 Skill。
+
+**验证结果**：两份 Skill 均通过 quick_validate.py，文件内容逐字节一致；通过本地 MCP Client.list_tools() 确认 9 个工具均暴露 Alexa/Rufus 描述，获取入口包含 ops-amazon-rufus 引导，工具名称未变。`.venv/Scripts/python.exe -X utf8 -m pytest tests/mcp/test_amazon_rufus_tools.py -q` 为 26 passed；`git diff --check` 通过。未运行真实 Amazon 获取或线上 Agent 触发验收。
+
+**影响范围**：仅 Skill 说明和 MCP 工具描述；Skill、CLI、MCP 工具名称及执行逻辑保持兼容。
+
+**回滚方式**：撤销两份 SKILL.md、amazon_rufus.py 中本次说明文字及本条记录。
+---
+
+## 2026-09-07 Keepa JSON Lens - 接入 OPS MCP API JavaScript SDK
+
+**变更原因**：Keepa JSON Lens 原型仍要求手动填写 MCP API Key，和已接入 SDK 的 SellerSprite Lens 鉴权方式不一致，也无法完整验证复用 OPS 浏览器登录态的站点接入流程。
+**改动点**：站点通过本地包依赖接入 `@aukeys/ops-mcp-api-sdk`，移除手填 API Key 和旧请求头工具，统一读取 `localStorage.OPERATION_TOKEN` 与同源 Cookie 换取内存凭证并调用 Keepa REST API；本地开发切换为 Vite，增加 OPS 配置接口代理及可选 MCP API 地址覆盖。
+**验证结果**：Node 单元测试 6 项、Playwright 浏览器测试 36 项全部通过，Vite 生产构建和 `git diff --check` 通过；浏览器测试覆盖 OPS Token 与同源 Cookie 换取、MCP API Key 自动注入、地址覆盖和 Key 不落盘。
+**影响范围**：`sites/json-lens-prototype` 的本地开发、浏览器鉴权和 Keepa REST 请求链路。
+**回滚方式**：回退 JSON Lens 的 SDK 依赖、Vite 配置、请求客户端、浏览器测试和本条记录。
+
+---
+
+
+## 2026-09-07 SellerSprite REST - 返回格式化 JSON v2 工作簿
+
+**变更原因**：SellerSprite Lens 查询竞品时，REST `/result` 返回接口原始商品对象，包含分页、请求状态及大量非展示字段，导致页面生成 128 列无效表格；任务生成的 JSON 导出本已按官方模板筛选和格式化，但未被 REST 使用。
+**改动点**：Collector `seller_sprite_export` 对 JSON 任务读取已生成的 JSON v2 工作簿并以内联 `json_data` 返回；REST JSON 结果接口改为读取该格式化工作簿，不再使用任务状态中的原始 `data`，缺少格式化结果时返回稳定错误。
+**验证结果**：SellerSprite REST API 17 项、MCP Tool 96 项、SellerSprite Lens 单元测试 11 项和 Playwright 端到端测试 8 项全部通过，站点生产构建成功。
+**影响范围**：SellerSprite JSON 任务的导出 MCP Tool 与 REST `/result`、`/export` 内联结果合同；XLSX 下载和任务状态合同不变。
+**回滚方式**：回退 SellerSprite JSON 导出读取、REST 格式化结果选择、相关测试和本条记录。
+
+---
+
+
+## 2026-09-07 SellerSprite Lens - 接入 OPS MCP API JavaScript SDK
+
+**变更原因**：SellerSprite Lens 原型仍要求手动填写 MCP API Key，无法验证站点通过 OPS 浏览器登录态自动换取并注入业务请求的正式接入流程。
+**改动点**：站点通过本地包依赖接入 `@aukeys/ops-mcp-api-sdk`，移除手填 API Key，统一由共享客户端读取 `localStorage.OPERATION_TOKEN` 和同源 Cookie、换取内存凭证并调用 SellerSprite REST API；本地开发切换为 Vite，并增加 OPS 配置接口代理及可选 MCP API 地址覆盖。
+**验证结果**：`npm run build` 通过，SDK 已打入 Vite 生产产物；11 项 Node 单元测试和 8 项 Playwright 浏览器测试全部通过，覆盖 OPS Token 与同源 Cookie 换取、MCP API Key 自动注入及 Key 不落盘；`git diff --check` 通过。
+**影响范围**：`sites/seller-sprite-lens-prototype` 的本地开发、浏览器鉴权和 SellerSprite REST 请求链路。
+**回滚方式**：回退 SellerSprite Lens 的 SDK 依赖、Vite 配置、请求客户端、浏览器测试和本条记录。
+
+---
+
+
+## 2026-09-07 Collector Monitor - 增加 MCP 功能调用记录区
+
+**变更原因**：现有账号页只读取本地额度表，鹰眼等跳过本地 quota 或经中央代理执行的 MCP Tool 无法展示调用次数。
+**改动点**：Collector Monitor 增加统一遥测 MySQL 的只读功能调用汇总，按北京时间当日、用户、服务、Tool 和运行角色分组；`external_pnd` 显示为“鹰眼”，执行与代理转发分行以避免重复计数，并保持邮箱掩码和有界查询。
+**验证结果**：Collector Monitor、PND 代理、统一埋点及 MySQL writer 相关测试共 166 项通过；compileall 与 git diff --check 通过；桌面端和 390px 窄屏页面已用 Playwright 截图核对，无页面级横向溢出，功能调用表可独立横向滚动；当前环境未配置统一遥测 MySQL，实库页面验证为安全降级态。Ruff 在当前环境不可用（program not found）。
+**影响范围**：Collector Monitor 账号页只读统计与统一采集 MySQL 连接；不改变 MCP Tool 执行、额度结算或遥测写入口径。
+**回滚方式**：回退 Collector Monitor 功能调用仓储、API、UI、配置接线、测试及本条记录。
+
+---
+
+
+## 2026-09-07 JavaScript SDK - 支持共享实例统一配置 API 地址
+
+**变更原因**：站点完成开发后，本地调试若需要额外创建并替换 `localClient`，会把地址判断扩散到业务模块；API 地址选择应集中在应用入口，业务代码始终使用同一个共享实例。
+**改动点**：`@aukeys/ops-mcp-api-sdk` 新增 `configureOpsMcpApi()`，将 `opsMcpApi` 改为引用稳定的共享代理；应用入口可统一设置 `apiBaseUrl`，重复配置只替换内部客户端并清理旧内存凭证，业务模块无需更换实例。地址规则简化为“不传则使用配置接口返回地址，传入则覆盖”，不再暴露作用重复的 environment/target 枚举；包版本提升至 `0.2.0`，更新类型声明和使用文档。
+**验证结果**：`npm test` 通过 16 个 Node 单元测试，覆盖共享实例引用稳定、统一覆盖 API 地址及原有凭证换取和安全行为；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认 `0.2.0` 发布包仍只包含 README、package.json、JavaScript 入口和类型声明。
+**影响范围**：JavaScript SDK 初始化接口和文档；原有 `opsMcpApi` 和 `createOpsMcpApiClient()` 调用保持兼容。
+**回滚方式**：回退 `sites/ops-mcp-api-sdk` 本次接口、测试和文档修改，并删除本条记录。
+
+---
+
+
+## 2026-09-05 MCP query - 生产分支补齐全局币种参数
+
+**变更原因**：生产会话 5397 使用手工查询路径时，远端 opscli MCP `0.0.131`
+暴露的 `query_simple` schema 不含 `global_currency`，FastMCP 在业务函数执行前以
+`unexpected_keyword_argument` 拒绝请求。该能力已存在于 `QueryManager` 和后端接口，
+但此前只合入 release 分支，没有进入生产 master 发布线。
+
+**改动点**：`query_simple`、`query_build`、`query_build_and_run` 三个 MCP 工具新增
+`global_currency` 可选参数并透传给 `QueryManager`；工具说明明确币种是服务端换算参数，
+不是数据集字段。新增直接透传、默认不传及 FastMCP `inputSchema` 暴露测试。
+
+**验证结果**：相关面回归
+`tests/mcp/test_query_tools.py tests/mcp/test_tools.py tests/query/test_manager.py`
+共 62 条通过；其中 schema 守卫直接通过 FastMCP `list_tools()` 断言
+`query_simple.inputSchema.properties.global_currency` 存在。
+
+**影响范围**：仅影响 MCP 手工构造查询的币种参数；规划器 `query_flow`、未传币种的
+现有查询及后端 API 契约不变。
+
+**回滚方式**：回滚本次提交，无配置、数据库或远端 API 结构变更。
+
+---
+
+
+## 2026-09-03 MCP采集 - 增加手动预取计划任务
+
+**变更原因**：高频采集请求需要在业务使用前主动刷新共享结果缓存，现有系统只有即时调用和结果沉淀，缺少可由用户手动维护的每日计划任务。
+**改动点**：共享采集 Schema 升级到 v3，新增预取计划定义表和独立运行队列表；增加可重跑的 v1/v2→v3 MySQL 迁移 SQL，幂等补齐缓存身份字段和索引、回填已有 JSON 指纹，并在完整性检查通过后最后发布 v3 版本号；通用 MCP 新增创建、列表、更新、批量启用、批量禁用、删除、立即运行和执行历史八个管理 Tool，并按已验证用户邮箱隔离所有权；批量启停会在一个事务内校验全部计划所有权，启用时重算下一次执行时间，避免日常审核直接修改数据库；每日时间使用 IANA 时区计算并统一保存 UTC `next_run_at`，到期和手动运行均复制来源、场景及请求快照；通用 MCP 只领取 Keepa/Google Trends，Collector MCP 只领取 SellerSprite，使用 `FOR UPDATE SKIP LOCKED`、执行租约、心跳续租和确定性来源任务 ID 防止多实例重复执行；计划请求递归拒绝凭证字段，SellerSprite 仅允许服务 CredentialStore 作用域下共享账号池的可重放场景，排除 `listing-analysis`；普通成功任务仍只沉淀结果和缓存指纹，不会自动升级为计划任务；基于历史调用、生产 MySQL 精确参数补导和本地只读任务队列增加默认禁用的 06:00 SellerSprite 灰度名单及候选分析报告，生产名单保持历史 `xls` 格式以匹配缓存指纹。
+**验证结果**：预取计划、试点名单、共享 Schema/Runtime、MCP 注册、Keepa 存储和 Collector 接线目标回归 `54 passed`；本次追加的迁移 SQL、共享 Schema 和 MCP 目标回归 `30 passed`；扩展共享存储相关回归 `155 passed, 1 failed`，唯一失败为仓库既有 Windows `file_lock` 不创建父目录问题，与本次改动无关；试点 JSON 格式校验、目标模块 `compileall`、Ruff E9/F63/F7/F82/I 和 `git diff --check` 均通过。直接执行 `uv run pytest` 仍会触发仓库既有 editable-build/Cython 编译错误，本次验证使用现有 `.venv` 的 `uv run --no-sync` 执行。
+**影响范围**：共享采集 MySQL Schema、通用 MCP 和 Collector MCP 的后台生命周期及六个新增管理 Tool；生产需先使用迁移账号完成 v2→v3 升级，并显式启用调度器和配置服务凭证作用域。计划定义不保存 JWT、Session、API Key、Cookie、账号密码或其他 Token。
+**回滚方式**：回退预取计划模块和宿主接线；两张新增表在确认没有新版进程使用后可保留或由 DBA 单独清理。
+
+---
+
+
+## 2026-09-03 MCP采集 - 修复缓存指纹沉淀和对账恢复
+
+**变更原因**：共享结果缓存最初仅将缓存键写入 `request_params._cache`，MySQL 查询依赖 JSON 路径且缺少专用索引；Keepa 和 Google Trends 的宕机对账提交也没有携带缓存身份，导致恢复任务继续以空指纹入库，无法稳定统计重复请求或复用结果。
+**改动点**：将采集 Schema 升级到 v2，为 `collection_runs` 增加显式 `request_fingerprint`、`cache_scope` 和复合查询索引；初始化逻辑支持从 v1 幂等升级并回填已有 JSON 缓存身份；入库和缓存读取改用显式列，同时保留 JSON 结果摘要；Keepa 与 Google Trends Parser/对账器可从任务目录内的 `params.json` 恢复规范化请求指纹和结果摘要，兼容升级前已进入 Outbox 的任务，并拒绝读取任务目录外的参数路径。
+**验证结果**：共享 MySQL 与缓存合同专项测试 13 项通过，Keepa/Google Trends 存储与 Parser 专项测试 10 项通过，扩展存储链路 34 项通过；目标模块 `compileall` 以及 Ruff E9/F63/F7/F82/I 检查通过。扩展 MCP 缓存回归 128 项中 127 项通过，唯一失败为仓库既有 SellerSprite Skill 版本断言仍期望 `v0.0.20`，当前模板已是 `v0.0.21`，与本次改动无关。
+**影响范围**：共享采集 MySQL Schema、Keepa/Google Trends 成功结果对账和缓存读取；公开 MCP Tool 参数与响应合同不变。生产共享数据库必须先按运维文档由迁移账号执行一次 v1→v2 升级，再启动新版运行进程。
+**回滚方式**：代码可回退到 v1 JSON 查询实现；数据库新增列和索引可保留，不影响旧版读取。若必须回退版本标记，应先确认所有运行进程均已回退，避免新版进程因 Schema 版本不匹配进入降级状态。
+
+---
+
+
+## 2026-09-03 文档 - 完善卖家精灵运营案例研究资料
+
+**变更原因**：官网场景记录、行业方法调研和教程设计草案具有后续案例扩展价值，但部分表述仍混淆官网功能名称与实际数据语义，设计草案也保留了已回退的结构化配方引擎方向；同时本地反馈和 REST E2E 文件属于执行产物，不应进入版本库。
+**改动点**：为官网调研补充代码快照、`competitor-lookup` ASIN 查询与变体边界，以及 Listing Analysis 默认单模块和全景分析额度口径；将行业调研和设计草案统一到轻量 `ops-commerce-playbooks` Skill、Markdown 案例和现有数据能力直接执行的第一版方案；在 `.gitignore` 忽略 `output/feedback/` 与日期化 SellerSprite REST E2E 目录，并移除已跟踪的历史反馈 JSON。
+**验证结果**：官网调研中的 16 个场景与当前 `SellerSpriteScenario` 注册表逐项一致；三份文档的本地 Markdown 引用均有效，未发现尾随空白或超过 240 字符的普通段落；`output/feedback/` 与日期化 SellerSprite REST E2E 忽略规则已通过 `git check-ignore` 验证，目标执行产物已清空；`git diff --check` 通过。
+**影响范围**：卖家精灵调研资料、第一版功能边界和本地执行产物管理；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的运行逻辑。
+**回滚方式**：回退三份调研文档、`.gitignore`、历史反馈 JSON 和本条记录即可；被清理的未跟踪执行产物需从原执行流程重新生成。
+
+---
+
+
+## 2026-09-02 SellerSprite - 增加通用 FastAPI 异步任务网关
+
+**变更原因**：Keepa 已有产品化 FastAPI 场景入口，但 SellerSprite 独立部署在 Collector MCP，网站和内部系统无法使用普通 HTTP 合同提交和查询任务；同时不能为了 REST 直接在通用 MCP 进程启动第二套 SellerSprite 队列、账号池和浏览器 Runtime。
+**改动点**：新增 `/api/v1/seller-sprite` REST 路由，提供场景、额度、普通任务提交/单批状态/结果/导出及 Listing Analysis 提交/状态/结果接口；请求模型拒绝 `session_id`、`jwt`、`output_dir`、执行模式和调度参数；普通任务与 Listing Analysis 提交成功返回 `202`，Collector 配置或可用性故障映射为 `503`；`export_format=json` 的成功任务通过 API 专用 `/result` 或兼容 `/export` 直接返回内联业务 JSON，状态响应不再暴露 JSON 下载链接，只有 `xls/xlsx` 保留 HTTPS 文件下载信息；该转换仅位于 FastAPI REST 适配层，现有 SellerSprite MCP Tool、Collector Scheduler、队列和 MCP 返回合同不变；REST 复用现有 SellerSprite Collector 代理并透传当前用户 API Key，只补网关遥测且不重复扣额度，实际权限、任务所有权、账号池、队列和浏览器生命周期继续由 Collector 负责；同步场景 API 产品化规划和合同测试。
+**验证结果**：产品化 API 组合测试 `31 passed`；SellerSprite 代理与 Collector Bundle 历史回归 `15 passed, 1 deselected`，排除项为仓库既有 `dimension_resolver=None` 断言差异；新增模块与组合入口 `compileall`、行长度检查及 `git diff --check` 通过，并确认 SellerSprite MCP Tool、Collector Scheduler 和对应 MCP 测试文件零代码差异。2026-09-02 以真实用户 API Key 在隔离端口启动当前通用 MCP 与 Collector，验证 OpenAPI 暴露 10 个 SellerSprite 路由，场景与额度接口均返回 HTTP 200，`keyword-reverse` 提交返回 HTTP 202，任务约 11 秒后到达 `succeeded/finished`，browser-route 登录、查询按钮和上游 HTTP 200 均成功；随后复用该成功任务验证 API-only JSON 合同，普通任务 `/result` 与兼容 `/export` 均直接返回内联 `result`，响应不含 `export`、`url` 或 `download_url`，且未再次消耗查询额度。本次样例 ASIN 在 `US/30d` 返回 0 行有效空结果。原 `10.6.53.56:8765` 运行进程的 OpenAPI 仍只有旧 Keepa 路由，需重启加载新代码后才会对外提供 SellerSprite REST。当前虚拟环境未安装 Ruff，未执行 Ruff 检查。
+**影响范围**：通用 MCP 的 FastAPI 路由和网站调用合同；Collector MCP 部署地址、Tool 合同、Scheduler、SQLite 队列、账号配置与额度执行位置不变。
+**回滚方式**：移除 SellerSprite REST 路由模块及 `create_api_app()` 注册，回退对应测试、规划文档和本条记录即可；无需处理 Collector 任务或数据库。
+
+---
+
+
+## 2026-09-03 Skill - 以运营案例替代 Commerce Playbooks 规划器
+
+**变更原因**：代码规划器只把大模型能够直接执行的运营案例重复建模为 Python、JSON 和 CLI，当前没有非 Agent 调用方、状态恢复或确定性执行需求；同时运营反馈表明 `competitor-lookup` 按 ASIN 查询主要是指定商品及变体，不应解释为竞品发现。
+**改动点**：回退 `commerce_playbooks` Python 模块、`commerce-playbook` CLI、JSON 配方、package-data 和对应代码测试；保留轻量 `ops-commerce-playbooks` Skill，按渐进披露拆分“如何找竞品”“Listing 关键词差距”“多竞品关键词库”三个案例；从 ASIN 找竞品改为商品基线、流量词反查、关键词候选、关联关系和 `ops-amazon-stylesnap` 视觉搜索组合，并要求父子变体归并和候选证据分层；同步修正 `ops-seller-sprite` 的场景映射与 ASIN 筛选语义，版本提升至 `v0.0.21`。
+**验证结果**：`ops-commerce-playbooks` 与修改后的 `ops-seller-sprite` 均通过 Skill Creator `quick_validate.py`；轻量 Skill、三份案例路由、ASIN 筛选语义、模板安装和发版清单定向测试共 13 项通过，叠加普通 SellerSprite CLI 回归共 19 项通过；发版 manifest 检查确认新 Skill 进入 source、wheel、binary 和 binary_full；顶级 Typer 帮助冒烟退出码为 0，确认 `seller-sprite` 仍存在且已回退的 `commerce-playbook` 不再注册；`git diff --check` 通过。扩展执行 `test_cli_split.py` 时仍有 2 个仓库既有 `seller-sprite-debug` 根命令未注册失败，其余 24 项通过，与本次 Skill 修改无关。
+**影响范围**：Agent 对卖家精灵数据的运营案例引导，以及 `competitor-lookup` 按 ASIN 查询的解释；不修改 SellerSprite、StyleSnap、Keepa、Google Trends 或 Amazon 商品数据的执行实现、参数、额度与鉴权。
+**回滚方式**：删除 `ops-commerce-playbooks` 模板和对应测试，移除 manifest 条目，并回退 `ops-seller-sprite` 的 ASIN 竞品语义说明与版本号。
+---
+
+
+## 2026-09-01 MCP采集 - 增加共享 MySQL 结果缓存基础合同
+
+**变更原因**：Keepa、Google Trends 和 SellerSprite 的成功结果已经沉淀到共享 MySQL，相同业务请求仍会重复调用上游并消耗额度，需要提供默认一天的新鲜结果复用能力。
+**改动点**：新增稳定请求缓存键、内部缓存模式、环境开关、默认 86400 秒新鲜度、缓存命中上下文和安全结果摘要；扩展 CollectionSubmission 以携带缓存键、作用域及结果摘要；MySQL Repository 按来源、数据环境、场景、站点、精确缓存键、作用域和 persistence_completed_at 新鲜窗口读取完整 Dataset，并允许 SellerSprite 只读取命中元数据；Keepa 与 Google Trends 提交器按实际上游规范化参数生成共享作用域缓存索引并在认证前读缓存；Collector 生命周期向 SellerSprite Tool 注入缓存仓储，SellerSprite 按共享池或专属账号散列隔离缓存作用域，成功提交和对账均写入缓存索引，缓存命中时在队列与 MCP 所有权表中原子创建当前用户的新 succeeded 任务且不发布 Worker 成功事件；统一 quota 切面仅在缓存响应成功构造后退回预占次数且不增加失败数；三类私有执行入口支持 live 模式绕过缓存，公开 Tool 与 Skill 参数不变，不新增 MySQL Schema。
+**验证结果**：目标模块 compileall 与 git diff --check 已通过；缓存、公开 Tool 和 quota 专项 172 passed，SellerSprite 队列/调度/Parser 96 passed，Google Trends 完整目录 85 passed，Collector MCP 完整目录 13 passed，Keepa 存储链路 9 passed。测试覆盖缓存键、JSON 信封、默认 TTL、live 绕过、MySQL 故障回退、精确新鲜结果查询、Keepa/Google Trends 认证前命中、SellerSprite 当前用户合成任务不产生沉淀事件、专属账号作用域散列隔离、合成任务失败不误标缓存命中、公开 Tool 不暴露 cache_mode，以及缓存配额退款不增加失败数；Ruff 已修正本次新增 import 块，并对新增缓存代码通过 E9/F63/F7/F82 高置信检查，全量旧文件规则仍存在历史 lint 存量。
+**影响范围**：共享采集 Outbox 提交合同和内部缓存辅助模块；公开 MCP Tool 参数与 Skill 不变。
+**回滚方式**：回退共享缓存模块、CollectionSubmission 扩展及本条记录即可；当前不涉及数据库结构迁移。
+
+---
+
+
+## 2026-08-31 Keepa - 支持从共享 MySQL 查询历史任务和明细
+
+**变更原因**：Keepa 成功结果已经沉淀到共享 MySQL，但公共 MCP 只能从服务端本地任务目录按 `job_id` 读取，无法复用数据库中的历史任务，也无法按原查询条件检索。
+**改动点**：新增只读 `keepa_history` MCP Tool，支持按任务 ID、场景、站点、请求参数和完成时间组合查询；复用 Keepa 场景参数归一化并兼容 GB/UK/数字 domain；返回任务分页元数据，支持轻量任务列表及按 Dataset 的记录分页；共享 MySQL Repository 增加历史总数、任务、Dataset 和记录读取合同；同步 Keepa Skill 说明与回归测试。
+**验证结果**：Keepa MCP 与共享 MySQL 专项测试 `26 passed`；Keepa 和存储相关回归排除仓库既有 `keepa-debug` 根命令注册失败后 `139 passed, 1 deselected`；`compileall` 与 `git diff --check` 通过。通过本地 MCP 和真实 MySQL 验证 3 个历史任务均成功命中，条件反查命中 6 个同 ASIN 任务，Dataset `record_offset=2, record_limit=2` 正确返回第 3、4 行。
+**影响范围**：仅新增 Keepa 历史数据的只读 MCP 查询和共享采集 Repository 读路径；不改变 `keepa_run`、现有任务写入、数据库表结构或 Keepa 调用额度。
+**回滚方式**：回退 Keepa MCP Tool、Runtime 注册、共享 MySQL 历史读方法、对应 Skill 文档、测试和本条记录即可；已沉淀历史数据无需处理。
+
+---
+
+
+## 2026-08-28 SellerSprite - 防止无效场景导致 Worker 退出并循环租约
+
+**变更原因**：任务执行异常处理阶段再次解析未知场景时会抛出第二个 `SellerSpriteConfigError`，原任务无法落为 `failed`，账号 Worker 退出；租约到期后任务被反复放回队列，表现为 `queued -> claimed -> resolving -> queued`。同时，入队边界此前未校验场景，旧 Review 场景可以持续写入新队列。
+**改动点**：入队前拒绝未注册场景；保护异常处理阶段的场景解析；记录 Worker 退出的脱敏错误码和消息；会话回收失败改为旁路记录，不再终止消费 Worker；新增未知场景入队拒绝及历史坏任务不影响后续任务的回归测试。
+**验证结果**：SellerSprite 调度器与队列存储专项测试 `92 passed`；目标回归 `2 passed`；`compileall` 与 `git diff --check` 通过。`uv run pytest` 仍受仓库现有 Cython editable-build 问题阻断，未涉及本次文件。
+**影响范围**：SellerSprite 后台调度异常收口、Worker 诊断日志和会话回收旁路；不改变任务状态枚举、租约默认值或生产队列数据。
+**回滚方式**：回退 `task_scheduler.py`、对应回归测试及本条记录即可恢复此前异常处理行为。
+
+
+## 2026-08-28 MCP/Skills - 打包版暴露鹰眼 PND 代理
+
+**变更原因**：鹰眼 Tool 仅由部署侧 `mcp-upstreams.json` 动态注册，普通 wheel 或 binary 启动的本地 `opscli-mcp` 没有该密钥配置，因此 `tools/list` 无法发现 `ext_pnd_*`。
+**改动点**：本地无 PND 直连配置时注册 4 个只读鹰眼代理 Tool，通过 OPS 配置中心转发到“BI运营系统”；部署端存在 PND 配置时保持直连并跳过代理；将 `ops-yingyan` 纳入所有正式发行产物。
+**验证结果**：鹰眼代理、上游 Gateway、MCP CLI 与 Skill 专项测试 `49 passed`；Skill 打包测试 `8 passed`；sdist、wheel、精简 binary、完整 binary 四种发行清单检查通过；Skill UTF-8 校验、`compileall` 与 `git diff --check` 通过。全量 MCP 测试在排除既有 Shopify 导入错误后为 `414 passed, 1 failed`，剩余失败来自未改动的 `app_factory.py` 与 SellerSprite 既有测试期望不一致；本地环境未安装 `ruff`。
+**影响范围**：打包版通用 MCP 的鹰眼 Tool 发现与调用路径，以及 `ops-yingyan` 的 sdist、wheel、精简 binary 和完整 binary 准入范围；不分发 PND 地址或鉴权密钥。
+**回滚方式**：回退 `yingyan_proxy.py`、`server.py` 的条件注册、发行清单、对应测试及本条记录即可恢复部署侧配置专用模式。
+
+
+## 2026-08-21 mcp/telemetry - 记录通用上游 endpoint 维度
+
+**变更原因**：Keepa 场景注册表已经知道真实上游 API endpoint，但公共调用统计此前只能按业务场景聚合，无法回答实际调用了哪个接口。
+**改动点**：公共遥测增加可选低敏维度解析器和 `endpoint` 维度；Keepa 按场景解析并记录 `product/search/query/deal` 等 endpoint；统一 MySQL `mcp_call_events` 增加 endpoint 列和查询索引；不读取业务返回值，不记录完整 URL、凭证或业务参数。
+**验证结果**：新增 endpoint 解析、遥测写入和 schema 断言，并执行 MCP 遥测、Keepa 场景及 MySQL 写入专项测试。
+**影响范围**：通过 `InstrumentedMcpProxy` 注册的 MCP Tool；未提供解析器的服务保持原有维度，后续可复用同一注册机制。
+**回滚方式**：回退公共遥测 endpoint 解析、Keepa 注册、MySQL schema/writer、对应测试和本条记录；已写入事件可保留。
+
+
+## 2026-08-21 mcp/telemetry - 公共调用统计不判断业务结果
+
+**变更原因**：公共调用统计只需要回答“谁调用了哪个服务的哪个场景几次”，不应把业务成功、失败、无数据等服务语义混入公共统计。
+**改动点**：MCP 遥测包装器统一将调用状态记为 `called`，不再读取返回结果或提取业务错误；场景和通用维度只从 Tool 声明参数提取；保留业务模块自行记录业务状态的职责；更新专项测试和统计设计文档。
+**验证结果**：MCP 遥测、MySQL 写入、Keepa 注册和相关工具回归 `26 passed`；扩展 schema、工具注册、动态上游和共享 MySQL 回归 `70 passed`；相关文件 `py_compile` 通过。
+**影响范围**：通过 `InstrumentedMcpProxy` 注册的 MCP Tool 公共调用统计；CLI 遥测和 quota 内部失败结算不变。
+**回滚方式**：回滚 `opscli/mcp/instrumentation.py`、`tests/mcp/test_instrumentation.py`、统计设计文档及本条记录。
+
+## 2026-08-20 Keepa - 完善现有场景 Response Object 格式化
+
+**变更原因**：现有 11 个 JSON 场景已经具备 formatter，但 Marketplace Offer 优惠券历史、Keepa `-2` 缺失值、Category 父级和 Seller 评分展示仍存在语义不完整；Search Insights 排名依赖 API map 插入顺序，不保证业务排名稳定。
+
+**改动点**：补充 Product Offer 的 condition、价格/运费和币种派生字段；按 Keepa 规则拆分 Offer `couponHistory` 的金额/百分比；统一 Product、Deal、Statistics、Search Insights 的 `-1/-2` 缺失处理；补全 Category 父级金额/评分/计数、Seller 百分比展示和 Lightning Deal 折扣率/活动时长；Search Insights 品牌/卖家明细按计数降序稳定排序。真实 Product 响应进一步新增 `product_videos`、Statistics 最低价状态和 `stats_stock_by_condition` 明细，并清除 Offer 快照中的原始列表单元格。
+
+**验证结果**：使用真实 ASIN `B003IEUAZK` 调用 Product Request，返回 94 个 Product 字段和 64 个 Offer，实际消耗 6 token；新增识别 7 条视频、72 条最低价状态和 24 条 condition 库存。重新生成的 16 个 XLSX 工作表嵌套单元格均为 0。Product/Statistics/Manager 定向测试 `15 passed`；Keepa 回归排除仓库既有 `keepa-debug` 注册用例后 `77 passed, 1 deselected`；本轮涉及文件 Ruff、compileall 与 `git diff --check` 通过。未调用 Graph Image 或 Tracking，也未改变其“不提供 MCP 访问”的边界。
+
+**影响范围**：仅影响现有 JSON 场景的 XLSX/格式化 JSON 派生字段；`raw.json` 原始响应不变。
+
+**回滚方式**：回退本条涉及的 formatter、测试和文档改动即可恢复此前格式化合同。
+
+
+## 2026-08-20 Keepa - 加固现有场景参数归一化
+
+**变更原因**：现有 Keepa 场景已覆盖主要 JSON Endpoint，但别名冲突会静默取值，布尔/整数参数可能以未经校验的字符串发送，复杂 selection 也不支持常见的 JSON 字符串输入，容易造成请求语义和 token 预估不一致。
+
+**改动点**：统一 Product、Product Search、Product Finder、Category、Seller、Best Sellers、Deals、Lightning Deals 的布尔/整数/CSV 参数归一化；补充别名一致性检测、数字边界校验、Best Sellers 类型转换和 Lightning Deals 空状态校验；selection 支持 JSON 对象或 JSON 字符串并保持开放字段；token estimator 复用同一套 alias/selection 解析规则。新增场景参数回归测试。
+
+**验证结果**：场景参数测试 `19 passed`；Keepa 测试集 `76 passed, 1 failed`，唯一失败是仓库既有的 `keepa-debug` 根命令注册测试；Ruff、compileall 与 `git diff --check` 通过。
+
+**影响范围**：仅影响 Keepa JSON 请求构建和额度预检查，不改变 API 客户端、`raw.json`、导出 formatter 或 Graph Image/Tracking 的支持边界。
+
+**回滚方式**：回退 `opscli/keepa/api/scenarios.py`、`tests/keepa/test_scenarios.py` 及本条文档记录即可恢复此前的参数透传行为。
+
+
+## 2026-08-20 Keepa - 同步新版 Endpoint 并扩展 Response Object 格式化
+
+**变更原因**：Keepa 2026-08 文档新增 Seller Finder，并更新 Product 图片、参数与 token 规则；现有场景仍发送部分已移除参数，额度估算明显偏低，Category、Seller、Lightning Deal 及 Product 高基数字段缺少可直接分析的格式化输出。
+
+**改动点**：新增 `seller-finder` 场景；同步 Product、Product Search、Product Finder、Best Sellers、Category、Seller、Deals、Top Seller、Lightning Deals 参数与 token 合同；新增 Category、Seller、Lightning Deal formatter，并让 Product Search 复用 Product formatter。Product 图片、类目树、销售排名、Offer 历史/重复项、变体属性、列表字段和顶层历史拆到独立 XLSX/JSON Sheet；真实 Category 的两组 Top Seller ID/名称数组新增独立 Sheet；Seller 兼容真实 `trackedSince` 字段。OPS 认证异常时允许显式 `OPSCLI_KEEPA_API_KEY` 继续兜底，主表不再保留高基数嵌套单元格，完整响应仍只读保存在 `raw.json`。同步更新格式化状态、对象合同、Keepa Skill 与接口调研报告；Graph Image 和 Tracking 因二进制/状态变更语义保留为独立后续范围。
+
+**验证结果**：本轮聚焦测试 27 项通过；Keepa 全组 `72 passed, 1 failed`，唯一失败仍是仓库既有 `keepa-debug` 根命令未注册。使用本机 5 份历史真实 Product 响应只读验证：单样本约产生 7,867 条 CSV 历史、8,223 条销售排名、833 条顶层历史，拆表后主表嵌套字段数为 0。另使用用户提供的本地 Key 调用真实 Category、Seller 与 Lightning Deals：分别返回 1、1、23,788 个对象，Lightning variation 45,374 行，所有主表/明细表嵌套字段数为 0；XLSX 已逐 Sheet 渲染核验。本地 Key 兜底回归覆盖 OPS 401 场景。Ruff、compileall 与 `git diff --check` 通过；仓库全量测试仍受既有 pytest 捕获流关闭问题阻断。
+
+**影响范围**：影响 Keepa 查询场景参数、额度预检、XLSX/格式化 JSON Sheet 合同和 `ops-keepa` Skill v0.0.2；不改变 `raw.json`，不接入 Graph Image 或 Tracking，不执行任何 Tracking 写操作。
+
+**回滚方式**：回退 Keepa 场景、formatter、Manager、测试、参考文档、Skill 版本和本条记录；历史 `raw.json` 无需迁移。
+
+---
+
+
+## 2026-08-19 SellerSprite - 新增历史导出无路径回流脚本
+
+**变更原因**：生产 SellerSprite 历史导出约 21 GB，既有共享沉淀只登记本地 `file://` URI，无法在删除原文件后保留 raw 数据，也缺少历史批次、核验和清理门禁。
+
+**改动点**：新增 SellerSprite 历史扫描、路径脱敏、逐 Sheet 解析、旧 JSON v1 兼容重格式化、内容 manifest、ASIN/关键词实体索引和 MySQL 单任务事务仓储；XLSX、旧 JSON v1、新 JSON v2 统一落为格式化 Dataset/Record，MySQL 不保存 raw payload 或本地路径；新增 `audit/init-schema/migrate/verify/purge` 脚本入口，回流 artifact 仅登记 `urn:sha256`，purge 必须通过数据库 verified 状态、源 manifest 和逐数据集/逐记录内容复核以及显式确认口令，且只逐文件删除，不递归删除目录；purge 还会输出残留任务/文件数，存在任何残留时不会误标记批次 completed。
+
+**验证结果**：新增 11 项测试覆盖完整/未完成任务识别、旧 JSON v1 重格式化、路径脱敏、实体提取、MySQL 单事务、既有 backfill 幂等跳过、格式化内容核验、CLI 无路径输出和清理确认门；真实早期/中期/近期样本的旧 JSON 与 XLSX 均能生成相同格式化列合同，抽样 XLSX 重放表头和数据行一致；历史迁移专项 `11 passed`，SellerSprite 回归 `471 passed, 3 failed`，3 项为仓库既有导出文件名和未注册 debug CLI 失败。最新全量只读审计 `13,699 discovered / 13,270 complete / 429 incomplete / 0 invalid`，共 `16,794` 个 Dataset、`3,427,671` 行、`21,205,081,147` 字节，确认旧 JSON v1 已全部兼容。全量测试因仓库既有 pytest 捕获流关闭问题在收集阶段报 43 errors，未发现指向本次迁移模块的新增失败；本轮未连接 MySQL、未删除源文件。
+
+**影响范围**：仅新增显式执行的 `scripts/seller_sprite_history_migration/` 历史迁移工具目录及一个兼容旧入口；不挂载公共 `opscli` 命令，不自动连接 MySQL，不改变在线 live 沉淀，也不会在未执行 purge 时删除源文件。生产入库前需用迁移账号初始化三张历史扩展表，并配置现有采集 MySQL 环境变量。
+
+**回滚方式**：回退历史迁移模块、脚本、测试和本条记录；未执行脚本时无数据库或文件副作用。若已初始化扩展表，可先停止回填后保留空表；若已写入数据，应按 `batch_id` 核对并制定独立数据库回滚，禁止直接删除仍被外键引用的 run。
+
+---
+
+
+## 2026-08-14 SellerSprite - 防止瞬时登录误判耗尽共享账号池
+
+**变更原因**：生产 Collector 将 browser-route 页面登录状态探测失败统一识别为账号凭证失败，并把全部共享账号持久隔离 24 小时；服务进程与 MCP 心跳仍正常，但通用和 Listing worker 均降为 0，任务持续堆积，重启又会重新加载隔离状态而无法恢复。
+
+**改动点**：仅将远端明确返回的 401/403 视为可跨进程持久隔离的凭证拒绝；没有明确拒绝证据的页面登录失败在成功切换备用账号后只做进程内短冷却，到期自动恢复为备用，服务重启也不会加载为长期隔离；全部账号都出现瞬时失败时保留最后工作槽，先关闭失败浏览器会话并按现有 browser cooldown 等待，避免零 worker 和连续消费排队任务；运行日志补充脱敏账号散列、隔离类型、错误码及账号池数量。
+
+**验证结果**：新增事故回归已确认修改前会把两个瞬时失败账号全部写入隔离表并导致重启后零 worker，修改后不产生持久隔离、下一任务在冷却期间保持 queued、重启可立即重建 worker；新增 401 明确拒绝长期隔离及瞬时冷却到期恢复测试。`tests/seller_sprite/test_account_pool.py + test_task_scheduler.py` 共 57 项通过；排除 3 个已单独确认的仓库既有失败后，SellerSprite 与 Collector Monitor 扩大回归 604 项全部通过。既有失败为导出文件名断言和 `seller-sprite-debug` 未注册，单独运行可稳定复现且不经过本次修改路径。
+
+**影响范围**：SellerSprite 共享账号池的认证失败隔离、备用接替、最后工作槽冷却和相应运行日志；不修改账号来源、SQLite schema、任务参数、专属账号策略或 systemd 配置。
+
+**回滚方式**：回退 `account_pool.py`、`task_scheduler.py` 及对应测试；SQLite 无 schema 变更。回滚后无状态码的登录失败会再次按 24 小时持久隔离处理。
+
+---
+
+
+## 2026-08-11 API凭据池 - 统一管理三类第三方API多账号凭据
+
+**变更原因**：SerpAPI、Canopy、scrape.do 的 API Key 分散在 SQLite、本地文件和旧集成账号配置中，无法统一管理多账号、密钥轮换与运行状态。
+**改动点**：新增 `api_credentials` 模块的 Provider 1:N Account 1:N Credential 模型、独立 MySQL 配置、明文 API Key v2 表结构、优先级加 LRU 并发领取、密钥版本 fencing、审计和统一 CLI；账号新增、轮换、启停和逻辑删除均通过 DML 直接读写 MySQL，删除后保留密钥历史与审计；移除 API 凭据主密钥、信封加解密及启动脚本中的主密钥读取，v1 空凭据表可在初始化时自动升级，存在密文时拒绝自动迁移；Google Trends/SerpAPI、Canopy MCP、scrape.do 生产调用均改为凭据池取号，401/403 可在同一请求切换账号，SerpAPI 保留一次性 SQLite 迁移入口；本地 `D:\Gitlab\start-mcp.ps1 -InitializeSchema` 同时初始化共享采集表和 API 凭据池表。Provider 范围仅包含 `serpapi`、`canopy`、`scrape_do`，未修改 Keepa、卖家精灵和既有 `integration_accounts.py`。
+**验证结果**：`tests/api_credentials` 17 项、`tests/google_trends` 85 项、`tests/scrape_do` 25 项、`tests/beta/canopy + tests/mcp/test_beta_tools.py` 40 项全部通过，共 167 项；新增明文写入、脱敏输出、v2 新建、v1 空表升级和 v1 有数据拒绝迁移测试；`python -m compileall -q opscli tests`、PowerShell 启动脚本语法检查与 `git diff --check` 通过。扩大执行 `tests/canopy` 时 50 项通过、1 项仍因仓库既有 `canopy-debug` 未注册基线失败，该问题与本次改动无关且未纳入修改。
+**影响范围**：Google Trends 的 SerpAPI 默认存储从 SQLite 切换为 MySQL；Canopy MCP 不再接受调用方直传 Key；scrape.do 不再读取环境变量、本地 token 文件或旧集成账号。部署前必须初始化表结构并注入独立 MySQL 连接；API Key 明文存储，数据库访问和备份权限必须严格限制。
+**回滚方式**：回退本次代码后恢复旧版 Google Trends SQLite、Canopy 本地调试 Key 和 scrape.do 旧账号来源；MySQL 新表可暂时保留且不会影响 Keepa、卖家精灵或 `integration_accounts.py`。SQLite 迁移命令不会删除源文件，回滚窗口内应保留其备份。
+
+---
+
+
+## 2026-08-10 SellerSprite - 加固队列连接与运行期健康门禁
+
+**变更原因**：生产 Collector 运行期间出现 SQLite 队列短暂不可打开，旧后台消费者异常退出后 HTTP 进程仍存活，导致任务长期停留 queued；同时缺少 FD 使用量和运行期队列门禁，无法及时阻止新任务或保留资源证据。
+**改动点**：SellerSprite 队列仓储集中管理 SQLite 事务和显式关闭连接，WAL 模式改为 schema 初始化时只设置一次；调度健康摘要增加 Linux 主进程 FD 数和软上限，队列心跳读取失败时返回稳定 `QUEUE_DATABASE_UNAVAILABLE`；Collector Bundle 在启动后队列失效时关闭业务入口，并透传脱敏错误分类与 FD 指标；新增连接关闭、WAL 单次初始化、运行期门禁和健康字段回归测试。
+**验证结果**：新增测试已确认修改前分别因连接未关闭、缺少运行期队列门禁和 FD 字段过滤而失败，修改后目标回归 `7 passed`；队列仓储、监督后端、Collector Bundle 与 SellerSprite MCP 工具组合回归 `158 passed`；SellerSprite、Collector MCP 和工具扩大回归 `556 passed, 3 failed`，3 项均为仓库已记录的旧导出文件名断言及 `seller-sprite-debug` 未注册基线；SellerSprite 生产模块 `compileall` 与 `git diff --check` 通过。
+**影响范围**：SellerSprite SQLite 队列连接、Collector SellerSprite Bundle 业务就绪判断和健康摘要；不修改任务 schema、队列路径、业务参数、浏览器执行或运维服务配置。
+**回滚方式**：恢复队列仓储原连接方法和逐连接 WAL 设置，移除运行期门禁、FD 健康字段及对应测试；现有 SQLite 数据无需迁移。
+
+---
+
+
+## 2026-08-10 seller-sprite - Collect MCP 默认并发上限提升至5
+
+**变更原因**：Collect MCP 的卖家精灵采集需要把默认最大并发从3提升到5，同时继续限制浏览器会话数量并保留冷备用账号。
+
+**改动点**：
+- `account_pool.py`：默认最大工作账号数由3调整为5，并同步容量规划注释和类说明。
+- `test_account_pool.py`：更新账号池容量、故障接替和备用账号归还的边界测试。
+- `test_task_scheduler.py`：验证5条任务可并行执行、第6条任务保持排队，并更新账号刷新后的工作槽预期。
+
+**验证结果**：
+- `python -m pytest -q tests/seller_sprite/test_account_pool.py tests/seller_sprite/test_task_scheduler.py`：54 passed。
+- 卖家精灵、Collector MCP 和 Collector Monitor 相关套件执行到617项时为613 passed、4 failed；其中1项旧并发断言已修正并单独通过，另外3项为既有导出文件名和 debug CLI 失败。
+- 全量测试使用 `--import-mode=importlib` 收集到1055项后，被既有的 `_shopify_manager` 导入错误阻断，未进入完整执行。
+
+**影响范围**：Collect MCP 单 Worker 内卖家精灵共享账号池和专属账号绑定任务的默认最大工作槽均提升至5；单账号串行、账号互斥和冷备用规则不变。
+
+**回滚方式**：回退本条记录对应的默认并发常量及账号池、调度器测试改动。
+---
+
+
+## 2026-08-07 MCP 共享数据沉淀 - 修复流式 XLSX 尾部空列解析
+
+**变更原因**：真实 Keepa 商品任务已经进入通用 MCP Outbox，但流式 XLSX 的数据行省略尾部空单元格，OpenPyXL 返回的行长度短于表头，导致正常任务被 `CollectionParseError` 永久标记失败且没有写入 MySQL。
+**改动点**：共享 XLSX Parser 对短于表头的数据行仅补齐尾部 `None`，仍拒绝超过表头的额外列；Keepa 与 SellerSprite Parser 合同版本分别升级到 `keepa-v2`、`seller-sprite-v2`。新增流式 Workbook 回归，覆盖尾部空列补齐和真实额外列拒绝。
+**验证结果**：真实 Keepa 任务重放成功解析主表及 5 个附加工作表，共 `8,381` 行；Parser/来源 Adapter 聚焦回归 `8 passed`，采集存储专项 `18 passed`，Keepa MCP/额度 `39 passed`。扩大组合回归 `128 passed, 1 failed`，失败为既有 Windows `file_lock` 目录基线；全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
+**影响范围**：通用 MCP 的 Keepa 与 Collector MCP 的 SellerSprite XLSX 数据沉淀；不改变采集、导出、MySQL schema、任务幂等键或 JSON Parser。已经处于 `failed` 的 Outbox 任务需在部署修复后显式重新入队。
+**回滚方式**：恢复共享 XLSX Parser 的严格等长判断并回退两个来源 Parser 版本；已经成功写入 MySQL 的记录可保留。
+
+---
+
+
+## 2026-08-07 MCP 共享数据沉淀 - Keepa 成功数据写入 MySQL
+
+**变更原因**：Keepa 成功任务此前只保留本地 JSON/XLSX 和上传文件，未进入统一采集数据库；当前需要先使用仅内网可达的测试库验证，后续再切换为内外网可达的统一数据库。
+**改动点**：将 Outbox、Parser Registry、Worker、MySQL Repository 和成功合同工具提取到 `opscli/shared/collection_storage/`。Keepa 保持在通用 MCP 服务器本地执行并写入该服务器的 `mcp.sqlite3` Outbox；SellerSprite 保持在另一台 Collector MCP 服务器并写入该服务器的 `collector.sqlite3` Outbox；两个宿主只复用代码和 MySQL 五表合同，不共享 Runtime、SQLite 或本地目录。来源 Parser、Submitter 和 Reconciler 分别归属 Keepa/SellerSprite 模块，MySQL 故障只重试沉淀，不重新采集。
+**验证结果**：共享存储实现、各宿主独立 Runtime/Outbox 和来源 Adapter 聚焦测试 `28 passed`；MCP Keepa/Quota、Collector Profile/Server/Bundle 测试 `51 passed`；SellerSprite 调度、队列、健康和沉淀回归 `113 passed`。Keepa 全组 `50 passed, 1 failed`，失败为既有 `keepa-debug` 根命令未注册基线；仓库全量测试仍在收集阶段出现既有 27 项错误及 pytest 捕获流关闭问题。
+**影响范围**：启用 `OPSCLI_COLLECTION_STORAGE_ENABLED` 时，通用 MCP 的 Keepa 与 Collector MCP 的 SellerSprite 成功任务进入统一 MySQL；默认关闭时无数据库副作用。不回填历史目录，不新增来源专属表。Keepa Tool 仍属于通用 MCP，但远程 `keepa_run` 不再公开服务端 `output_dir`，确保所有成功结果都进入可补偿扫描的受控目录；本地 Keepa Manager 能力不变。
+**回滚方式**：关闭共享存储配置并回退两个宿主的存储生命周期组合；既有 MySQL 记录和两个 Outbox 可保留。
+
+---
+
+
+## 2026-08-06 feedback - 日报改为管理洞察优先
+
+**变更原因**：Codex 分类后的日报直接铺开全部问题簇和反馈明细，更像结构化数据导出，缺少旧版 Codex 洞悉报告中的管理结论、重复证据、风险主题和治理项目。
+**改动点**：两阶段日报在 chunk 分类后新增确定性 `narrative-input.json` 和受约束 `narrative-output.json`；Codex 只生成执行摘要、模块洞悉、风险主题、治理建议和局限，必须引用事实包中的稳定问题键，Python 校验引用与优先级并负责全部数值。最终报告改为“范围与口径、执行摘要、根因分布、重点模块、重复问题证据、P0/P1 风险、治理工作建议、日环比、局限与后续”，完整问题簇和反馈明细折叠到附录；运行快照保留管理事实和叙事产物。
+**验证结果**：feedback 全影响面回归 `143 passed`，日报定向回归 `27 passed`，生产脚本 `compileall`、新增叙事字符串规则检查和 `git diff --check` 通过；复用 2026-08-05 的 393 条既有分类生成 88 个问题簇和新版管理报告，未重新取数或分类，本地报告服务返回 200。全仓测试仍在执行用例前被仓库既有的 27 个收集错误及 pytest 全局捕获流关闭问题阻断。
+**影响范围**：`ops-feedback-query` 的 Codex 两阶段日报、最终 Markdown 和运行快照；基础日报、模型网关洞察回退、反馈查询接口、taxonomy 分类和周报/月报确定性统计不变。
+**回滚方式**：移除叙事准备与校验命令，恢复分类完成后直接 `--finalize-prepared` 和原模块问题洞察表渲染，Skill 版本恢复 v1.9.0。
+
+---
+
+
+## 2026-08-06 feedback - 支持局域网浏览日报
+
+**变更原因**：反馈日报浏览服务固定监听回环地址，无法让同一局域网的协作者通过本机私有 IP 查看报告。
+**改动点**：浏览服务新增 `--host`，只接受明确的回环或私有 IPv4 地址，拒绝 `0.0.0.0`、公网地址和主机名；LAN 模式把绑定地址加入 Trusted Host 白名单，默认仍只监听 `127.0.0.1`；同步 Skill 说明和版本。
+**验证结果**：服务契约 `18 passed`，feedback 影响面回归 `100 passed, 1 failed`，唯一失败为本次未修改的 `ops-feedback` frontmatter 存量问题；生产脚本 `compileall` 和 `git diff --check` 通过。正式服务已通过登录任务持续监听 `10.6.53.56:8780`，`/health` 返回 200 并识别 19 份报告；TCP 探测成功，Windows 入站规则确认只允许 `LocalSubnet` 访问该地址的 TCP 8780，且限定项目虚拟环境 Python。
+**影响范围**：仅反馈日报只读 HTTP 浏览服务的可选监听地址；默认本机模式、报告内容和查询流程不变。
+**回滚方式**：移除 `--host`、LAN Host 白名单参数与对应测试，恢复固定监听 `127.0.0.1`。
+
+---
+
+
+## 2026-08-06 feedback - 增加 Codex 两阶段日报调度
+
+**变更原因**：直接通过大模型网关处理数百条反馈耗时长且结构化输出稳定性不足，需要把稳定取数和 Agent 语义分析解耦，并为每日执行留下明确完成标记。
+**改动点**：日报新增 `--prepare-only`、`--claim-ready`、`--validate-chunk` 和 `--finalize-prepared`；08:30 准备阶段持久化脱敏分析输入、报告输入、100 条分块、哈希清单和“数据已完成” READY 标记，Codex 按独立分类契约逐块生成并校验结果，Python 最终复用同一确定性聚合规则计算次数、趋势、影响人数和优先级后发布报告、通知并写入 COMPLETED 标记；重复准备自动复用已完成状态，模型 API 模式保留为可选回退。
+**验证结果**：新增外部分类聚合、准备、领取、逐块校验、离线发布、READY/COMPLETED 故障注入、损坏 chunk 重建与清除、契约外字段清除、常见裸凭据脱敏、旧 backlog 隔离和 Windows 安装脚本契约测试；feedback 影响面回归 `109 passed`，生产脚本 `compileall` 与差异检查通过。真实准备昨日 311 条、对比期 381 条反馈，其中 393 条脱敏模型输入拆为 4 个 chunk，幂等复用成功且邮箱、本机用户路径、Bearer/API Key 值扫描 0 命中；Windows 任务已验证每天 08:30 执行 `--prepare-only`，Codex App 自动化已验证每天 09:00 使用 `gpt-5.6-terra` 消费 ready 数据。全仓测试仍在执行用例前被仓库既有的 27 个收集错误和 pytest 全局捕获流关闭问题阻断。
+**影响范围**：本地不打包的 `ops-feedback-query` Skill、反馈洞察聚合入口、Windows/Codex 日常调度和本地输出目录；不改变反馈服务接口、现有同步 `--insight` 回退能力或公开发行物。
+**回滚方式**：恢复原 Windows 09:00 同步命令，删除 prepared 流水线参数、Codex 分类契约与对应测试，恢复 Skill v1.7.0；本地 `output/feedback-query/prepared/` 可保留或手工删除，不涉及服务端迁移。
+
+---
+
+
+## 2026-08-06 feedback - 增加日报结构化运行产物
+
+**变更原因**：日报过去只保留 Markdown，AI 降级和通知失败缺少持久原因，周报、月报也没有稳定的结构化事实来源。
+**改动点**：每次日报在远端查询前创建 run manifest，完成后写入 `clusters.json` 和不可变的 `report.md`，记录稳定 `period_key`、包含完整窗口/profile 的 `run_key`、基础指标、问题簇、模块汇总、当前/对比/模型输入哈希、模型批次、Prompt 版本/哈希、分阶段耗时、AI 降级原因及独立通知/发布状态；主链路失败同样保留阶段和安全错误；归档成功后才以临时文件原子发布根目录日报，同日重跑不覆盖既有快照；补充市场系统调研报告和 Skill 使用契约。
+**验证结果**：feedback 影响面回归 `92 passed`，其中日报/insight 定向回归 `21 passed`，覆盖早期查询失败、报表字段变化导致快照哈希变化、归档失败不替换已发布日报、发布/清单完成失败状态区分、不可变报告和通知失败不否定分析；脚本编译和差异检查通过。使用昨日 311 条真实反馈完成基础日报及结构化产物落盘，统计一致、归档哈希匹配且敏感模式扫描 0 命中。真实网关 3 次小请求均返回合法 JSON，但正式批量稳定性仍需用后续运行清单持续观察。全仓测试在用例执行前被仓库既有的 pytest 全局捕获流关闭和收集退出问题阻断。
+**影响范围**：反馈洞察结果元数据、日报执行流程、Skill 文档和本地未发布的运行产物；不改变反馈查询接口、模型分类内容、优先级规则或现有 Markdown 路径。
+**回滚方式**：移除 run 目录写入和新增模型元数据字段，恢复 Skill v1.6.1；既有 JSON 快照可直接删除，不涉及服务端数据迁移。
+
+---
+
+
+## 2026-08-06 feedback - 问题分布表格改为双列
+
+**变更原因**：问题分布下的来源与状态表格纵向排列仍占用较多空间，用户要求在同一行展示。
+**改动点**：为来源与状态表增加独立响应式双列容器，桌面端左右并排，780px 移动断点改为单列；同步更新生成、渲染契约、Skill 文档和版本。
+**验证结果**：先以生成和本地渲染契约测试确认旧实现失败；聚焦回归 `42 passed`，脚本 `compileall` 与 `git diff --check` 通过；真实报告在 1280px 下两表同排且各约 406px，390px 下自动单列，页面与表格无横向溢出且控制台无错误。全量测试仍被仓库既有的 27 个收集错误及 pytest 关闭捕获流异常阻断。
+**影响范围**：仅反馈日报问题分布区域的 Markdown 布局标记和本地浏览样式。
+**回滚方式**：移除 summary grid/panel 标记与样式，恢复来源、状态表格顺序展示。
+---
+
+
+## 2026-08-06 feedback - 压缩日报分布概览布局
+
+**变更原因**：反馈类型与问题严重度同时展示饼图和完整表格，重复信息占用较多纵向空间，不利于快速浏览。
+**改动点**：将两张分布图组成响应式双列概览，数量和占比保留在图例中；原始统计表改为默认折叠，仅在 780px 移动断点切换单列；更新 Skill 文档、版本和布局契约测试。
+**验证结果**：Markdown 生成、本地服务和 Skill 契约聚焦回归 `41 passed`，脚本 `compileall` 与 `git diff --check` 通过；真实报告在 1280px 桌面视口呈现双列、390px 移动视口自动单列，页面和面板均无横向溢出，折叠表格展开正常且控制台无错误。全量测试仍被仓库既有的 27 个收集错误及 pytest 关闭捕获流异常阻断。
+**影响范围**：反馈日报 Markdown 的分布概览及本地浏览页面，不改变查询、AI 洞察、通知或定时任务行为。
+**回滚方式**：恢复顺序图表和常显统计表，移除分布布局标记及对应本地样式。
+---
+
+
+## 2026-08-05 feedback - 增加 Mermaid 数据分布图
+
+**变更原因**：反馈日报已有完整统计表，但反馈类型与严重度分布缺少可快速扫描的图形表达，本地浏览器也会把 Mermaid 扩展语法仅作为代码展示。
+**改动点**：日报新增反馈类型和问题严重度两张 Mermaid `pie showData` 图并保留原表格兜底；本地浏览服务增加无外部依赖的安全饼图渲染、数量占比图例和无障碍说明，不支持的 Mermaid 类型继续转义显示；更新 Skill 文档和版本。
+**验证结果**：反馈查询、日报和本地服务相关回归 `41 passed`，`compileall` 与 `git diff --check` 通过；现有 AI 正式试跑报告已补充两张图作为真实样例。本地浏览器验证桌面和 390px 移动视口均渲染 2 张图、8 条图例，无页面或图表横向溢出，移动端饼图稳定为 190px，且未加载任何外部脚本。
+**影响范围**：反馈 Markdown 的统计展示和本地浏览页面；不改变查询、AI 分类、确定性优先级、企业微信摘要或定时任务参数。
+**回滚方式**：移除 Mermaid 图生成和本地 pie 渲染，恢复 Skill 版本及说明。
+---
+
+
+## 2026-08-05 feedback - 增加本地日报浏览服务
+
+**变更原因**：反馈日报目前只输出到本地 Markdown 文件，缺少无需进入文件系统即可按日期浏览和查看报告的本地入口。
+**改动点**：新增仅监听 `127.0.0.1` 的反馈日报 HTTP 服务，提供报告列表与搜索、Markdown 安全渲染、原文读取、JSON 列表和健康检查；只识别报告目录根部符合日报或月度复盘命名的 Markdown，并更新 Skill 文档和版本。
+**验证结果**：反馈查询、日报和本地服务相关回归 `39 passed`，`compileall` 与 `git diff --check` 通过；真实服务在 `127.0.0.1:8780` 返回健康检查 200，识别 15 份 Markdown 报告并自动展示最新 AI 正式试跑报告。浏览器验证桌面和 390px 移动视口均无页面级横向溢出，报告筛选、固定侧栏、表格局部滚动和当前报告状态生效；首页重定向、报告页面、原文和 API 均使用 CSP 与 `no-store`。并发替换中的报告、损坏编码和目录外符号链接均有回归保护。
+**影响范围**：仅新增可选的本地报告读取服务；不改变反馈查询、AI 洞察生成和企业微信推送流程。
+**回滚方式**：删除本地报告服务脚本、对应测试和 Skill 使用说明。
+---
+
+
+## 2026-08-05 feedback - 延长大模型洞察执行超时
+
+**变更原因**：反馈洞察按批次调用模型并生成结构化分类，真实网关的 5 条样本超过原固定 10 秒；正式试跑的 100 条批次又连续超过 60 秒和 120 秒，且大批输出会抄错长 UUID，导致正常任务失败或降级。
+**改动点**：模型 HTTP 连接、写入和连接池等待保持 10 秒，结构化响应读取调整为 300 秒；单批网络错误或结构化响应错误重试一次，明确的 4xx 请求错误不重试；生产默认和示例 `batch_size` 调整为 100，日报读取相同的显式或默认配置，按反馈数、配置批次和重试预算计算子进程超时并限制为最多 1 小时；大批分类改用批内短引用并在本地映射回 UUID，Prompt 要求中文输出，已有问题分类表上限提高到 200；增加对应协议、默认值、重试与超时契约测试，并忽略仅供本地使用的模型密钥配置。
+**验证结果**：feedback 与日报相关回归共 `21 passed`，`compileall` 和 `git diff --check` 通过；真实网关使用 `gpt-5.5`、`batch_size=100` 在约 9 分 43 秒内完成 245 条本周期问题反馈和 111 条对比期反馈的分类聚合，生成 112 个问题项、38 个模块，洞察本周期计数合计 245，摘要和建议为中文，日报返回 `insight=true`、`insight_degraded=false` 且未发送企业微信；敏感字段扫描 0 命中。
+**影响范围**：`opscli feedback insight` 的默认批次、模型请求超时、单批重试、模型输入引用和中文分类约束，以及反馈日报等待整个洞察任务的方式；不改变反馈查询超时、确定性聚合、失败降级或报告结构。
+**回滚方式**：恢复原 10 秒模型请求、50 条默认批次和 120 秒日报子进程超时，移除批内引用映射、网络重试、中文 Prompt 约束、对应测试及本地配置忽略规则。
+---
+
+
+## 2026-08-05 collector_monitor - 增加账号与当日额度监控
+
+**变更原因**：现有 Monitor 只能观察任务和运行时，值班人员无法同时确认 SellerSprite 执行账号健康、专属绑定、活跃占用和当天实际计费执行情况。
+**改动点**：新增严格只读的账号存储适配、`GET /api/v1/accounts` 与 `GET /api/v1/usage/today`，按账号分区聚合最近成功/失败和活跃占用，按北京时间读取 `mcp_quota_daily`；账号 Tab 上下展示执行账号和今日用户调用，身份全部掩码，并明确排除配额拒绝、认证拒绝与无限额用户；同步需求、架构、UIUX、运维和跨模块依赖许可文档。
+**验证结果**：TDD 覆盖只读 SQLite、账号间高频历史隔离、北京时间日界、额度口径、HTTP 脱敏和 UI 合同；Collector Monitor 全量测试、`compileall` 与 `git diff --check` 通过，Standards/Spec 双轴审查发现的分区查询、部署权限、模块分层、依赖许可、注释和重复只读连接问题均已修复。
+**影响范围**：仅 Collector Monitor 新增两个只读 API 与“账号”Tab；不修改 SellerSprite/MCP 业务库 schema，不迁移、不写入业务 SQLite，不改变额度结算和任务调度。
+**回滚方式**：回退账号只读存储适配、两个 API、账号 Tab、配置路径接线、测试和相关文档；业务数据库无需回滚。
+---
+
+
+## 2026-08-04 Collector MCP - SellerSprite 成功数据沉淀到 MySQL
+
+**变更原因**：SellerSprite 成功任务此前只保留本地导出文件，无法在统一数据库中按生产/调试环境持续查询，也缺少 MySQL 故障后的独立重试能力。
+**改动点**：新增 Collector 通用 SQLite Outbox、来源 Parser/Reconciler 注册接口和 MySQL Repository；SellerSprite JSON 主表、附加 Sheet 与 XLSX 工作表统一写入逻辑 Dataset/逐行 JSON，原始及交付文件只登记 URI、大小和 SHA-256；任务成功事务同步追加单调成功事件，避免并发乱序完成造成补偿漏数；MySQL TLS CA 改为可选，配置后验证服务端证书和主机身份，未配置时仅适用于受控内网。Keepa 与历史任务不接入，历史生产 succeeded backfill 仅保留 TODO。MySQL 8 逐行序号列使用非保留名 `source_row_number`；Collector 运维说明补齐生产环境文件、systemd、共享库初始化、验收、Outbox 备份恢复、排障和回滚流程。
+**验证结果**：Collector、SellerSprite 队列和调度聚焦回归 `115 passed`，SellerSprite MCP 工具 `89 passed`；SellerSprite 全量 `439 passed, 2 failed`，两项均为既有 `seller-sprite-debug` 命令未注册基线问题。MySQL 保留字修复后的 Collector MCP 回归 `30 passed`，相关文件 Ruff 和格式检查通过。新增存储文件 Ruff、格式检查、`compileall`、`uv lock --check` 与 `git diff --check` 通过；双轴代码审查发现的乱序补偿、历史重取边界、Worker 生命周期、流式内存、常量注释和变更记录问题均已修复。生产未配置 MySQL CA 时接受受控内网边界风险，跨不可信网络必须配置 CA。
+**影响范围**：仅在 Collector 显式启用存储配置后沉淀新 SellerSprite 成功任务；默认关闭，不改变采集成功状态、文件导出、Keepa 或现有历史数据。
+**回滚方式**：关闭 `OPSCLI_COLLECTION_STORAGE_ENABLED` 并回退通用存储模块、SellerSprite 成功事件/提交适配、MySQL 依赖和配置文档；MySQL 新表及独立 Outbox 可保留，不影响原业务队列。
+---
+
+
+## 2026-08-03 feedback - 增加大模型模块洞察与周期提醒
+
+**变更原因**：原反馈日报只能按类型、严重度和标题罗列记录，无法回答“哪个模块在什么周期发生了多少次、趋势如何、建议优先做什么”。
+**改动点**：新增 `opscli feedback insight`，通过独立受保护配置调用 OpenAI-compatible Chat Completions 接口，对脱敏反馈进行模块、稳定问题键、问题类别、摘要和建议工作分类；次数、上一等长周期环比、影响人数和 P0-P4 优先级由本地规则确定性计算。`ops-feedback-query` v1.3.0 新增 `--insight/--insight-config`，批量读取当前与上一周期详情，生成模块问题洞察表，并在企微摘要优先提醒 P0/P1。systemd 安装器支持可选模型配置，启用前校验字段并收紧为 `0600`；未配置时保持旧日报行为。
+**验证结果**：feedback 洞察 CLI、模型请求脱敏、跨批次错误模板对齐、周期聚合、优先级、低置信度待复核、模型失败降级、日报详情脱敏、模块建议表、企微 P0/P1 提醒及 systemd 可选配置聚焦回归 `42 passed`；生产代码 `compileall`、CLI 帮助入口和 `git diff --check` 通过。全库使用 `--import-mode=importlib` 并忽略既有 Shopify MCP 收集阻塞后为 `2179 passed, 52 failed`，失败均位于本次未修改的 Rufus、calculator、query、seller-sprite、旧 Skill 契约等区域。
+**影响范围**：新增可选反馈洞察路径和 `feedback` CLI 子命令；不修改反馈提交/详情 API，不改变默认日报和公开发行边界。
+**回滚方式**：移除 insight 服务与 CLI、日报 `--insight` 路径、systemd 可选参数、Skill v1.3.0 文档和相关测试；不涉及反馈数据迁移。
+---
+
+
+## 2026-08-03 collector_monitor - 修复 Collector 探测鉴权 Header
+
+**变更原因**：Monitor 将页面或 Key 文件中的 API Key 作为 `X-MCP-API-Key` 发送，但 Collector 鉴权中间件只接受标准 Bearer、query 参数或 Inspector 代理 Header，导致“立即探测 Collector”在 Key 有效时仍于工具调用前返回 401。
+**改动点**：Monitor 的页面临时 Key 和生产 Key 文件统一改用 `Authorization: Bearer <api_key>`；保留首尾空白清理、禁止携带凭据重定向、响应脱敏和 `COLLECTOR_AUTH_FAILED` 分类；新增跨模块契约测试，将 Monitor 生成的 Header 送入真实 `ApiKeyAuthMiddleware`，防止客户端与服务端鉴权合同再次漂移。
+**验证结果**：修复前定向回归稳定出现 4 项失败，修复后 4 项通过；Collector Monitor 完整回归 `92 passed`，`compileall` 与 `git diff --check` 通过；本地服务 HTTP 200，页面“立即探测 Collector”按钮与固定端点加载验证通过。
+**影响范围**：Collector Monitor 到 Collector MCP 的鉴权 Header；不改变 API Key 内容、OPS 远程校验、页面本地保存或队列源探测。
+**回滚方式**：回退 Bearer Header、跨模块契约测试、文档和本条记录。
+---
+
+
+## 2026-08-03 collector_monitor - 支持浏览器选择性保存 API Key
+
+**变更原因**：重复进行 Collector 鉴权诊断时，每次重新输入 API Key 操作繁琐，需要一个由运维人员明确选择的本地保存方式。
+**改动点**：Collector Tab 增加默认关闭的“保存到此浏览器”复选框；勾选后将通过长度与控制字符校验的 Key 以明文写入当前同源页面的 `localStorage`，刷新页面自动恢复，取消勾选立即删除；未勾选时继续保持单次发送后清空，浏览器拒绝本地存储时自动回退为不保存。服务端探测协议、脱敏边界和生产 Key 文件配置不变。
+**验证结果**：Collector Monitor 回归 `91 passed`，`compileall` 与 `git diff --check` 通过；浏览器保存、刷新恢复、取消删除、未保存自动清空及鉴权错误分类验证通过。
+**影响范围**：仅 Collector Tab 的浏览器本地凭据体验和相关文档；不新增服务端持久化、不改变队列源探测或后台监控。
+**回滚方式**：回退保存复选框、`localStorage` 读写、UI 契约测试、文档和本条记录。
+---
+
+
+## 2026-08-03 collector_monitor - 增加一次性 API Key 探测
+
+**变更原因**：Collector MCP 开启 API Key 鉴权后，监控端只能报告连接失败，运维人员无法区分服务不可达与 Key 配置错误。
+**改动点**：Collector Tab 新增密码型临时 API Key 输入框，仅随下一次 Collector 手动探测发送并立即清空；临时 Key 不写入环境变量、配置文件、监控状态、缓存、响应或日志，生产持久配置仍使用 Key 文件；探测将 MCP 401/403 稳定归类为 `COLLECTOR_AUTH_FAILED`，并限制请求只接受最长 512 字符的 `api_key`，拒绝队列源携带 Key、未知字段、非 JSON、跨域请求及超过 2048 字节的请求体。
+**验证结果**：Collector Monitor 回归 `91 passed`，`compileall` 与 `git diff --check` 通过；浏览器验证输入框使用 `type=password` 和 `autocomplete=new-password`，无效 Key 返回 `COLLECTOR_AUTH_FAILED`，请求发出后输入值已清空且响应未泄露 Key。
+**影响范围**：仅 Collector 手动探测的可选临时鉴权参数、错误分类及页面输入控件；不改变后台自动监控、队列源探测或生产 Key 持久配置方式。
+**回滚方式**：回退临时 Key 请求解析、Collector 探测透传与鉴权错误映射、UI 输入框、测试、文档和本条记录。
+---
+
+
+## 2026-08-03 collector_monitor - 仪表盘按监控领域拆分 Tab
+
+**变更原因**：任务列表较长时，Collector 探测、运行时和事故区域被推到页面下方，不利于运维快速切换和定位。
+**改动点**：保留顶部任务总览，将主工作区拆分为任务、Collector、运行时和事故四个可访问 Tab；任务列表与进度时间线并列，桌面端使用有界滚动，移动端降为单列；支持鼠标及方向键、Home、End 切换，自动刷新不改变当前 Tab。
+**验证结果**：Collector Monitor 回归 `82 passed`，`compileall` 与 `git diff --check` 通过；桌面浏览器渲染、Tab 切换及队列源手动探测验证通过，窄屏断点与单列布局规则完成静态检查。
+**影响范围**：仅 Collector Monitor 嵌入式仪表盘布局与前端交互，不修改监控 API、探测语义或数据存储。
+**回滚方式**：回退仪表盘 Tab 布局、对应契约测试、UIUX 文档和本条记录。
+---
+
+
+## 2026-08-03 collector_monitor - 增强队列故障可见性与手动探测
+
+**变更原因**：SellerSprite 队列数据库路径异常时会在任务入队前失败，原有 Collector 启动链会同时失去健康查询能力，Monitor 也缺少运维修复后的安全验证入口。
+**改动点**：统一 SellerSprite 写端与 Monitor 读端的队列路径配置并拒绝冲突；SellerSprite Bundle 启动失败时保留 Collector 健康面，以稳定脱敏错误码报告数据库不可用，业务工具在未就绪时拒绝入队；新增 Collector/队列源固定目标的同步手动探测 API、CLI 和 UI，实施单目标并发锁、10 秒冷却与 5 秒硬超时，并移除后台自动 Collector 探测；同步生产路径、部署说明和分期设计文档，明确不提供任务重试、服务重启、自动恢复或 feedback 接入。
+**验证结果**：TDD 红绿过程已完成；SellerSprite Bundle/MCP 工具回归 `91 passed`，Monitor 服务/API/CLI 回归 `24 passed`，最终影响面组合回归 `183 passed`；`compileall` 与 `git diff --check` 通过。全仓单次收集受同名测试模块和既有输出流关闭问题阻塞；分模块回归确认多个未改动模块存在既有失败，SellerSprite 首个失败仍为既有导出文件名断言，MCP 首个错误为既有 Shopify helper 导入缺失。双轴代码审查发现的异常体系、常量注释和公开方法 docstring 规范问题已修复，最终复审未发现阻塞项。
+**影响范围**：SellerSprite 队列路径解析、Collector SellerSprite Bundle 生命周期与业务就绪门禁、Collector Monitor 探测 API/CLI/UI 和生产运维配置；不修改业务任务 schema、请求参数或任务恢复语义。
+**回滚方式**：回退共享路径解析、Bundle 启动隔离与就绪门禁、手动探测服务/API/CLI/UI、测试和对应文档；Monitor 可独立停止，业务队列无需迁移或回写。
+---
+
+
+## 2026-07-31 seller_sprite - 增加实时查竞价场景
+
+**变更原因**：需要按站点和单个 ASIN 自动刷新或创建实时竞价任务，并将列表页官方导出的完整竞价口径与详情页按广告类型展示的分页口径正确区分。
+**改动点**：新增 `real-time-bidding` browser-route 场景和单 ASIN 校验；按更新时间倒序持续翻页，普通历史完成/失败记录触发一次“再次查询”，无历史时通过弹窗新建默认推荐关键词任务，进行中任务只等待，官网示例只读；分别读取完成任务 SP、SB 第一页 100 条并按关键词严格合并，覆盖官方 46 列主表且排除 `Notes` 页；任务创建禁用自动重放。
+**验证结果**：实时查竞价参数、再次查询、无历史新建、弹窗延迟与单次确认、进行中/未知状态不重复提交、旧失败记录隔离、官网示例只读、SP/SB 严格合并、46 列本地导出、官方 fixture 契约和 MCP 场景说明定向回归通过；SellerSprite 与 MCP 回归（排除未改动且当前基线失败的 `test_cli_split.py`）492 项通过；`compileall`、JSON 解析和 `git diff --check` 通过。
+**影响范围**：新增独立的 `real-time-bidding` 场景，会按上述规则创建或刷新官网任务；现有 SellerSprite 场景和官方导出接口不变。
+**回滚方式**：回退实时查竞价场景注册、历史判断与任务刷新/创建、SP/SB 合并、导出映射、测试、参考资料和本条记录。
+---
+
+
+## 2026-07-31 seller_sprite - 归档官方导出回归基线
+
+**变更原因**：多份卖家精灵官网 XLSX 原件散落在临时 `output/`，既容易与本地运行产物混淆，也缺少防止误覆盖和损坏的完整性约束。
+**改动点**：将广告洞察、流量词对比、拓展流量词和关键词转化率四份官方原件按场景迁入 `tests/fixtures/seller_sprite/official_exports/`；保留官网原始文件名，新增统一 README、大小与 SHA-256 索引及 XLSX ZIP 完整性测试；场景 manifest 和广告洞察调研文档改为引用固定 fixture 路径。二进制原件不进入运行时 reference 和发行包。
+**验证结果**：fixture 清单、文件数量、大小、SHA-256、ZIP 完整性及 XLSX 必需成员回归通过；四份文件总量约 2.2 MB，当前无需 Git LFS；`git diff --check` 通过。
+**影响范围**：仅测试回归资料和引用路径；不改变 SellerSprite 查询、导出、队列或额度行为。
+**回滚方式**：删除 fixture 索引和测试，将四份官方原件移回临时 `output/`，并回退 manifest、调研文档和本条记录。
+---
+
+
+## 2026-07-31 seller_sprite - 增加关键词转化率场景
+
+**变更原因**：需要按站点、按周或近 90 天周期批量查询最多 1000 个关键词词组，并解决官网标签输入框在 Enter 已生效后仍可能返回动作超时导致重复提交的风险。
+**改动点**：新增 `keyword-conversion-rate` browser-route 场景和 `/v3/api/keyword-conv` 第一页查询；每个词组只发送一次 Enter，异常后以标签计数判断是否成功，禁止盲目补按；全部标签和 `已录入N/1000个关键词` 文案严格校验完成后才建立主响应监听并单击一次查询，避免最多 1000 个词组的录入耗尽响应预算；固定第一页 100 条，按官方参考工作簿生成 33 列单业务表并排除 `Notes` 页；同步场景证据、参数手册和 Skill。
+**验证结果**：payload、页面交互、导出和 Manager 红绿测试通过；真实登录页面确认站点/周期选择器、标签计数语义、主接口及返回字段；工作簿结构、公式错误扫描和视觉渲染通过；SellerSprite 聚焦回归 `336 passed, 1 deselected`，双轴代码审查复核通过，`compileall` 和 `git diff --check` 通过；全量测试仍受仓库既有收集错误和 pytest 捕获流关闭问题阻塞。
+**影响范围**：新增独立 `keyword-conversion-rate` 场景和 `ops-seller-sprite v0.0.16` 文档；现有场景和额度策略不变。
+**回滚方式**：回退关键词转化率场景注册、页面交互、导出映射、测试、参考资料、Skill 文档和本条记录。
+---
+
+
+## 2026-07-31 seller_sprite - 增加拓展流量词场景
+
+**变更原因**：需要输入最多 20 个父体或子体 ASIN，经过官网 prepare 和变体选择流程获取拓展流量词，并按官方工作簿结构生成第一页 100 条结果。
+**改动点**：新增 `traffic-extend` browser-route 场景、站点/周期/ASIN 参数校验及全部、畅销、当前三种变体模式，省略时默认全部变体；固定捕获 `/v3/api/traffic/extend/asin` 第一页 100 条，不调用官方全量异步导出；本地生成官方 33 列主表、`Unique Words` 和 `Asin`，明确排除官网 `Notes` 页，同步场景参考资料及 Skill 参数手册。
+**验证结果**：payload、导出、browser-route、Manager 和 MCP 参数手册专项回归通过；生成工作簿经结构检查和三个业务工作表视觉渲染确认；`compileall`、`git diff --check` 通过。全量测试仍受既有重复测试模块名和 Shopify `_shopify_manager` 导入错误阻塞。
+**影响范围**：新增独立 `traffic-extend` 场景和 `ops-seller-sprite v0.0.15` 文档；现有 SellerSprite 场景、额度策略及官方导出行为不变。
+**回滚方式**：回退拓展流量词场景注册、页面交互、导出映射、测试、参考资料、Skill 文档和本条记录。
+---
+
+
+## 2026-07-31 mcp - 区分远程鉴权临时不可用与无效 Key
+
+**变更原因**：远程 API Key 校验发生 ReadTimeout 且进程内无可用成功缓存时，中间件会返回 401 `invalid_api_key`，把鉴权依赖临时不可用误报为 Key 无效，并诱发客户端继续探测 OAuth/OIDC。
+**改动点**：新增远程鉴权临时不可用异常；超时、连接错误或 5xx 且无宽限缓存时返回带 `Retry-After: 5` 的 503，后端明确返回 `valid=false`、401 或 403 时仍返回 401；补充 ReadTimeout 无缓存回归测试并更新宽限过期断言。
+**验证结果**：`tests/mcp/test_auth_middleware.py` 6 passed；排除既有 `test_shopify_tools.py` 导入阻塞后，MCP 扩展回归 347 passed、5 个既有工具注册失败；全量 MCP 收集另被既有 `_shopify_manager` 导入错误阻塞。关键 Ruff 规则（E4/E7/E9/F）、`compileall`、`git diff --check` 通过。
+**影响范围**：仅 MCP HTTP/SSE 远程 API Key 校验临时故障且无可用缓存的响应状态；固定 Key 模式和权威无效 Key 的 401 行为不变。
+**回滚方式**：回退 `auth_middleware.py`、对应测试和本条变更记录。
+---
+
+
+## 2026-07-31 seller_sprite - 修复流量词对比变体弹窗
+
+**变更原因**：流量词对比 prepare 成功后，主响应监听可能在弹窗按钮点击前耗尽超时，且点击异常会被误报为主响应丢失；官网畅销变体可能替换原始 ASIN，旧校验会在路由回调内拒绝请求并导致弹窗卡住。
+**改动点**：主响应监听调整到变体按钮点击前并延长至 120 秒，细分查询点击、变体激活、激活后未产生 POST、官网接口路径变化和请求已发出但响应丢失错误，所有激活后不明确状态均禁止重放；请求与响应异常改在对应 Playwright 上下文退出边界分类，官网路径变化后立即取消旧接口响应监听，避免误报或空等；针对 Collector 中普通 locator 点击只产生 hover、键盘 Enter 虽产生 DOM click 但未执行官网业务处理的现象，最终变体按钮改为等待弹窗稳定后按按钮中心坐标发送一次完整可信鼠标激活，禁止补按 Enter、补点和重试；请求或响应缺失时输出带统一标记的脱敏按钮状态、DOM 键盘/鼠标/点击事件计数、弹窗状态和页面级 JavaScript 错误/未处理拒绝计数；诊断仅记录请求方法和 URL 路径，不记录请求体、Cookie 或 Header；支持默认畅销变体及显式当前变体；路由接受官网生成的合法唯一 ASIN 列表，不再强制包含原始 ASIN；页面主请求校验失败时先立即透传结构化错误再主动中止路由，避免请求悬挂或中止异常退化为超时；离线等待器按真实 Playwright 上下文退出语义等待事件，防止错误分类测试产生假阳性；MCP 测试默认使用内存假凭证，禁止委托生产凭证读取。
+**验证结果**：修复前离线回归稳定复现主监听时序、当前变体参数缺失、点击错误误报、畅销变体替换原始 ASIN 被拒绝、路由悬挂及点击后请求状态无法区分问题；真实 Chrome 已确认“用畅销变体拓词”可点击、弹窗关闭、`POST /v3/api/keyword-comparison/asin` 返回 200 且页面正常展示结果；键盘激活日志确认 `keydown/keyup/click` 均发生但弹窗未关闭、无 POST 且无页面异常；单次可信鼠标激活红测先稳定出现 2 项失败，改为按钮中心坐标单击后 2 项通过；browser worker 回归 `109 passed`，排除已确认的导出文件名基线问题后，payload、Manager、worker 与 SellerSprite MCP 聚焦回归 `299 passed, 1 deselected`；`compileall` 和 `git diff --check` 通过。SellerSprite 扩展回归另有 2 项既有 `seller-sprite-debug` 命令未注册失败；当前运行 Collector 需重启后才会加载最新代码。
+**影响范围**：流量词对比 browser-route 页面交互及场景参数。
+**回滚方式**：回退本次流量词对比交互、参数、测试和文档改动。
+---
+
+
+## 2026-07-30 seller_sprite - 增加流量词对比场景
+
+**变更原因**：需要按自己的 ASIN 和最多 10 个竞品 ASIN 获取流量词差异，并自动选择畅销变体后在本地生成业务工作簿。
+**改动点**：新增流量词对比场景、参数校验、prepare 错误透传、畅销变体自动交互、动态 ASIN 列和本地 XLSX；同步脱敏参考证据、Skill 参数及调研文档。
+**验证结果**：流量词对比 browser-route 定向回归 `15 passed`，payload/export/Manager 定向回归 `10 passed`，MCP 参数与场景文档回归 `2 passed`；SellerSprite 排除 3 项已确认基线失败后 `355 passed, 3 deselected`，SellerSprite MCP `97 passed`，Collector bundle `2 passed`，Skill packaging `8 passed`；`compileall`、5 个 reference JSON 语法校验、敏感字段扫描和 `git diff --check` 通过。
+**影响范围**：新增 `keyword-comparison` browser-route 场景；固定查询第一页 100 条，不调用官方额度型导出，不影响现有场景。
+**回滚方式**：回退流量词对比场景、浏览器交互、动态导出、测试、参考证据、Skill 文档和本条记录。
+---
+
+
+## 2026-07-30 seller_sprite - 整理广告洞察技术调研
+
+**变更原因**：广告洞察完整数据需要按广告组和周期获取关键词明细，请求量和任务耗时显著高于普通分页场景，需要先固化真实接口、工作簿结构和风险边界。
+**改动点**：新增广告洞察场景参数调研文档，记录主列表、周期关键词明细、分页、官方 XLSX 字段映射、请求量估算及四种后续获取方案；同步能力地图和索引，将该能力调整为待方案评估、暂缓实现。
+**验证结果**：文档链接、敏感信息、差异格式和改动范围检查通过。
+**影响范围**：仅更新技术调研和能力地图；未修改生产代码，未注册广告洞察场景，不改变 CLI、MCP、队列、额度或导出行为。
+**回滚方式**：删除广告洞察调研文档，并回退能力地图、索引和本条记录。
+---
+
+
+## 2026-07-30 seller_sprite - 增加全球商标库场景
+
+**变更原因**：需要接入卖家精灵全球商标库的完整筛选和官方 Excel 导出，并适配导出接口约 37 秒的响应时间。
+**改动点**：新增 `branddb` 场景、完整筛选参数和官方 `POST_XLSX` 导出；通过已登录浏览器上下文直接请求接口并原样保存文件，对该额度型请求禁用会话恢复和账号故障转移重放；同步脱敏场景证据与 Skill 参数文档。
+**验证结果**：branddb 定向及核心回归 211 项通过，1 项既有 Windows 长路径文件名基线失败；SellerSprite 全量 330 项通过，3 项既有基线失败，排除既有基线后 317 项通过；SellerSprite MCP 97 项、Collector MCP 2 项、Skill packaging 8 项通过；`compileall` 与 `git diff --check` 通过。
+**影响范围**：新增全球商标库 browser-route 查询导出；现有场景、通用任务超时和进程崩溃后的队列恢复模型不变。
+**回滚方式**：回退 `branddb` 场景、`POST_XLSX` 传输及不可重放控制、测试、参考证据、Skill 文档和本条记录。
+---
+
+
+## 2026-07-29 collector_monitor - 新增采集任务监控与提醒服务
+
+**变更原因**：Collector 与卖家精灵任务偶发卡住时缺少独立监督、可视化定位和主动提醒，现有 owner 级心跳也无法证明具体任务仍在推进。
+**改动点**：新增独立 Collector Monitor 服务、只读监控 API/网页/CLI、任务进度与调度器运行时监督、卡住和无人消费判定、企业微信去重及恢复提醒；复审加固多调度器全局账号占用容量、故障接替 CAS 冲突收口、业务库与状态库已打开连接物理身份隔离、只读查询错误语义、阻塞存储线程边界、API Key 探测总超时及禁止密钥重定向、通知正文安全、严格整数配置和公开方法类型合同；首期不提供任务取消、重试或自动恢复。
+**验证结果**：状态库身份、账号池与故障接替聚焦回归 `15 passed`，SellerSprite 监督回归 `97 passed`，Monitor 与 Remote MCP 回归 `89 passed`，构建/入口合同 `5 passed`；组合回归排除 3 项已在基线复现的失败后为 `386 passed, 3 deselected`（1 项既有导出文件名断言受未授权上传影响，2 项既有 `seller-sprite-debug` 顶级命令未注册）。`uv lock --check`、`compileall`、新增行敏感凭证扫描、新增公开方法返回类型检查、生成 C 文件污染检查和 `git diff --check` 通过。生产 sdist 构建成功并包含 269 个 C 源及 Monitor 必需入口；Windows 环境因未安装 MSVC 未构建正式 Cython wheel；另以 `SKIP_CYTHON=1` 构建并安装验证 wheel，确认 `opscli collector-monitor`、`opscli-collector-monitor`、五个 CLI 子命令、七个 HTTP/UI 路径、安全响应头和三条查询命令均可用。
+**影响范围**：新增独立监控进程及 SellerSprite 脱敏监督字段；不改变已有任务提交协议，不允许监控服务修改业务队列。
+**回滚方式**：停止并移除 Collector Monitor 服务，回退监控模块、SellerSprite 监督字段、依赖、测试、文档及本条记录；增量 SQLite 监督字段可保留且不影响旧版本读取。
+---
+
+
+## 2026-07-30 Collector MCP - SellerSprite 额度设置迁移 SQL
+
+**变更原因**：SellerSprite 拆分到 Collector MCP 后，新服务器需要复用生产环境的基础额度和邮箱日加额设置，但不应迁移当日已用次数。
+**改动点**：新增 `scripts/export_seller_sprite_quota_settings.sql`；在生产 quota SQLite 上执行即可生成供新服务器直接导入的 SQL，仅包含 SellerSprite policy 和 bonus 设置。补充 Collector MCP 运维步骤。
+**验证结果**：使用临时源库和目标库执行 SQL 导出、导入回归，基础策略和邮箱日加额正确迁移，Keepa 设置及 `mcp_quota_daily` 保持不变；`git diff --check` 通过。
+**影响范围**：仅新增离线运维 SQL 和说明；不改变 MCP 运行时额度逻辑和现有数据库。
+**回滚方式**：删除迁移 SQL 和运维说明，并移除本条变更记录。
+---
+
+
+## 2026-08-03 Collector Monitor - 新增关键词反查场景测试
+
+**变更原因**：仅做连通性嗅探无法验证 API Key 是否具备 `seller_sprite_run` 权限，也无法确认真实任务能否进入 Collector 队列。
+**改动点**：新增默认关闭的场景测试开关、`GET/POST /api/v1/commands/scenario-test` 接口和独立“场景测试”Tab；服务端固定调用 `seller_sprite_run` 的 `keyword-reverse`（关键词反查）场景，仅允许修改 ASIN、站点、周期和每页数量，并强制 `export_format=json`。提交前必须显式提供临时 Key，并确认会创建真实任务和消耗额度；受保护 Key 文件只用于 Collector 探测，场景不借用。401/403 分别映射为 Key 无效和缺少场景权限。单次提交加锁且成功后冷却 10 秒，不自动重试；请求超时返回结果未知并在底层调用结束前继续持锁。Collector 探测与场景测试共用同一个可选浏览器本地 Key。
+**验证结果**：`tests/collector_monitor` 完整回归 `138 passed`；`compileall` 与 `git diff --check` 通过；浏览器验证 1440x900 和 390x844 布局无横向溢出、表单裁切或控制台错误，未提交真实任务。代码审查后补充了取消路径持锁、Monitor/Collector 明文 Key 阻断、场景强制显式 Key、ASCII/支持站点校验、流式请求体上限和稳定异常映射测试。
+**影响范围**：仅影响 Collector Monitor；功能默认关闭，不改变 Collector MCP 和既有只读监控行为。
+**回滚方式**：移除场景测试配置、服务接口、页面 Tab、测试及相关文档。
+---
+
+
+## 2026-08-03 Collector Monitor - 自动发现企业微信 Webhook 文件
+
+**变更原因**：本地与同机部署不应每次启动都重复配置 Webhook 环境变量；经项目所有者确认，该机器人地址可作为项目默认消息接收端。
+**改动点**：新增随包分发的 `opscli/collector_monitor/wecom-webhook`，未配置环境变量时自动使用；显式 `OPSCLI_COLLECTOR_MONITOR_WEBHOOK_FILE` 优先，设置为空可禁用。同步补充 wheel/sdist package data。
+**验证结果**：新增默认发现、环境覆盖和显式禁用配置测试；Collector Monitor 完整回归结果见本次交付验证。
+**影响范围**：仅影响 Webhook 文件路径解析；通知规则、去重、冷却和消息内容不变。
+**回滚方式**：恢复 `WEBHOOK_FILE` 仅从环境变量读取的逻辑，并删除本条文档。
+---
+
+
+## 2026-08-03 SellerSprite - JSON 与 XLSX 共用格式化工作表
+
+**变更原因**：卖家精灵 JSON 导出此前直接保存接口字段，而 XLSX 使用中文列、字段 fallback、值转换和多 Sheet，导致两种格式的字段含义与数据结构割裂。
+**改动点**：新增跨格式工作表模型，将 SellerSprite 通用主表、数字显示格式、词频表、ASIN 辅助表以及流量词对比动态表收口到同一份格式化数据；普通任务与 Listing Analysis 三段式 JSON 均改为 schema v2，以 `columns + rows` 保留列顺序和重复表头，通过 `number_formats` 暴露 XLSX 同列数字格式，并通过 `additional_sheets` 表达 XLSX 辅助表；Skill 增加 JSON v2 读取规则和 AI 分析优先 JSON 的导出建议，版本升至 `v0.0.19`。
+**验证结果**：Skill 校验通过；普通 JSON、数字格式、三 Sheet 拓词、关键词挖掘、动态流量词对比以及普通/三段式 Listing Analysis 已补充 schema v2 断言；聚焦回归 `137 passed`；SellerSprite 与相关 MCP 全量回归 `523 passed, 2 failed`，两项失败均为仓库已注释 `seller-sprite-debug` 注册但既有测试仍要求该命令存在，与本次改动无关。
+**影响范围**：SellerSprite 本地格式化导出；官方原样 XLSX 场景不变。
+**回滚方式**：回退 SellerSprite 工作表模型、导出器、JSON 接入及对应测试。
+---
+
+
+## 2026-08-04 SellerSprite - 账号源失败关闭与认证失败隔离
+
+**变更原因**：生产任务在废弃账号认证失败后可能继续使用旧本地账号，且进程重启会丢失账号不可用状态，最终表现为任务卡住或重复登录失败。
+**改动点**：生产调度器禁止远程账号源异常时静默回退本地账号，并区分账号源不可用、无合格账号、备用账号繁忙和全部凭据认证失败；SQLite 队列升级到 v7，按账号散列和凭据版本散列保存 24 小时隔离；认证失败会关闭会话并把未被 Worker 或 Chromium 锁定的持久 Profile 移入诊断隔离目录；隔离持久化失败时降级为进程内隔离，不中断已完成的任务改绑。
+**验证结果**：账号 Provider、账号池、任务队列、调度器和浏览器 Worker 聚焦回归通过；项目全量测试受仓库既有同名测试模块收集冲突及 Shopify helper 导入错误阻断，与本次 SellerSprite 改动无关。
+**影响范围**：SellerSprite 公共账号池的账号加载、故障切换、SQLite 队列 schema 和认证失败浏览器 Profile；本地显式账号调试仍保持兼容。
+**回滚方式**：回退 SellerSprite 账号 Provider、账号池、调度器、队列 v7 隔离表、Profile 隔离逻辑及对应测试；SQLite 新增表可保留，不影响旧版本读取。
+---
+
+
+## 2026-08-04 SellerSprite - 统一 JSON 与 XLSX 场景化导出命名
+
+**变更原因**：流量词对比和 ABA 数据选品的 XLSX 已使用场景化文件名，JSON 却仍使用 job_id，同一场景的两种格式不一致。
+**改动点**：流量词对比和 ABA 数据选品的路径构造函数改为按扩展名生成跨格式主名；JSON 导出复用对应 XLSX 的场景化命名，普通场景和官方 XLSX-only 场景不变。
+**验证结果**：新增 ABA 导出格式参数化覆盖和流量对比 JSON 文件名断言；聚焦回归 `5 passed`，`test_api_manager.py` 完整回归 `39 passed`，SellerSprite 全量回归 `439 passed, 2 failed`；两项失败均为仓库既有 `seller-sprite-debug` 命令注册与旧测试期望不一致，与本次改动无关。`git diff --check` 通过。
+**影响范围**：仅影响 SellerSprite `keyword-comparison` 和 `aba-research` 新任务的 JSON 导出文件名；JSON 内容、XLSX 文件名、旧任务及其他场景不变。
+**回滚方式**：恢复 JSON 分支统一使用 `{job_id}.json`，并恢复两个场景路径函数固定生成 `.xlsx`。
+---
+
+
+## 2026-08-04 SellerSprite - 调度消费运行时失活检测与自恢复
+
+**变更原因**：生产出现 MCP 主进程仍存活、SellerSprite 队列持续入队但无 Worker 消费的问题；现有健康检查只验证心跳协程，消费监督任务退出后仍会错误报告 ready。
+**改动点**：运行时健康摘要增加消费监督任务存活判定、当前消费错误计数和脱敏 `consumer_alive` / `consumer_error_count` 字段；Generic 与 Listing Worker 在临时领取异常后记录错误并继续消费，持续异常或默认 Listing 账号不可用期间健康状态降级；每个故障周期仅记录首条完整异常，恢复后复发才再次记录，避免高频重试形成日志风暴；消费 Supervisor 隔离单轮账号维护或会话回收异常，并立即重建意外退出的 Generic/Listing 工作槽；独立心跳发现消费监督任务意外结束时，在启动锁保护下自动重建并发布恢复后的运行态，账号池与兼容单账号路径重复启动时均复用现有心跳，避免长期等待缓存刷新、重复创建后台任务或人工重启。
+**验证结果**：新增消费监督任务退出、心跳自动重建、启动与自恢复并发、Generic/Listing 持续领取异常、单轮领取异常、持续异常日志抑制及单轮/持续维护异常回归用例，均已确认关键失败路径修改前失败；监督后端覆盖 `consumer_alive` 和 `consumer_error_count` 的 Collector 脱敏透传；监督后端与任务调度器 `63 passed`，Collector MCP `29 passed`，SellerSprite 全量 `446 passed, 3 failed`，三项失败均为仓库既有导出文件名期望及已注释 `seller-sprite-debug` 注册问题；`compileall` 与 `git diff --check` 通过（测试代码同步补齐新增覆写方法类型标注）。
+**影响范围**：SellerSprite 调度器运行时健康判断和 Collector Bundle 脱敏健康输出。
+**回滚方式**：回退调度器消费存活与错误判定、Generic/Listing 领取重试、Supervisor 单轮异常隔离、工作槽重建、启动锁自恢复，移除 Bundle 公开字段及对应测试。
+---
+
+## 2026-08-05 SellerSprite - Collector 空闲启动延迟账号池初始化
+
+**变更原因**：Collector MCP 在没有任务和用户凭据作用域时仍周期请求 OPS 集成账号，导致终端重复输出账号接口刷新失败告警。
+**改动点**：为 SellerSprite 调度器补充空闲启动与首个公共任务的回归测试；默认远程 Provider 的首次启动及 TTL 刷新仅在公共账号池存在需求时访问账号源，空账号池收到公共任务后立即触发刷新；显式注入 Provider 继续保留启动预热语义。
+**验证结果**：修复前定向回归为 `2 failed`；修复后空闲启动测试 `2 passed`，调度器 `45 passed`、监督健康 `20 passed`、Collector Bundle 与账号审计 `12 passed`、MCP SellerSprite 工具合同 `89 passed`，相关文件 `compileall` 通过；本地环境未安装 Ruff。
+**影响范围**：SellerSprite 持久调度器启动、公共账号池刷新时机与 Collector MCP 空闲日志。
+**回滚方式**：回退本条测试、调度器刷新条件及对应变更记录。
+---
+
+## 2026-08-06 feedback - 标准化 Observation Schema V2
+
+**变更原因**：反馈提交依赖自由结构 context，缺少统一事件标识、链路标识、耗时、重试次数和运行时信息，不利于跨来源聚合与后续周月统计。
+**改动点**：新增 Observation V2 规范化模块；FeedbackManager 的字段模式和文件模式统一写入 `context.observation`，自动补齐事件、UTC 时间、来源、操作、结果、客户端与运行时字段，并校验调用方提供的链路和数值字段；新增脱敏 taxonomy 持久化，保留有意义的状态/错误码，只归一化明确动态 ID，错误信号仅保存 SHA-256，高置信度分类跨运行命中时跳过模型；taxonomy 写入增加跨进程锁和存储身份校验；feedback insight 与 Codex 两阶段日报支持 `--taxonomy-file`；新增基于已完成日报 `manifest.json + clusters.json` 的周报/月报生成器，输出 coverage、处置快照、问题生命周期、复发和优先级理由等指标；本地浏览服务支持周报命名。
+**验证结果**：反馈域、日报、周期报告、浏览服务、部署和 Skill 契约聚焦回归 `137 passed`；`compileall` 与 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突、Shopify `_shopify_manager` 导入缺失及全局 capture 关闭异常阻断；当前环境未安装 Ruff。
+**影响范围**：feedback CLI、MCP `feedback_submit`、直接使用 FeedbackManager 的提交 payload，以及内部 `ops-feedback` / `ops-feedback-query` Skill；沿用 context JSON，不要求现有后端新增字段。本轮不包含 canonical Problem 与 GitLab Issue 映射。
+**回滚方式**：回退 Observation 规范化、taxonomy 存储与两阶段接入、周期报告生成器、浏览服务周报识别、Skill 文档/版本及对应测试。
+---
+
+## 2026-08-07 Keepa - 支持与 XLSX 同源的 JSON 导出
+
+**变更原因**：Keepa 原先只允许 XLSX 用户导出，多任务编排和分析报告需要重复解析工作簿，缺少与可读表格一致的结构化交付格式。
+**改动点**：CLI 与 MCP 的 `export_format` 增加 `json`；提取 XLSX/JSON 共用的格式化工作表模型和唯一 Sheet 命名规则，JSON 以 `sheets.Sheet1`、`Sheet2` 顺序页保存表名、列、行数和行数据；Keepa 采集沉淀 Parser 支持该 JSON 合同并升级为 v3；同步更新 Keepa/卖家精灵 Skill 的单任务 XLS、多任务 JSON 选择指引。
+**验证结果**：Keepa JSON 导出、Manager、MCP 和采集沉淀聚焦回归 `36 passed`，新增 Sheet 名碰撞一致性测试；Keepa Skill 校验、`compileall` 和 `git diff --check` 通过。项目全量测试受仓库既有同名测试模块收集冲突及 Shopify `_shopify_manager` 导入缺失阻断；wheel 构建受本机缺少 Microsoft Visual C++ 14+ 阻断；当前环境未安装 Ruff。
+**影响范围**：Keepa CLI/MCP 导出格式、用户导出文件、采集沉淀 Parser 合同及相关 Skill；默认 XLSX 行为和内部原始 `raw.json` 不变。
+**回滚方式**：回退 Keepa JSON 导出器、共享工作表模型、格式校验、Parser v3、Skill 文档和对应测试。
+
+## 2026-07-28 ci - 发布流程排障：twine 增加 --verbose 并新增临时 debug workflow
+
+**变更原因**：v0.0.119 / v0.0.120 / v0.0.121 连续三次发布被 PyPI 以 400 拒绝，但 CI 日志只有 `400 Bad Request / Bad Request` 这一句，看不到根因。经本地实测确认：twine 6.2.0 在非 verbose 模式下只打印 HTTP 状态短语，服务端返回的真实拒绝原因仅出现在 `--verbose` 的响应体中（用错误 token 复现时，非 verbose 结尾行同样只有 `403 Forbidden / Forbidden`）。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：`twine upload` 增加 `--verbose`，并注释说明不可删除的原因。
+- `.github/workflows/debug-publish-verbose.yml`（新增，临时排障用）：`workflow_dispatch` 触发，通过 `actions/download-artifact@v4` 的 `run-id` 跨 run 复用已有构建产物，不重新编译，直接以 verbose 模式重跑上传以捕获原始报错；排障结束后应删除。
+**验证结果**：本地已验证产物本身无问题——`twine check --strict` 对 v0.0.121 全部 8 个 macOS wheel 全部 PASSED；v0.0.121 与已成功发布的 v0.0.119 的 METADATA 逐行比对仅差版本号与 README 新增章节；847 字节探针 wheel（0.0.121.dev999）上传返回 200 OK，证明 token 与项目写权限正常。workflow 改动待 debug workflow 实跑验证。
+**影响范围**：仅影响 GitHub Actions 发布流程的日志输出，不改变构建产物、上传参数语义和发布结果；`--verbose` 不会打印 token（twine 输出 `password: <hidden>`）。
+**回滚方式**：移除 `build-and-publish.yml` 中的 `--verbose`，删除 `.github/workflows/debug-publish-verbose.yml`。
+---
+
+
+## 2026-07-28 ci - Linux wheel 剥离调试符号 + 上传前单文件体积门禁
+
+**变更原因**：v0.0.119~v0.0.122 连续四次发布失败，经 CI verbose 日志确认根因为 `400 File too large. Limit for project 'aukeys-opscli' is 100 MB`。逐条目比对 v0.0.119 的 Linux 与 macOS wheel（内容完全相同、均为 232 个 .so）：macOS 解压后 30.1 MB、压缩后 11.1 MB，Linux 解压后 238.5 MB、压缩后 66.7 MB，相差 8 倍，系 setuptools 在 Linux 下默认带 `-g` 编译且 auditwheel 默认不 strip，调试符号被打进 wheel，导致 manylinux wheel 涨到 103~109 MB 超过 PyPI 单文件上限。
+**改动点**：
+- `.github/workflows/build-and-publish.yml`：新增 `CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} --strip"`，仅对 Linux 生效，剥离调试符号，不影响运行。
+- 同文件 publish job 新增 `Check file size limit before upload` 步骤：上传前逐个校验产物不超过 100 MB，超限则中止且不向 PyPI 发送任何文件。必要性是 twine 顺序上传、中途失败会留下已上传文件，而 PyPI 文件名用过即永久不可复用（删除后重传报 `previously used by a file that has since been deleted`），会直接废掉一个版本号。
+**验证结果**：改动前 v0.0.122 实测 4 个 manylinux wheel 分别为 103M/107M/109M/107M，全部超限；macOS 38M、Windows 36~37M、sdist 25M 均正常。strip 后的实际体积以本次 v0.0.123 构建日志的 `List dist contents` 为准。
+**影响范围**：仅影响 Linux wheel 的构建产物（不含调试符号，无法用于 gdb 符号级调试）和发布流程的前置校验；macOS/Windows 产物与包内容不变。
+**回滚方式**：删除 `CIBW_REPAIR_WHEEL_COMMAND_LINUX` 与 `Check file size limit before upload` 两处改动。
+---
+
+
+## 2026-08-10 ops-feedback-query - 周期报告改为管理洞察结构
+
+**变更原因**：原周报以长表格堆叠指标和问题簇，缺少日报已有的管理摘要、根因、重复证据、风险与治理建议，不利于快速决策。
+
+**改动点**：
+- `periodic_feedback_report.py`：周期报告正文改为范围口径、管理摘要、重点模块、根因分布、重复问题证据、重点风险、治理建议、周期对比和局限；完整问题簇、处置快照与模块分布移入折叠附录。
+- 对比期覆盖不完整时不计算环比；重点风险明确按确定性优先级和发生次数排序，避免误称按影响用户日排序。
+- `test_ops_feedback_periodic_report.py`：增加管理章节、重复证据、风险排序口径、折叠附录和不完整对比期提示的契约断言。
+
+**验证结果**：`pytest tests/skills/test_ops_feedback_periodic_report.py tests/skills/test_ops_feedback_report_server.py -q` → 23 passed；重新生成 2026-08-03 至 2026-08-09 周报并通过 HTTP 服务验证所有管理章节可见。全量 `pytest -q` 在当前 Python 3.14 环境因 pytest capture 流关闭异常中止（37 个收集错误），未进入用例执行。
+
+**影响范围**：仅反馈周报/月报的 Markdown 展示结构和相应契约测试；日报快照读取、确定性指标计算、报告文件名和 HTTP 地址不变。
+
+**回滚方式**：`git revert f3fdddba`（若提交已重写，以最终提交 SHA 为准）。
+---
+
+
+## 2026-08-10 ops-feedback-query - 固化周期报告生成契约
+
+**变更原因**：新版周报结构已由 Python 实现，但 Skill 尚未明确 Agent 与脚本的职责边界，后续执行可能再次出现手工累计、改写指标或正文长表退化。
+
+**改动点**：
+- `ops-feedback-query/SKILL.md`：明确周期报告必须由 Python 生成，固定管理结论优先的章节、折叠附录、风险排序和不完整对比期处理规则。
+- 明确未来若引入 Codex 叙事，必须采用“Python 事实包 → Codex 叙事 → Python 校验发布”的两阶段边界。
+- `test_ops_feedback_periodic_report.py`：增加 Skill 契约断言，锁定指标归属、正文结构和 AI 禁止自行计算等关键规则。
+
+**验证结果**：`pytest tests/skills/test_ops_feedback_periodic_report.py tests/skills/test_ops_feedback_report_server.py -q` → 24 passed；以 UTF-8 模式运行 `skill-creator/scripts/quick_validate.py` → `Skill is valid!`。
+
+**影响范围**：仅补强 ops-feedback-query 的 Agent 执行契约和文档测试，不改变现有指标或报告产物。
+
+**回滚方式**：回退本条记录对应的 SKILL.md 和测试改动。
+---
+
+
+## 2026-08-10 Google Trends - MCP 采集结果接入数据库沉淀
+
+**变更原因**：Google Trends MCP 当前只保存 API 请求、原始响应、规范化结果和导出文件，成功采集数据尚未进入共享 MySQL 数据沉淀链路。
+
+**改动点**：为 Google Trends 补充共享 Outbox 提交、规范化结果 Parser、遗漏任务对账和 MCP 生命周期接入；数据库统一读取 `result.json.data`，避免 JSON/XLSX 展示导出造成字段、类型或列数差异，导出文件仅作为 artifact 登记。持久化关闭时保持原行为，排队失败时保留采集结果并返回 warning。生产 MCP 由服务端统一生成任务 ID 并固定输出目录，确保幂等键不复用且所有任务都位于对账范围内；Runtime 支持 SSE/HTTP 双传输嵌套生命周期，避免重复注册来源后变为未就绪。
+
+**验证结果**：`uv run --frozen pytest tests/google_trends tests/mcp/test_google_trends_tools.py tests/mcp/test_server_google_trends_registration.py tests/mcp/test_keepa_registration.py tests/shared/test_collection_worker.py tests/shared/test_collection_storage_config.py tests/shared/test_collection_runtime.py tests/shared/test_collection_parser_utils.py tests/shared/test_collection_outbox.py tests/shared/test_collection_mysql.py -q` → 112 passed；`compileall` 与 `git diff --check` 通过。全量 `pytest -q` 在当前 Python 3.14 环境因 pytest capture 关闭异常中止；关闭 capture 后确认有 37 个既存 Skill 测试因 `query_plan`、`run_query` 等模板脚本不可导入而在收集阶段失败，未进入用例执行。
+
+**影响范围**：Google Trends MCP 成功任务及通用 MCP 的共享数据沉淀生命周期；Google Trends Debug CLI 与未启用沉淀的环境不受影响。
+
+**回滚方式**：回退本条记录对应的 Google Trends 数据沉淀、MCP 运行时、测试与变更记录改动。
+---
+
+## 2026-08-12 Skill 模板 - 新增 Amazon StyleSnap 反向图片搜索
+
+**变更原因**：为运营人员提供低频、单 ASIN 的 Amazon 商品图到 StyleSnap 以图搜图试行流程，复用本机 Chrome 登录态并保留人工风控接管。
+**改动点**：新增 `ops-amazon-stylesnap/SKILL.md`；在 `opscli/skills/templates/manifest.json` 中登记为 `internal`，所有发行形态均关闭。
+**验证结果**：`skill-creator/scripts/quick_validate.py` 通过；`manifest.json` JSON 解析通过且四种发行开关均为 `false`；未访问 Amazon 或 StyleSnap 真实页面，未执行上传操作。使用记录上报因本地 JWT 401 未完成，反馈提交又因 CLI 参数冲突失败，按 fail-open 处理。
+**影响范围**：仅新增本地 Skill 模板和发行清单，不影响现有 CLI 或公开发行产物。
+**回滚方式**：删除 `ops-amazon-stylesnap` 目录并移除 `manifest.json` 中对应条目。
+---
+
+## 2026-08-12 Skill 模板 - 补充 StyleSnap 卡片字段提取
+
+**变更原因**：验证 StyleSnap 页面后发现结果卡片除 ASIN、图片和展示名外，还提供颜色/款式数量、评分、评论数和当前价格，需要纳入结构化结果。
+**改动点**：更新 `ops-amazon-stylesnap/SKILL.md`，明确以 DOM/HTML 为主、截图仅视觉核验，并补充卡片字段和上传按钮交互要求。
+**验证结果**：在 Chrome StyleSnap 当前结果页读取到 27 个去重卡片及上述字段；未使用网络接口监听或截图 OCR。
+**影响范围**：仅影响内部试行 Skill 的结果字段和解析步骤，不改变发行权限。
+**回滚方式**：回退本条 Skill 文档改动即可恢复原字段规范。
+---
+
+
+## 2026-08-17 MCP - 修复远端 MCP Transport 提前关闭
+
+**变更原因**：`RemoteMcpClient` 在初始化超时作用域内进入 MCP transport 和 session，却在该作用域外清理，破坏 AnyIO cancel scope 的 LIFO 生命周期；OPS 通用 MCP 转发 Collector 时因此稳定出现 `Transport closed`。
+**改动点**：让清理期限的父级 `CancelScope` 包住完整 MCP 上下文，只对 `session.initialize()` 设置独立超时；清理前保存业务异常，避免有界清理覆盖原始错误；新增持有真实 AnyIO TaskGroup 的 transport 回归测试。
+**验证结果**：修改前新增回归稳定触发 `Attempted to exit a cancel scope that isn't the current tasks's current cancel scope`；修复后真实 FastMCP HTTP 连续 5 次调用全部成功，服务端无 `ClosedResourceError` 或 cancel-scope 错误；RemoteMcpClient、SellerSprite Proxy、上游网关及共享适配层相关测试共 84 项通过；其余 MCP 测试 380 项通过，3 项因既有可选 Tool 未注册失败，完整 MCP 收集另被既有 `_shopify_manager` 缺失阻断；`compileall` 与 `git diff --check` 通过，本地未安装 Ruff。
+**影响范围**：所有通过 `RemoteMcpClient` 发起的 Streamable HTTP 调用，包括 OPS 通用 MCP 到 Collector MCP 的 SellerSprite 代理和第三方上游网关；不修改服务地址、认证或业务参数。
+**回滚方式**：回退 `opscli/mcp_client/remote_client.py`、对应测试和本条变更记录；回滚后远端 MCP 调用会再次发生 cancel scope 生命周期错误。
+---
+
+## 2026-08-12 Skill 模板 - 支持批量串行 ASIN 和单次上传授权
+
+**变更原因**：用户明确要求无需每个 ASIN 单独确认，并可能一次输入多个 ASIN，需要在保持 Amazon 低频风控边界的前提下支持批量试行。
+**改动点**：`ops-amazon-stylesnap/SKILL.md` 改为支持用户显式提供的 ASIN 列表；一次运行统一授权后自动上传每个成功获取首图的 ASIN；批量严格串行，遇到验证码、频率限制或异常页面停止整个批次，并输出批次摘要约定。
+**验证结果**：`quick_validate.py` 通过；批量约定已通过 Skill 文档和 UI 提示一致性检查；本次未执行新的 Amazon 批量任务。
+**影响范围**：仅影响内部 Skill 的输入、确认和批处理流程，不改变 manifest 的内部权限控制。
+**回滚方式**：回退本条 Skill 文档改动即可恢复单 ASIN、逐次确认的流程。
+---
+
+## 2026-08-13 Skill 模板 - 规范 StyleSnap 本地导出目录
+
+**变更原因**：StyleSnap 单 ASIN 与批量试运行此前使用不同目录结构，且结果中可能残留浏览器临时文件绝对路径，不利于迁移和审计。
+**改动点**：统一使用 `output/ops-amazon-stylesnap/runs/<YYYYMMDD-HHmmss>/`，每次运行固定生成 `summary.json` 和 `items/<ASIN>/results.json`；JSON 文件路径改为相对本次运行目录；迁移两份现有试运行数据并将运行目录加入 `.gitignore`；同步更新批量串行的 Skill UI 提示。
+**验证结果**：两次迁移运行的 JSON 均可解析，结果数分别为 27 和 17，摘要引用的结果与图片路径均可在运行目录内解析且无绝对路径；`quick_validate.py` 通过；`tests/skills/test_packaging.py` 共 8 项通过；`python-release` 的 wheel/sdist 及 `binary-minimal`、`binary-full` 检查均通过且未包含该 Skill；manifest 四种发行开关保持 `false`。
+**影响范围**：仅影响内部 `ops-amazon-stylesnap` Skill 的本地运行产物位置和提示文本；运行数据不进入 Git 或发行产物。
+**回滚方式**：回退本条对应的 Skill、`.gitignore`、manifest 和变更记录；如需恢复旧试运行目录，可将本地数据移回 `output/stylesnap/`。
+---
+
+## 2026-08-14 MCP - 第三方上游网关底座
+
+**变更原因**：opscli MCP 需要接入多个第三方 MCP，同时必须统一处理连接生命周期、权限工具面、超时、重试和扩容隔离。
+**改动点**：新增配置驱动的上游 MCP 深模块，统一实现多服务注册、冻结 Schema、DNS 解析结果与实际 TLS 连接绑定、受保护凭证、独立连接池、逐服务启动隔离、双层并发、总截止时间、独立初始化与清理期限、幂等重试、熔断、原始响应流限流和稳定错误；工具的幂等、只读、破坏性元数据独立审批；动态 Tool 继续经过 Catalog、额度和遥测治理；新增配置检查 CLI、示例配置、接入指南和公开接口测试。
+**验证结果**：上游网关、远端客户端和配置 CLI 共 43 项测试通过；Catalog、服务器生命周期和 SellerSprite 代理兼容测试 21 项通过；排除仓库既有 `_shopify_manager` 缺失的收集文件后，完整 MCP 集为 379 项通过、3 项既有可选工具注册失败；配置校验 CLI、compileall、Ruff 和 `git diff --check` 均通过。
+**影响范围**：新增第三方 MCP 上游接入能力；现有本地 Tool 和 Collector 代理保持原行为。
+**回滚方式**：回退本条记录对应的上游网关、MCP 注册和测试改动。
+---
+
+
+## 2026-08-18 seller_sprite - 适配新版 Listing 诊断页面与任务接口
+
+**变更原因**：卖家精灵 Listing 诊断改为 textarea 输入和多分析类型，默认“文案质量分析”，创建、历史、状态及详情路由均已更新；旧实现会找不到输入框、误提交默认类型，或继续调用已下线的任务接口。
+**改动点**：browser-route 每次显式选择目标站点和“全景分析”，填写新版 textarea 并点击“立即生成解读报告”，创建响应等待延长至 120 秒；场景改为只在 browser-route 捕获 `/v3/api/ai-workflow/listing-analysis` 的真实页面请求，避免覆盖页面生成的 `base64Data/productType`；状态优先读取 `/task/original/summary/<taskId>` 数组并透传失败子任务的 `taskErrMsg`，缺少任务 ID 时通过 `POST /usage-log` 按 ASIN、全景类型和新版 `title` 字段恢复；报告详情改为 `ai-history?module=LA&taskId=<taskId>`；同步更新 SellerSprite Skill 文档和回归测试。
+**验证结果**：按 red-green 新增并验证 textarea、全景选择、美国站强制重选、新按钮、120 秒创建等待、新场景接口、summary 数组、usage-log 新版 `title`、taskId 优先、失败子任务原因和新版详情路由测试；本次修改文件的专属回归为 `353 passed, 1 deselected`，被排除项是既有 Windows 长临时路径文件名测试；扩展 SellerSprite、MCP 注册和额度回归为 `592 passed, 3 failed`，3 项单独运行仍复现，分别是同一 Windows 文件名问题和 2 项既有 `seller-sprite-debug` 未注册问题；完整测试集使用 `--import-mode=importlib` 运行后另被既有 `tests/skills/test_packaging.py` 关闭 pytest 捕获流的问题阻断，结果为 `13 errors` 和 `ValueError: I/O operation on closed file`；相关 Python 文件 `py_compile` 和 `git diff --check` 通过。本地开发环境未安装 Ruff。
+**影响范围**：影响 SellerSprite Listing Analysis 的专用 submit/status/result、browser-route 页面交互、远端任务恢复和相关 Skill 使用说明；普通 SellerSprite 场景不变。
+**回滚方式**：回退本条涉及的 SellerSprite 场景、browser-route、MCP 状态逻辑、Skill 文档、测试和本条变更记录；回滚后新版页面将无法可靠提交或续查全景报告。
+---
+
+
+## 2026-08-20 Keepa - 分离 MCP 摘要与 JSON/XLSX 详情导出
+
+**变更原因**：Keepa Product 等响应包含大量数组和历史数据；完整数据直接进入 MCP `data` 会占用模型上下文，而 JSON 导出复用 XLSX 工作表模型又会破坏原始嵌套结构。
+**改动点**：补充 JSON v2 原始响应、MCP 单行宽对象摘要和 Keepa JSON v1/v2 采集解析兼容测试；新增 JSON v2 原始业务响应导出器，递归移除 Keepa 额度字段，Manager 按格式分流，JSON 分支直接生成小摘要并跳过全部 XLSX formatter，XLSX 继续使用多工作表格式化；MCP 对任意行数的 `data` 都只返回最多 5 行共享白名单摘要，完整详情统一指向导出文件；采集 Parser 升级为 v4，历史 v1 SheetN 与新 v2 response 均可解析，新合同的嵌套字段保持原生 JSON 值，并兼容 Category 原始 `catId` 业务键；同步更新 Keepa Skill、formatter 状态和接口调研文档，移除 Tracking MCP 建议，Skill 版本升至 v0.0.3。
+**验证结果**：JSON 分支跳过 XLSX formatter 的测试先失败后通过；Keepa 完整回归 `78 passed, 1 deselected`，MCP Tool/注册回归 `15 passed`；Skill UTF-8 校验、Ruff（排除修改文件既有规则告警）、`compileall` 和 `git diff --check` 通过；用已保存的真实 `B003IEUAZK` 响应离线生成 JSON v2，确认 94 个 Product 字段、64 个 Offer、7 个视频和 Statistics 对象保持原生结构，公开响应不含 5 类额度字段，未再次调用 Keepa API。双轴审查发现的常量说明、公开 docstring、命名、JSON 无效格式化和 Tracking MCP 文档矛盾均已修复；真实大样本因隐私和体积边界继续保存在仓库外，仓库内由小型脱敏嵌套 fixture 回归。
+**影响范围**：Keepa JSON 导出合同、MCP 公开结果、采集沉淀 Parser 和 Keepa Skill 使用说明；XLSX 多工作表格式不变。
+**回滚方式**：回退本条对应的 Keepa 导出、MCP 摘要、Parser、测试和文档改动。
+---
+
+
+## 2026-08-18 MCP - 简化第三方上游固定配置并透传调用者邮箱
+
+**变更原因**：固定内部 MCP 的 URL 与公共鉴权值无需通过多个环境变量间接配置，同时共享凭证场景需要按调用动态携带已验证邮箱以区分实际用户。
+**改动点**：新增单文件直连配置、生产 Transport 使用、已验证邮箱传递、缺失身份拒绝、配置来源互斥、身份与鉴权 Header 冲突、公网 HTTP 拒绝、私网 HTTP 地址固定、凭证脱敏及并发 Header 隔离测试；配置模型与生产 Transport 现支持直接 URL、固定 Authorization 与调用者邮箱 Header 声明，并与旧版 `url_env`、`secret_file_env` 格式互斥兼容；加载阶段拒绝身份 Header 覆盖鉴权 Header；Runtime 将标准化后的可信邮箱显式传入 Gateway/Transport，Transport 通过实例级 ContextVar 和请求钩子只修改当次 HTTP Request；直接 HTTP 额外检查 `is_private`，仅允许显式启用的普通私网固定 IP；固定凭证从配置对象 `repr` 中脱敏，Gateway 与测试 Transport 统一采用可选邮箱参数协议，接入指南提供可直接校验的最小只读 Tool。
+**验证结果**：上游网关与配置 CLI 定向测试 `35 passed`；远端客户端、动态 Tool Catalog、服务生命周期和 SellerSprite 代理兼容回归 `73 passed`；排除既有 `_shopify_manager` 缺失的 MCP 集合为 `394 passed, 3 failed`，3 项失败均为既有可选 Tool 未注册（Amazon Rufus 2 项、Scrape.do 1 项）；示例配置校验为 1 个服务、4 个 Tool，`compileall` 与 `git diff --check` 通过。本地未安装 Ruff；完整测试集仍受 `tests/skills/test_packaging.py` 关闭 pytest 捕获流、重复测试模块名、Skill 脚本导入缺失及 `_shopify_manager` 缺失阻断。
+**影响范围**：第三方 MCP 上游配置加载与出站身份透传；旧版环境变量配置必须保持兼容。
+**回滚方式**：回退第三方上游配置、邮箱透传测试及本条变更记录。
+---
+
+
+## 2026-08-19 MCP - 统一鹰眼名称与显式调用边界
+
+**变更原因**：`pnd` 是鹰眼 MCP 的技术标识，不应作为面向用户的中文名称；同时该数据源只应在用户明确提到鹰眼或明确要求使用鹰眼数据时被 Agent 选用。
+**改动点**：示例配置中的 4 个 Tool 描述统一使用“鹰眼”，并逐个写入显式触发条件；接入指南说明技术 ID 与中文名称的区别，以及普通数据分析问题不得自动路由到鹰眼；新增模板契约测试锁定名称和触发边界。
+**验证结果**：已通过当前配置调用鹰眼 `list_available_datasets`，成功返回当前用户有权限的数据目录；示例配置校验为 1 个服务、4 个 Tool；模板契约、配置 CLI 和上游 Gateway 定向回归 `36 passed`，`git diff --check` 通过。
+**影响范围**：仅影响鹰眼模板的 Tool 展示描述和 Agent 工具选择提示，不修改 `pnd` 技术 ID、远端 Tool 名、参数 Schema、鉴权或请求链路。
+**回滚方式**：回退示例配置、接入指南、模板契约测试及本条变更记录。
+---
+
+## 2026-08-21 mcp/telemetry - 增加统一场景调用维度
+
+**变更原因**：现有 MCP 遥测只记录 Tool 名和完整参数，无法稳定按卖家精灵、Keepa、SIF、西柚等服务场景聚合，并存在代理与执行端重复计数及敏感参数进入遥测的风险。
+**改动点**：扩展遥测事件的版本化低敏维度；MCP 注册层传入准确模块和运行角色；统一从 `scenario/feature/function/target` 与规范化结果提取场景；业务失败按错误状态上报；Collector 代理标记为 `gateway_proxy`；MCP 遥测不再发送完整调用参数；新增对应单元测试、Keepa 邮箱与场景专项断言，以及按用户和场景统计的 SQL 口径文档。
+**验证结果**：最终定向回归 `69 passed`；新增 Keepa 邮箱、场景及相关遥测回归 `23 passed`。排除既有 Shopify 导入错误后的 MCP 回归 `399 passed, 3 failed`，3 项是既有 Amazon Rufus 与 ScrapeDo 未注册断言。完整 MCP 收集被既有 `shopify.py` 引用不存在的 `_shopify_manager` 阻断。相关文件 `py_compile` 与 `git diff --check` 通过；当前环境未安装 Ruff。
+**影响范围**：所有通过 `InstrumentedMcpProxy` 注册的 MCP Tool 遥测；不改变 Tool 公开参数和业务响应。
+**回滚方式**：回滚 `opscli/telemetry/collector.py`、`opscli/mcp/instrumentation.py`、`opscli/mcp/app_factory.py`、`opscli/mcp/tools/collector_proxy.py`、场景统计设计文档、相关测试及本条记录。
+
+
+## 2026-08-21 Keepa - 新增内部 Tracking API
+
+**变更原因**：Keepa Tracking 具备独立的读写操作、持续额度占用和通知已读副作用，不适合直接混入现有只读场景或立即暴露为 MCP Tool，但 Python SDK 和内部服务需要可复用的正式接口。
+**改动点**：按 TDD 增加 Tracking HTTP 合同、全部官方操作参数映射、创建对象及畸形 JSON 校验、只读通知默认值、Add/Remove/Remove All/Webhook/通知消费显式确认、Webhook host allowlist、不安全 URL 拒绝和 MCP 未注册边界的公开行为测试；新增 Tracking 创建/阈值/库存规则模型、官方 Endpoint Client 和带状态变更保护的 Service；通用 Keepa HTTP Client 补充 POST JSON 与错误密钥递归脱敏；从 `opscli.keepa` 和 `opscli.keepa.tracking` 导出内部 SDK；同步更新 Tracking 调研和 formatter/Endpoint 支持矩阵。
+**验证结果**：测试先因模块不存在按预期失败，补齐实现后 Tracking 专项 `18 passed`；畸形 `notificationType=null` 测试先复现 TypeError，再统一映射为 KeepaConfigError；Keepa 完整回归 `96 passed, 1 deselected`，MCP Keepa Tool/注册回归 `15 passed`；修改文件 Ruff、Keepa compileall 和 `git diff --check` 通过。测试全程使用 HTTP/Fake Client 边界替身，未读取本地 Key、未调用真实 Tracking API、未改变 Keepa 账户状态。
+**影响范围**：新增 Keepa 内部 Python Tracking API，并为通用 Keepa Client 增加 POST 和错误脱敏；不接入 MCP、公开 CLI、现有场景格式化或真实账户写操作。
+**回滚方式**：删除 Tracking 测试与后续内部实现，并回退本条变更记录。
+---
+
+
+## 2026-08-21 Keepa - 对齐 Tracking HTTP 超时规范
+
+**变更原因**：标准审查发现新增 Tracking Client 的默认超时为 60 秒，与仓库统一 HTTP 客户端规范要求的 10 秒不一致。
+**改动点**：将 `KeepaTrackingClient` 默认超时调整为 10 秒；调用方仍可显式传入更长超时。
+**验证结果**：Tracking 专项、Keepa 回归和 MCP Keepa 回归已在该调整前通过；调整后重新执行 Ruff、compileall、专项测试和 diff 检查。
+**影响范围**：仅影响新增 Tracking Client 的默认等待时长，不改变现有 Keepa Client 默认值和 API 参数合同。
+**回滚方式**：恢复 `opscli/keepa/tracking/client.py` 的默认 `timeout` 值并回退本条变更记录。
+---
+
+
+## 2026-08-21 Keepa - 收紧 Tracking 写操作和 Webhook 边界
+
+**变更原因**：Spec 审查发现 Add/Remove 可绕过确认，Webhook 仅校验 HTTPS 仍可指向未受控主机；这与 Tracking 有状态操作必须显式受控的约定不一致。
+**改动点**：Service 的 Add/Remove 统一要求 `confirm=True`；Webhook Service 构造时必须提供精确 host allowlist，拒绝未登记主机和 IP 地址；底层 Client 明确标注为无策略传输层；补充对应回归测试、公开参数 docstring 和文档说明。
+**验证结果**：Tracking 专项 `19 passed`；Ruff、compileall 和 `git diff --check` 通过。
+**影响范围**：内部 Tracking Service 的调用契约变为显式确认；只读操作不变，MCP/CLI 仍未注册。
+**回滚方式**：回退 Tracking Service 的确认/allowlist 校验、测试、文档及本条变更记录。
+---
+
+
+## 2026-08-25 skills/ops-dataset-query - 从 release 同步币种与意图查询文档口径
+
+**变更原因**：master 工作区的 ops-dataset-query 为"Agent 构参 + opscli query simple"简化版，缺少 release 分支已沉淀的全局币种（`globalCurrency` / `meta.currency`）口径与远端意图目录（`opscli query intent` / `query catalog`、归因参数）说明；master 代码层已支持这些参数，只差 Skill 文档。按用户要求只同步币种与意图查询内容，不同步规划器（query flow / agent_query_planner / 降级路径等）。
+**改动点**：
+- `references/simple-query-guide.md`：参数表加 `globalCurrency` 行；新增「全局币种 globalCurrency（请求侧）」「返回币种 meta.currency（结果侧）」两节；CLI 示例补 `--global-currency` 与归因参数；MCP 段补币种（`query_simple` 无 `global_currency`，走 `query_run` payload 顶层 `globalCurrency`）与 `query_intent_match` / `query_catalog` 说明。
+- `SKILL.md`：铁律三改为"远端 `opscli query intent` 优先，本地 `route_intent.py` 兜底"，补归因参数透传与 `intent_constraints` 复述确认；新增铁律十五（币种由服务端换算、多币种即多次取数、以 `meta.currency` 为准、禁止外部汇率）；标准工作流步骤 3/5 同步。
+- `references/rules.md`：第四章币种规则由"未指定默认 `_cny`"改为"有币种意图传 `--global-currency`，未指定不传由服务端回退"；第五章处理流程与 8.1 优先级纳入远端意图目录；自检清单币种项改写。
+- `QUERY_SPEC.md`：4.3 补 `meta.currency` 披露；自检清单加多币种项；第十五章范围与口径补 `meta.currency` 与多币种多次查询条款。
+- `references/ask-user-question-guide.md`：3.4 币种与参数摘要币种项按新口径改写。
+- `references/cli.md`：新增 `opscli query intent` / `catalog` 章节（参数、返回字段、归因参数、约束提示处置）；`route_intent.py` 降为兜底；命令索引、使用原则、字段检查示例、典型工作流、场景表同步。
+**验证结果**：补丁脚本每个锚点断言唯一命中，6 个文件全部 patched；`.venv/bin/opscli query intent/catalog/simple --help` 确认文档引用的 `--query/--source/--fallback-local/--skills-dir/--global-currency/--intent-code/--selection-source/--match-record-id` 均存在。未触及代码与测试。
+**影响范围**：仅 ops-dataset-query Skill 模板文档；影响 AI Agent 选表顺序（先远端意图目录）与币种处理方式（不再本地默认选 CNY 字段）。
+**回滚方式**：`git checkout -- opscli/skills/templates/ops-dataset-query/{SKILL.md,QUERY_SPEC.md,references/simple-query-guide.md,references/rules.md,references/ask-user-question-guide.md,references/cli.md}`（回到本次修改前的暂存版本可用 `git checkout -- ` 恢复索引内容）。
+---
+
+
+## 2026-08-26 MCP - 修复鹰眼上游数组响应与超时失配
+
+**变更原因**：鹰眼 MCP 的数据集目录返回顶层 JSON 数组，现有远端客户端只接受对象并误报调用失败；相似词查询可超过 10 秒，但共享 HTTP 客户端的固定 10 秒超时会早于工具配置的 30 秒截止时间中断请求。
+**改动点**：远端客户端保留对象响应原样，并将顶层 JSON 数组包装为统一的 `success/data` 对象；共享 HTTP 连接池改用服务内最长的已审批 Tool 截止时间，较短 Tool 仍由 Gateway 的总截止时间约束；补充对应回归测试。
+**验证结果**：数组包装和 HTTP 超时测试先在旧实现上稳定失败，分别命中 `ValueError` 与固定 `Timeout(timeout=10)`；修复后远端客户端和 upstream 网关定向回归 `54 passed`。真实鹰眼 Gateway 调用中，数据集目录、有效只读 SQL 和相似词查询均成功，相似词耗时 `14.816s`，确认不再被旧 10 秒限制提前中断；重启本地 MCP 后，通过 Codex 的 `local-opscli` 地址成功取得 9 个鹰眼数据集。完整 MCP 集被既有 Shopify `_shopify_manager` 缺失阻断收集；排除该文件后为 `407 passed, 1 failed`，唯一失败是既有 SellerSprite 遥测断言未包含 `dimension_resolver=None`。修改文件 compileall 和 `git diff --check` 通过；当前虚拟环境未安装 Ruff。
+**影响范围**：第三方 Streamable HTTP MCP 的成功结果解析和出站 HTTP 超时；对象响应及每个工具的总截止时间策略保持不变。
+**回滚方式**：回退远端客户端、上游 Transport、对应 MCP 测试及本条变更记录。
+---
+
+
+## 2026-08-26 API - 增加场景 API 与 MCP 共存入口
+
+**变更原因**：opscli 需要长期产品化，网站和自动化系统需要稳定的 HTTP 场景接口；同时 MCP 仍是 Agent 原生调用入口，不能因增加 REST 而分叉认证、凭证隔离和查询业务实现。
+**改动点**：新增 FastAPI 外壳与 `POST /api/v1/query/flow`、`GET /health/live`；通过 `wrap_mcp_app` 将 REST 路由与 FastMCP 的 `/mcp`、`/sse`、`/messages` 共置并复用生命周期；REST 复用 `_get_auth_pair`、凭证目录、`QueryManager` 和 `run_flow`，拒绝未知字段及浏览器传入内部会话参数；新增场景 API 产品化规划文档和组合入口测试。
+**验证结果**：`uv run --no-project pytest tests/api -q` → 6 passed；`uv run --no-project pytest tests/mcp/test_server_seller_sprite_lifespan.py tests/mcp/test_auth_middleware.py tests/mcp/test_query_tools.py -q` → 9 passed；`compileall` 与 `git diff --check` 通过。
+**影响范围**：HTTP 启动模式现在额外暴露受同一 API Key 保护的 REST 路由；既有 MCP 协议路径、认证模式和 Tool 合同保持不变。
+**回滚方式**：回退 `opscli/api/`、`tests/api/`、`opscli/mcp/server.py`、`pyproject.toml`、`uv.lock`、场景 API 规划文档及本条变更记录。
+---
+
+
+## 2026-08-26 API - 增加 Keepa 场景入口
+
+**变更原因**：第一阶段 REST 外壳已具备通用查询能力，需要验证网站调用 Keepa 场景的产品化链路；Keepa 既有 MCP Tool 的额度、遥测和认证治理必须保持一致。
+**改动点**：新增 `GET /api/v1/keepa/scenarios` 与 `POST /api/v1/keepa/run`；增加严格的 Keepa 请求模型和 `job_id` 路径安全校验；REST 执行复用 `keepa_run` 并重新套用现有 quota/telemetry 包装，不暴露 `session_id`、`jwt`、`output_dir`；补充认证、统一响应、治理复用和路径穿越测试，并更新场景 API 规划。
+**验证结果**：`uv run --no-project pytest tests/api -q` → 10 passed；`uv run --no-project pytest tests/mcp/test_keepa_tools.py tests/mcp/test_server_seller_sprite_lifespan.py tests/mcp/test_auth_middleware.py tests/mcp/test_query_tools.py -q` → 24 passed；`compileall` 与 `git diff --check` 通过。
+**影响范围**：受 API Key 保护的 HTTP 服务新增 Keepa 场景发现和执行入口；现有 Keepa MCP Tool、CLI 和业务 Service 合同不变。
+**回滚方式**：回退 `opscli/api/app.py`、`tests/api/test_app.py`、场景 API 规划文档及本条变更记录。
+---
+
+
+## 2026-08-28 JSON Lens - 修复 Top Sellers 字符串列表空表格
+
+**变更原因**：Top Sellers 实际返回 100,000 个 Seller ID 的字符串数组，原表格只识别对象字段，导致只显示行号且一次性渲染全部行。
+**改动点**：支持为字符串数组指定业务列名，Top Sellers 映射为 `sellerId`、Best Sellers 映射为 `asin`；表格每页显示 100 行并提供翻页，筛选、排序和 CSV 下载仍覆盖全部匹配结果；结果结构标识为“值列表”。
+**视觉修复**：长结果表格暴露桌面端固定布局切换器遮挡数据行，统一改为文档流布局，避免覆盖任何结果内容。
+**验证结果**：`npm test` 通过 10 个单元测试和 7 个 Playwright 测试；Top Sellers 按真实 100,000 条规模完成首屏 100 行、翻页、筛选、CSV 列名和视觉回归；桌面快照人工检查无内容遮挡；Node 语法、尾随空格扫描与 `git diff --check` 通过。
+**影响范围**：字符串数组结果的表格展示、分页、筛选、排序和下载；对象数组行为保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中本次字符串列表映射、分页、测试及本条记录。
+---
+
+
+## 2026-08-28 JSON Lens - 表格长文本缩略与 CSV 下载
+
+**变更原因**：查询结果中的长文本会撑大表格，运营人员也需要把当前查看的数据下载后继续处理。
+**改动点**：标量单元格限制为单行省略显示并通过 title 保留完整内容；结果工具栏新增 CSV 下载，导出当前筛选和排序后的行，复杂字段序列化为 JSON，并增加 UTF-8 BOM 和公式注入防护；新增工具单元测试和浏览器下载测试。
+**验证结果**：Node 单元测试 8 项通过；Playwright 请求、场景、长文本、CSV 下载和视觉测试 6 项通过；桌面/移动端视觉基线人工检查通过；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 表格展示和客户端 CSV 下载，不改变 API 请求与响应合同。
+**回滚方式**：回退 `sites/json-lens-prototype` 中本次表格工具、样式、交互、测试及本条记录。
+---
+
+
+## 2026-08-27 JSON Lens/API - 接通本地 REST API 默认地址
+
+**变更原因**：JSON Lens 原型需要直接调用本机 `8765` 上的 Keepa REST 服务；跨端口请求还需要通过浏览器 CORS 预检。
+**改动点**：将原型默认 endpoint 改为 `http://127.0.0.1:8765/api/v1/keepa/run` 并更新 README；前端兼容鉴权中间件的顶层错误消息；API 应用允许 `4173` 本地原型来源，API Key 鉴权层放行 `OPTIONS` 预检；新增 CORS 预检回归测试。
+**补充测试**：抽离前端请求头构造函数并增加 Node 单元测试，覆盖纯 API Key、完整 Bearer 值和空 Key 三种输入；测试仅使用假 Key。
+**补充修复**：API Key 输入兼容纯 Key、`Bearer Key` 和完整 `Authorization: Bearer Key`，统一只发送一个 Bearer 前缀；商品详情和关键词搜索的 `stats` 改为后端合同要求的非负整数，商品详情默认使用 `history=false`、`stats=30`。
+**补充浏览器测试**：增加 Playwright 请求集成、场景切换 E2E 和桌面/移动端视觉回归测试；增加 npm 测试脚本、依赖声明和测试产物忽略规则。
+**视觉修复**：视觉基线检查发现移动端固定布局切换器覆盖查询操作区，改为移动端文档流布局，并增加操作按钮与切换器边界不相交断言。
+**验证结果**：真实 Key 的脱敏 REST 请求返回 HTTP 200；CORS 预检返回 HTTP 200 和正确 Allow-Origin；`npm test` 通过 4 个单元测试及 4 个 Playwright 测试；桌面/移动端视觉基线人工检查通过；API 测试 `12 passed`。
+**影响范围**：影响本地原型对 Keepa REST API 的默认连接、API Key 归一化、Product stats/history 默认参数、移动端原型切换器和跨端口预检；业务鉴权、实际 POST 权限和 MCP 路由保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 原型及测试文件、`opscli/api/app.py`、`opscli/mcp/auth_middleware.py`、`tests/api/test_app.py` 及本条记录。
+---
+
+
+## 2026-08-27 Keepa/API - 增加真实请求阶段耗时日志
+
+**变更原因**：Keepa REST 场景请求长时间无响应，需要区分鉴权、OPS 集成账号、Keepa token 状态、主场景请求和导出上传阶段的等待位置。
+**改动点**：在 API 入口、Keepa API Client、OPS 集成账号 Client、文件上传 Client、KeepaApiManager 和 Keepa API Key 中间件增加 `[KEEPA-TRACE]` 阶段日志与耗时信息；Keepa 请求入口同时以 flush 输出并写入 `.tmp/keepa-trace.log`，额外记录请求体分片大小、`more_body` 和 FastAPI 分发边界，仅记录场景、站点、endpoint、请求路径、请求头名称、文件名/大小、HTTP 状态和异常类型，不记录 API Key、Keepa Token、JWT 或业务参数。
+**补充诊断**：Keepa REST 路由入口和已解析用户身份增加 flush/file trace，用于区分 FastAPI 请求体解析、路由进入和场景执行边界。
+**补充诊断**：Keepa 场景执行函数增加共享模块导入和 quota/telemetry 包装边界日志，用于定位首次导入锁或初始化等待。
+**补充诊断**：API 场景开始、完成和异常标记同步写入 `.tmp/keepa-trace.log`，与终端 logger 保持一致。
+**补充诊断**：quota/telemetry 包装层增加 Keepa 调用前、业务调用和结算边界日志，用于定位限额 SQLite 锁等待。
+**验证结果**：`tests/api` 10 passed；Keepa/MCP 相关回归 24 passed；`compileall` 与 `git diff --check` 通过。真实请求需重启服务后观察日志。
+**影响范围**：仅增加 Keepa REST/MCP 执行链路的可观测性，不改变请求参数、认证、额度和 Keepa API 行为。
+**回滚方式**：回退 `opscli/api/app.py`、`opscli/keepa/api/client.py`、`opscli/shared/integration_accounts.py`、`opscli/keepa/services/api_manager.py` 及本条记录。
+---
+
+
+## 2026-08-27 Keepa/API - REST 返回完整格式化数据并跳过导出上传
+
+**变更原因**：网站通过 REST 调用 Keepa 时需要直接消费结构化结果，不应依赖 MCP 的摘要或导出文件下载链路。
+**改动点**：Keepa REST 请求在共享 `keepa_run` 执行链路中标记为 API 模式；Manager 继续生成服务端本地结果文件用于审计和沉淀，但跳过文件上传；API 响应保留完整格式化 `data`，移除本地路径、额度、账户和导出元数据，并增加 `request_source=api`、`response_mode=formatted_data` 标识。MCP/CLI 默认仍上传导出文件并返回 `data_preview` 摘要。
+**验证结果**：新增 API/MCP 双模式结果合同测试，以及禁用导出上传测试；Keepa API、MCP Tool、Manager 相关回归通过，`compileall` 与 `git diff --check` 通过。
+**影响范围**：仅影响 `/api/v1/keepa/run` 的公开响应和导出上传行为；Keepa MCP/CLI 默认合同保持不变。
+**回滚方式**：回退 Keepa API 模式标记、`upload_export` 请求字段、公开响应转换、相关测试及本条记录。
+---
+
+
+## 2026-08-28 Skill - 新增鹰眼只读查询 Skill
+
+**变更原因**：鹰眼 MCP 已开放数据目录、只读 SQL、相似词和报告任务状态四个 Tool，需要一个显式触发、避免宽查询和超时重放的 Agent 使用合同。
+**改动点**：新增 `ops-yingyan` 模板及版本文件，限定只有用户明确提到鹰眼或 PND 时触发；要求动态读取数据目录、索引优先、窄条件、明确列和合理 LIMIT，并规定 30 秒超时后不得重放相同参数；新增 manifest 内部模板条目和行为契约测试。
+**验证结果**：Skill Creator `quick_validate.py` 通过；发版 manifest 完整性校验返回空问题列表；`ops-yingyan` 触发边界、Tool 覆盖、窄查询、超时停止、模板安装及 packaging 定向测试共 15 项通过；`git diff --check` 通过。扩展 `test_manager.py` 有 4 个既有版本断言失败，例如仍期望 `ops-dataset-query v0.0.1` 而当前模板为 `1.1.0`，与本次改动无关。
+**影响范围**：仅新增内部 Skill 模板和测试，不修改鹰眼 MCP Tool、上游配置、鉴权、SQL 校验或现有发行范围。
+**回滚方式**：删除 `ops-yingyan` 模板与对应测试，移除 manifest 条目，并回退本条记录。
+---
+
+## 2026-08-28 JSON Lens - 切换 DaisyUI 设计系统
+
+**变更原因**：运营站点需要使用更统一、常见的组件库样式，并减少项目内对按钮、表单、表格等基础组件的自定义 CSS。
+**改动点**：静态页面移除 Bootstrap，改为固定版本的 DaisyUI 5 与 Tailwind CSS 4 浏览器构建；查询表单、按钮、状态提示、结果视图切换、统计区、分页和数据表格统一使用 DaisyUI 组件类，折叠设置沿用原生 details 并使用 DaisyUI 设计变量；保留原生 Web Components、左右工作区和全部查询行为，并将自定义样式收敛到布局、JSON 树和长文本等站点特有规则。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 7 个 Playwright 集成、E2E、下载及视觉回归测试；重新生成并人工检查桌面、移动端和 Top Sellers 10 万条数据视觉基线，无内容遮挡或异常溢出；Node 语法、Bootstrap 残留扫描与 `git diff --check` 通过。
+**影响范围**：JSON Lens 原型的视觉设计与组件标记；API 请求合同、场景参数、表格数据处理和 CSV 下载逻辑保持不变。
+**回滚方式**：回退 `sites/json-lens-prototype/index.html`、`app.js`、`styles.css`、视觉快照及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 增加明暗主题切换
+
+**变更原因**：运营人员在不同光照环境下需要可切换的明暗界面，并以更适合日常办公的明亮主题作为首次访问默认值。
+**改动点**：默认 DaisyUI 主题改为明亮的 corporate，页头增加明亮/暗色开关，暗色使用 business 主题；主题选择写入浏览器本地存储并在刷新后恢复；补充明亮默认值、暗色持久化和暗色视觉基线测试。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 9 个 Playwright 集成、E2E、下载及视觉回归测试；明亮主题桌面/移动端、暗色主题桌面和 Top Sellers 10 万条数据视觉基线均已更新并人工检查，无内容遮挡或异常溢出；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 页面配色和页头布局；查询、结果展示、API 请求及下载行为不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中主题状态、开关、样式、测试快照及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 增加本地查询历史
+
+**变更原因**：运营人员需要快速复用近期查询条件，同时必须避免把大体量 Keepa 返回数据和鉴权信息长期留存在浏览器中。
+**改动点**：查询侧栏增加默认收起、桌面端悬停展开且可点击固定展开的历史区；使用 localStorage 保存最近 20 条场景、站点、查询条件、等待策略和执行时间，明确排除 API Key、接口地址及响应数据；历史项支持重新载入表单条件，并提供清空操作和移动端点击展开交互。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 11 个 Playwright 集成、E2E、下载及视觉回归测试；测试确认历史记录不含 API Key、接口地址和响应数据，条件重新载入、清空、默认收起及悬停展开均正常；明亮/暗色桌面、明亮移动端、历史展开态和 Top Sellers 10 万条数据视觉基线均通过人工检查；Node 语法与 `git diff --check` 通过。
+**影响范围**：JSON Lens 查询表单侧栏和浏览器本地偏好数据；API 请求、服务端数据及结果渲染逻辑不变。
+**回滚方式**：回退 `sites/json-lens-prototype` 中历史状态、侧栏交互、样式、测试快照及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 修复场景标识文字溢出
+
+**变更原因**：侧栏中的 `product-search` 场景标识被 flex 布局压缩后换成两行，文字超出 DaisyUI 小徽标的固定高度。
+**改动点**：增加窄侧栏场景徽标的单行与高度溢出回归测试；允许左侧场景说明收缩，禁止右侧徽标被 flex 压缩，并以单行省略作为极端长键名兜底。
+**验证结果**：新增定向测试先稳定复现 `white-space: normal` 导致的换行溢出，修复后转为通过；`npm test` 通过 10 个 Node 单元测试和 12 个 Playwright 集成、E2E、下载及视觉回归测试；明亮与暗色桌面视觉基线人工检查确认 `product-search` 保持单行且没有挤压相邻说明；`git diff --check` 通过。
+**影响范围**：JSON Lens 查询侧栏的场景介绍区域，不影响场景值、查询参数或请求行为。
+**回滚方式**：回退 `sites/json-lens-prototype` 中场景徽标布局、对应测试及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 统一结果工具栏布局
+
+**变更原因**：桌面端结果页头空间不足时，下载按钮换到第二行，导致筛选框、视图切换与按钮不等高且页头高度异常增大。
+**改动点**：增加桌面结果工具栏单行、等高和页头高度上限回归测试；结果页头改为标题弹性列与工具栏内容列，桌面工具栏禁止换行并将筛选框、视图切换和下载按钮统一为 32px，页头按 64px 基准收紧；窄屏先将标题独占一行，手机端继续纵向排列控件并保留触控间距。
+**验证结果**：新增测试先稳定复现桌面工具栏控件纵向相差 50px；首次布局修复后对齐与等高断言通过，但页头为 71px，进一步收紧间距后页头高度上限断言通过。最终 `npm test` 通过 10 个 Node 单元测试和 13 个 Playwright 集成、E2E、下载及视觉回归测试；桌面明亮/暗色、移动端、Top Sellers 与历史展开视觉基线均已更新并人工检查。
+**影响范围**：JSON Lens 结果面板页头的桌面与响应式布局，不影响筛选、视图切换或下载行为。
+**回滚方式**：回退 `sites/json-lens-prototype` 中结果工具栏布局、对应测试及本条记录。
+---
+
+## 2026-08-28 JSON Lens - 修复视图切换选项下溢
+
+**变更原因**：结果工具栏将 DaisyUI `tabs-box` 外层固定为 32px，但组件仍保留 4px 底部内边距，导致内部 32px 的选项比容器底边多出 4px。
+**改动点**：增加视图切换选项底边不得超过 Tab 容器底边的回归测试；仅在结果工具栏实例上清除 DaisyUI `tabs-box` 的内部 padding，使选项与 32px 外层严格等高。
+**验证结果**：新增回归测试先稳定失败，Tab 容器底边为 153.5px、选项底边为 157.5px，准确复现 4px 下溢；修复后定向测试转绿。最终 `npm test` 通过 10 个 Node 单元测试和 14 个 Playwright 集成、E2E、下载及视觉回归测试；实际页面刷新后确认容器和三个选项均为 32px 且底边同为 153.5px。
+**影响范围**：JSON Lens 结果面板的视图切换组件，不影响查询、视图状态或结果数据。
+**回滚方式**：回退 `sites/json-lens-prototype` 中对应响应式样式、测试及本条记录。
+---
+
+
+## 2026-09-01 SellerSprite MCP - 限制 Listing Analysis 自动触发
+
+**变更原因**：Listing Analysis 属于早期试验功能，不应被普通 Listing、ASIN 分析或通用数据采集请求默认触发。
+**改动点**：在通用 MCP 代理和 Collector 实际 Tool 描述中把 Listing Analysis submit 标记为仅显式触发，只有用户明确要求使用卖家精灵 Listing Analysis、AI 全景分析或全景分析时才允许提交；status/result 仅续查已有任务。同步更新 `ops-seller-sprite` Skill、正式 MCP 接入说明和行为契约测试，并将 Skill 版本提升为 `v0.0.20`。
+**验证结果**：SellerSprite MCP Tool 注册、Skill 规范和显式触发契约定向测试 11 项通过；Skill Creator `quick_validate.py`、目标模块 `compileall` 和 `git diff --check` 通过。`uv run` 会触发仓库现有 Cython 构建并因 Google Trends、ASIN Data、Scrape.do 的既有编译错误失败，因此测试使用现有 `.venv` 执行。
+**影响范围**：仅影响 Agent 对 Listing Analysis 的工具选择和触发判断，不修改提交接口、任务队列、额度计费或已有 `job_id` 的续查行为。
+**回滚方式**：回退 Listing Analysis Tool 描述、Skill/接入说明、版本号、对应测试及本条记录。
+---
+
+
+## 2026-09-01 MCP - 修复远端 SDK 解包兼容与鹰眼会话头透传
+
+**变更原因**：macOS 用户环境解析到 `mcp 2.1.1` 后，`streamable_http_client` 仅返回读写流，现有三元解包会抛出 `ValueError: not enough values to unpack`；同时鹰眼代理建立远端 MCP 连接时没有传递当前用户的 OPS Session，导致需要业务身份的上游请求缺少 `X-Session-Id`。
+**改动点**：`RemoteMcpClient.call_tool()` 改为只消费 transport 返回值的前两个稳定成员，同时兼容 MCP SDK v1 的三元返回和 v2 的二元返回；鹰眼代理从当前 MCP API Key 隔离凭证中读取 session_id，并向远端客户端传递 `X-Session-Id` 与 `X-Opscli-Version`，不修改远端配置结构，也不转发未定义的任意 headers；新增二元 transport 和鹰眼会话头回归测试，保留现有三元 transport 测试作为旧 SDK 兼容保障。
+**验证结果**：新增两项测试先分别稳定复现 `expected 3, got 2` 和会话头注入点缺失，修复后转绿；远端客户端、鹰眼代理、配置客户端、凭证缓存、session 共用和共享远程适配器共 55 项通过；Keepa、SellerSprite、Canopy、Google Trends 等远程适配器共 28 项通过；`tests/mcp` 排除既有 `test_shopify_tools.py` 收集错误后 420 项通过、1 项既有 SellerSprite 遥测参数断言失败；独立临时环境使用真实 `mcp 2.1.1` 执行二元 transport 调用通过；目标模块 Cython C 代码生成成功并确认使用 `transport_streams[:2]`。完整 wheel 构建仍被 ASIN Data、Google Trends、Scrape.do 的既有 Cython 错误阻断，本机目标扩展链接还因缺少 MSVC 14+ 无法完成，未声称 wheel 构建通过。
+**影响范围**：所有通过 `RemoteMcpClient` 调用远端 Streamable HTTP MCP 的模块获得 SDK v1/v2 返回契约兼容；鹰眼中央代理额外携带当前隔离用户的 OPS Session。远端配置选择、API Key URL、工具参数、重试和超时策略保持不变。
+**回滚方式**：回退 `opscli/mcp_client/remote_client.py`、`opscli/mcp/tools/yingyan_proxy.py`、对应两份测试及本条记录；回滚后 `mcp 2.x` 环境会再次发生三元解包失败，鹰眼远端请求也会再次缺少业务会话头。
+---
+
+
+## 2026-09-02 MCP - 导出上传失败返回 JSON 数据兜底
+
+**变更原因**：Keepa、卖家精灵等 MCP 采集服务已成功获取并生成导出文件时，OSS 上传失败会只返回无效的服务端本地路径，远端调用方既拿不到下载链接，也无法继续消费已经获取的数据。
+**改动点**：新增 MCP 公共导出兜底逻辑，仅在存在 `file_upload` warning、导出没有 HTTP(S) 地址且任务结果包含业务数据时，将完整脱敏数据写入 `export.json_data` 并在原响应缺少 URL 时显式返回 `url: null`；接入 Keepa、卖家精灵、Google Trends、Amazon 商品数据、beta Canopy、西柚和 Sif 的运行结果、任务状态及独立导出读取入口；Sif 从落盘结果提取业务 JSON，并按 `export_key` 仅挂到对应失败导出项。正常 OSS 链接和非上传类缺链错误保持原行为。
+**验证结果**：新增或调整 10 个上传失败回归用例，旧实现下稳定复现缺少 `json_data` 或独立导出接口报错；执行 `.\.venv\Scripts\python.exe -m pytest tests\mcp\test_keepa_tools.py tests\mcp\test_google_trends_tools.py tests\mcp\test_scrape_do_tools.py tests\mcp\test_seller_sprite_tools.py tests\mcp\test_beta_tools.py tests\mcp\test_sif_tools.py tests\xiyou\test_mcp_tools.py -q` 通过，结果 `178 passed`；目标 MCP 模块 `compileall` 和 `git diff --check` 通过。
+**影响范围**：上述 MCP 服务在 OSS 上传失败后的返回合同；上传成功时响应结构不变，CLI 本地导出和服务端文件生成逻辑不变。
+**回滚方式**：回退 `opscli/mcp/tools/export_fallback.py`、各 MCP 工具接入、对应测试及本条记录。
+---
+
+
+## 2026-09-03 JSON Lens - 对齐 Keepa MCP 场景默认参数
+
+**变更原因**：JSON Lens 的部分 Keepa 场景默认值与 MCP 实际参数合同不一致，且 Finder 的分页参数被提交在 `selection` 外层，后端不会按预期使用。
+**改动点**：商品详情默认开启 `history`；类目详情和卖家详情显式带入 `parents=false`、`storefront=false`；Product Finder 与 Seller Finder 默认使用 `page=0`、`perPage=50`，并把分页参数按 Keepa 合同放入 `selection`，同时保留至少一项业务筛选条件的页面校验；同步更新场景矩阵、请求合同和默认值展示测试。
+**验证结果**：`npm test` 通过 10 个 Node 单元测试和 36 个 Playwright 场景、交互及视觉回归测试；`node --check app.js` 通过。
+**影响范围**：JSON Lens 原型的 Keepa 场景初始表单值和请求参数结构；结果展示、鉴权、API 地址、历史记录和下载逻辑不变。
+**回滚方式**：回退 `sites/json-lens-prototype/app.js`、相关 Playwright 测试及本条记录。
+
+
+## 2026-08-28 打包构建 - 修复 v0.0.126 GitHub Actions Cython 编译失败
+
+**变更原因**：v0.0.126 发布时 GitHub Actions 全部 4 个构建 Job 在 Cython 编译阶段失败，导致无 artifact 产出、Publish to PyPI 报 `Artifact not found for name: sdist`。本地开发使用 `SKIP_CYTHON=1` 纯 Python 安装，因此三处 Cython 不兼容写法未被提前发现。
+**改动点**：
+- `opscli/asin_data/services/daily_pipeline.py:649`：`_derive_keywords_from_stage_reverse` 中 `keywords: list[str] = []` 与上方 `keywords = ...` 重复声明（Cython 报 `'keywords' redeclared`），改为 `keywords = []`
+- `opscli/scrape_do/accounts.py:43`：`get_default` 中删除 `del refresh`（`refresh: bool` 被 Cython 推断为 C 级 bint，报 `Deletion of non-Python, non-C++ object`）
+- `opscli/seller_sprite/services/task_scheduler.py`：补充 `import re`（第 718 行 `re.sub` 使用了未导入的模块，Cython 报 `undeclared name not builtin: re`；纯 Python 下 worker 异常路径也会 NameError，属真实运行时 bug）
+**验证结果**：本地复用 `setup.py` 的 `get_extensions()` 以 `nthreads=0` 全量 cythonize 319 个模块，exit=0 通过；`pytest tests/seller_sprite tests/scrape_do tests/asin_data` 611 通过、3 失败（`test_api_manager.py::test_manager_generates_camel_case_job_id`、`test_cli_split.py` 两例），经 `git stash` 对比确认为 master 预存失败，与本次改动无关。
+**影响范围**：仅构建流程与 seller_sprite worker 异常脱敏逻辑；无业务行为变化。
+**回滚方式**：`git checkout -- opscli/asin_data/services/daily_pipeline.py opscli/scrape_do/accounts.py opscli/seller_sprite/services/task_scheduler.py`
+---
+
+
+## 2026-08-28 打包构建 - 固定 Cython 上限 <3.3 修复 v0.0.127 构建失败
+
+**变更原因**：v0.0.127 CI 再次失败，错误与 v0.0.126 不同：Cython 3.3.0（2026-08 新发布）优化器在处理 `sorted(x or set())` 时内部崩溃（`AttributeError: 'NoneType' object has no attribute 'is_pylist_type'`），涉及 `opscli/google_trends/api/key_store.py`、`serpapi_client.py`。本地 Cython 3.2.4 与 3.2.9 均可通过，3.3.0 本地稳定复现，属 Cython 回归。
+**改动点**：
+- `pyproject.toml` `[build-system]`：`cython>=3` → `cython>=3,<3.3`，注释说明原因（铁律15 允许有明确 breaking 证据时加上限）
+- `.github/workflows/build-and-publish.yml`：`CIBW_BEFORE_BUILD` 与 sdist 的 `Install build tools` 同步加上限；同时为 pip 版本约束加引号（原 `pip install cython>=3` 未加引号，`>` 被 shell 当作重定向，实际未生效）
+**验证结果**：Cython 3.2.9 全量 cythonize exit=0；本地 `OPSCLI_SKILL_PROFILE=python-release python -m build --sdist` 成功产出 `aukeys_opscli-0.0.127.tar.gz`；yaml 语法校验通过。
+**影响范围**：仅构建依赖版本，无业务代码变化。
+**回滚方式**：`git checkout -- pyproject.toml .github/workflows/build-and-publish.yml`；待 Cython 修复该回归后可放开上限。
+---
+
+
+## 2026-08-28 打包构建 - CIBW_BEFORE_BUILD 改双引号修复 Windows 构建
+
+**变更原因**：v0.0.128 sdist / macOS / Linux 通过，但 Windows wheel 失败：`CIBW_BEFORE_BUILD` 里的单引号在 cmd 中不是引号，`<3.3'` 被当作输入重定向，报 `The system cannot find the file specified`。
+**改动点**：`.github/workflows/build-and-publish.yml` `CIBW_BEFORE_BUILD` 改为 `pip install "cython>=3,<3.3" "setuptools>=68" wheel`（YAML 普通标量内双引号，bash 与 cmd 均可识别）。
+**验证结果**：yaml 解析后值为 `pip install "cython>=3,<3.3" "setuptools>=68" wheel`；需 v0.0.129 CI 验证。
+**影响范围**：仅 CI 构建脚本。
+**回滚方式**：`git checkout -- .github/workflows/build-and-publish.yml`
+---
+
+## 2026-09-04 MCP 认证 - 统一 OPS 凭据自愈与预热接口
+
+**变更原因**：Keepa 首次请求遇到本地未过期但 OPS 已拒绝的 Session 时，JWT 换取返回 401，必须手工调用 `auth_mcp_login` 后才能恢复；各业务模块也不应分别维护登录分支。
+**改动点**：增强共享 `ensure_ops_credentials` 入口，统一处理 JWT 建立、认证拒绝后的凭据失效、single-flight 静默重登与持久化，并统一返回 `OPS_CREDENTIAL_ENSURE_FAILED` 错误码；`TokenFetchError` 保留 HTTP 状态供统一逻辑精确识别 401/403，非认证类 JWT 获取失败不会清凭据或重登；Keepa 改为复用该入口，并新增不返回 Session/JWT 的 `POST /api/v1/auth/ensure` 诊断预热接口。同步补充陈旧 Session、并发重登、错误分类、Keepa 委托和 REST 脱敏合同测试，并更新线上 API 使用指南中的默认认证流程、接口说明和历史验收记录。
+**验证结果**：认证 TokenManager、共享凭据、Keepa、REST API 和卖家精灵远端凭据兼容定向回归共 `63 passed`；卖家精灵整文件 `94 passed, 1 failed`，唯一失败为仓库既有 Skill 版本断言仍期望 `v0.0.20`、当前模板已为 `v0.0.21`，与本次改动无关。目标模块 `compileall`、文档 18 个 JSON 示例解析、代码围栏/尾随空白/敏感示例检查及 `git diff --check` 均通过。当前虚拟环境和系统均未安装 Ruff，因此未执行 Ruff 检查。
+**影响范围**：HTTP/SSE 多用户模式下的 OPS 凭据建立、Keepa 场景请求和新增认证诊断接口；卖家精灵继续复用同一凭据入口，默认不强制预取 JWT。
+**回滚方式**：回退共享凭据模块、Keepa 接入、REST 路由、对应测试、使用指南及本条记录。
+---
+
+
+## 2026-09-04 JavaScript SDK - 自动换取并注入 MCP API Key
+
+**变更原因**：OPS 域名下的站点调用 opscli MCP REST API 时不应要求用户手工填写 API Key，需要统一复用现有 OPS 登录信息完成凭证换取和请求鉴权。
+**改动点**：新增 `@aukeys/ops-mcp-api-sdk` 独立 ESM 包，默认从 `localStorage.OPERATION_TOKEN` 读取 OPS Token，并携带同源 Cookie 请求 `/api/v1/mcp-api-keys/config`；API Key 仅保存在实例内存中，业务请求自动注入 Bearer Header。客户端支持 API 基址覆盖、并发 single-flight、`invalid_api_key` 后一次刷新重试、来源白名单、超时、自定义 Token Provider 与 fetch，并兼容当前 MCP URL 和后续结构化 `data.api` 配置。
+**验证结果**：`npm test` 通过 15 个 Node 单元测试，覆盖自动注入、single-flight、失效刷新、API 地址覆盖、结构化配置回退、同源限制和内存凭证失效；`npm run check` 语法检查通过；`npm pack --dry-run --json` 确认发布包仅包含 README、package.json、JavaScript 入口和类型声明。
+**影响范围**：新增 JavaScript SDK 包，不修改现有 Python CLI、MCP 服务或站点原型行为。
+**回滚方式**：删除 `sites/ops-mcp-api-sdk` 及本条记录。
+---
+
+## 2026-09-04 SellerSprite Lens - 新增卖家精灵 JSON 场景站点
+
+**变更原因**：为现有 SellerSprite MCP/REST 普通场景提供与 JSON Lens 类似的浏览器工作台，支持按官网筛选口径构造请求并查看异步任务 JSON 结果。
+**改动点**：新增 `sites/seller-sprite-lens-prototype`，包含 13 个 JSON 场景表单、任务提交与续查、最近任务恢复、额度读取、JSON v2 多工作表浏览和当前表格 CSV 导出；与 Keepa JSON Lens 统一复用 DaisyUI 5 + Tailwind CSS 4 的控件、卡片、表格和明暗主题，保留 SellerSprite 固定场景侧边栏及品牌色；月份型场景按官网口径提供“最近30天”及按两个月发布延迟生成的 25 个动态历史月份（2026-09-04 对应从 2026-07 开始），ABA、按周/90 天及无周期场景分别使用各自周期规则；一期不开放 Listing Analysis、`branddb`、`aba-reverse` 和官方 XLSX 下载。站点使用独立 `4174` 端口，并在共享 CORS 白名单和私有局域网正则中增加该端口。
+**验证结果**：Node 单元测试、Playwright 场景测试和 API CORS 回归测试均已通过；本地页面在 `4174` 端口完成桌面与移动端验证。
+**影响范围**：新增独立静态站点，并扩展 API 网关本地原型 CORS 到 `4174`；不修改 SellerSprite MCP、Collector、REST 路由或原有 Keepa JSON Lens。
+**回滚方式**：删除 `sites/seller-sprite-lens-prototype`，从 `opscli/api/cors.py` 移除 `4174`，删除对应 CORS 测试并移除本条变更记录。
+
+---
+
+## 2026-09-09 ops-feedback-query - 补齐 Windows 时区数据运行依赖
+
+**变更原因**：Windows 的 Python 运行环境未提供 IANA 时区数据库，反馈日报初始化 `Asia/Shanghai` 时抛出 `ZoneInfoNotFoundError`，导致自动化无法领取或生成日报。
+**改动点**：在项目运行依赖中增加 `tzdata`，并更新 `uv.lock`，使 Windows 与精简运行时可加载 IANA 时区数据。
+**验证结果**：`uv add tzdata` 成功同步依赖；后续将通过 `ZoneInfo('Asia/Shanghai')` 与反馈日报领取命令验证。
+**影响范围**：仅 Python 运行环境的时区数据可用性；反馈分类、统计及通知逻辑不变。
+**回滚方式**：从 `pyproject.toml` 移除 `tzdata` 并更新锁文件；Windows 或精简环境将重新依赖外部系统时区数据库。
+---
+
+## 2026-09-09 西柚 MCP - 接入多账号试用通道
+
+**变更原因**：西柚 OpenAPI VIP 尚未开通，需要先通过固定远端 MCP 验证数据能力，并在单个试用账号周额度明确耗尽时自动切换备用账号。
+**改动点**：扩展 API Credential Provider 白名单，新增固定 Bearer 认证的 xydc MCP Provider、首批四个测试中 MCP Tool、共享西柚日限额迁移、契约测试和接入设计说明；现有西柚网页爬虫与鹰眼 PND 路径保持不变。
+**验证结果**：xydc Provider、API Credential、Tool 注册和 quota 定向回归 `61 passed`；排除仓库既有 Shopify 收集错误后的 MCP 全量回归 `501 passed`；目标模块 `compileall` 与 `git diff --check` 通过。两枚本地 Bearer Token 分别真实调用 `get_asin_info`，均返回 `status=200`、`cost_credits=1`；首次冒烟发现并修复整数状态码误判，诊断和复验本轮共消耗 5 Credits。更大范围旧西柚网页测试有 6 个预存失败，与本次新增 Provider 无关。
+**影响范围**：新增 `ext_xydc_*` 测试工具及 `xydc_mcp`/`xydc_openapi` 凭据类型；不启用旧 `xiyou_run`，不修改正式 OpenAPI 和网页通道行为。
+**回滚方式**：回退 xydc Provider、MCP Tool 注册、凭据白名单、限额迁移、测试、设计文档及本条记录。
+---
+
+## 2026-09-10 ops-xiyou Skill - 增加 xydc MCP 测试通道路由
+
+**变更原因**：原 `ops-xiyou` Skill 默认引用未注册到通用 MCP 的旧 `xiyou_*` Tool，无法正确引导 Agent 使用已接入的四个 `ext_xydc_*` 测试工具，也缺少 Credit 消耗、多账号切换和重试边界说明。
+**改动点**：将 xydc MCP 试用通道设为显式西柚请求的首选路径，补充四个 Tool 的意图和参数合同、Credit 与失败处理、结果来源字段及旧网页 CLI 补充路径；Skill 版本升至 `v1.1.0`，并在 source、wheel、binary、binary_full 产物中以 `experimental` 级别发布；新增 Skill 身份、路由、发布和安装契约测试。
+**验证结果**：Skill Creator `quick_validate.py` 在 Python UTF-8 模式下通过；`test_packaging.py` 与 `test_ops_xiyou_skill.py` 共 14 项通过；xydc Tool/Provider 定向回归 14 项通过；目标 Python 文件 `compileall` 通过；`git diff --check` 通过。校验器首次受 Windows 默认 GBK 读取 UTF-8 中文影响，改用 `python -X utf8` 后正常通过；一次并行 pytest 启动触发本地捕获器关闭异常，串行禁用捕获复验通过。
+**影响范围**：Agent 对西柚请求的工具选择和内置 Skill 发版范围；不修改 xydc Provider、旧网页通道或正式 OpenAPI 行为。
+**回滚方式**：回退 `ops-xiyou` Skill、版本文件、模板发版清单、对应测试和本条记录。
+---
+## 2026-09-11 Keepa - MCP API 额度等待与稳定错误码
+
+**变更原因**：Keepa 额度不足时，`wait=true` 只等待一次 refill 后就继续请求，等待后额度仍不足会把失败转成泛化错误，站点难以判断是否应稍后重试。
+
+**改动点**：等待 refill 后重新执行额度预检查；非 `force` 请求在额度仍不足时返回 `KEEPA_QUOTA_INSUFFICIENT`、额度快照字段和 `retry_after_seconds`，不再发起 Keepa 业务请求；Keepa REST API 对额度不足和限流返回 HTTP 429，并设置 `Retry-After`；Keepa 上游 401/403/429 及额度类响应映射为稳定错误码。
+
+**验证结果**：Keepa 管理器与 REST API 回归 `40 passed`；Keepa/MCP 相关回归 `144 passed`；目标模块 `compileall` 通过。
+
+**影响范围**：仅影响 `opscli/keepa` 与 `/api/v1/keepa/run` 的错误响应；成功请求、`force=true` 行为和其他 Keepa 场景参数保持不变。
+
+**回滚方式**：恢复 Keepa 异常映射、额度二次预检查、Keepa REST 状态映射及对应测试和本条记录。
+
+---
+
+# 2026-09-10 AppHub manifest 身份切换为 app_id
+
+**变更原因**：最新 AppHub 模板已删除 `app.yaml.name` 并新增五位 `app_id`；opscli 仍在 `create/init/push` 中把远端 slug 写回顶层 `name`，造成模板合同回退和发布身份双轨。
+**改动点**：`AppManifestStore` 改为同步 `app_id/title` 并在 `create/init` 时删除遗留顶层 `name`；`push` 在任何远端或 Git 操作前严格校验 `app.yaml.app_id` 与 schema v4 binding 一致，且不再静默改写 manifest；AppHub 创建请求中的 `name` 继续作为 slug 字段；同步更新 AppHub 使用指南、建站与数据层 Skill、历史设计稿废止说明和专项测试。
+**验证结果**：AppHub manifest/manager/client/CLI 回归 61 项通过，相关 Skill 与模板克隆合同 17 项通过，最新模板 `bind-apphub-git.py` 单测 39 项通过；修改的 Python 文件通过 `py_compile`。完整 Skill 测试仍有 2 项既有中文编码断言失败，与本次身份合同变更无关。
+**影响范围**：`opscli/app` manifest 与三命令编排、AppHub 相关 Skill/指南/测试；不改变远端创建 API、binding slug、仓库或 Git 凭据合同。
+**回滚方式**：恢复 `AppManifestStore` 的 `name/title` 同步、manager 的 push 同步策略及相应 Skill/测试；该回滚会重新违反 2026-09-09 最新模板合同，不建议执行。
+
 ---
 
 ## 2026-09-08 ops-dataset-query / 规划器内核 - 默认推荐数据集直通与部门筛选消歧
@@ -9908,6 +11525,40 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：还原 `query_plan` 的 `top_n` 参数说明与 `query_flow` 的「参数边界」段落。
 ---
+
+## 2026-09-11 Git - 合并远端最新 release
+
+**变更原因**：将 `origin/release` 的最新提交合并到 `feature/sellersprite`，解决双方在 AppHub manifest 合同和变更日志上的并行修改冲突。
+**改动点**：保留 release 的 `app_id` 严格 manifest 合同与校验测试，同时保留功能分支的私有仓库 Git 凭据兼容逻辑及 SellerSprite、Keepa、西柚相关改动；完整合并双方变更记录。
+**验证结果**：App manifest、manager、gitops 定向回归 `66 passed`，完整 `tests/app` 回归 `106 passed`；Keepa/Xiyou 相关回归 `134 passed`；合并后的三个 App Python 模块通过 `py_compile`；`git diff --check` 通过且不存在未解决文件。
+**影响范围**：当前功能分支与 `origin/release` 的合并结果，重点涉及 AppHub manifest、Git 凭据和规划器相关更新。
+**回滚方式**：在尚未推送时回退本次 merge commit；已推送后使用 revert 撤销该 merge commit。
+---
+## 2026-09-14 App - Git 认证失败时自动刷新用户凭据
+
+**变更原因**：用户清空本机 Git credential helper 后，AppHub 仍可能报告当前用户存在有效凭据。此前 `app init` 和 `app push` 会返回 `GIT-CREDENTIAL-ROTATION-REQUIRED`，要求业务用户理解并显式传入 `--rotate-git-credential`，无法无感恢复。
+
+**改动点**：`opscli/app/services/manager.py` 在现有凭据 `ls-remote` 明确返回认证错误时自动恢复：服务端 `bound=false` 请求 `POST /api/v1/git/credentials` 的 `rotate=false` 首次签发，`bound=true` 请求 `rotate=true` 由服务端吊销旧凭据并签发新凭据；非认证类 Git 错误保持原样返回。新凭据先通过临时 Basic Authorization 验证，成功后由 `GitCredentialStore.erase_credential` 清理旧 helper 记录并保存新凭据，随后继续原 init/push 流程。删除 CLI 的 `--rotate-git-credential` 参数和 `credential_rotated` 输出，普通终端仅提示“Git 认证已自动刷新。”；同步更新 App 开发 Skill 与使用指南。
+
+**验证结果**：使用仓库虚拟环境和系统临时目录执行 `.venv/Scripts/python.exe -X utf8 -m pytest tests/app -q -p no:cacheprovider --basetemp <系统临时目录>`，完整 App 模块回归 `119 passed`。仓库默认 pytest 临时目录受 Windows ACL 影响，首次运行出现 92 个 fixture setup 权限错误；切换到系统临时目录后全部通过。
+
+**影响范围**：影响 `opscli app init` 与 `opscli app push` 的 Git 认证恢复。正常有效凭据不触发远端签发；自动轮换仍沿用 AppHub 的用户级单凭据合同，会使同一用户在其他机器上的旧凭据失效。
+
+**回滚方式**：恢复 `--rotate-git-credential` 参数、`GIT-CREDENTIAL-ROTATION-REQUIRED` 分支及显式轮换测试，删除自动 helper 清理与本节文档更新。
+
+---
+
+## 2026-09-14 ops-app-data-builder - 空远端不再阻塞业务代码开发
+
+**变更原因**：数据层 Skill 将远端存在 `origin/master` 设为代码生成硬门槛，导致已完成 `opscli app create/init` 的新项目必须先提交并推送纯模板，才能实现用户已经确认的业务需求；该门槛与 App 源码交付规范允许空远端尚无 `master` 的规则冲突。
+
+**改动点**：调整 `ops-app-data-builder` 初始化门禁，允许 binding、origin、标准模板和项目身份均正确的项目在尚无首次提交的本地 `master` 上继续开发；`origin/master` 仅作为存在时可用的远端基线，不再是开发前置条件。保留非 `master`、origin 不匹配、模板或身份不完整时的阻塞行为；明确首次提交与推送属于取得用户授权后的源码交付阶段。同步升级 Skill 至 `0.1.14`，更新契约测试与 eval 场景。
+
+**验证结果**：`pytest tests/skills/test_ops_app_data_builder_skill.py -q` 为 `12 passed`；`quick_validate.py` 返回 `Skill is valid!`；目标 JSON 可解析，包含 13 个 agent prompt 和 20 条 success criteria。完整 `tests/skills` 回归为 `45 failed, 262 passed, 1 skipped`，失败集中在 CLI 输出、Dashboard 模板漂移、feedback 日报和系统脚本等既有范围；相邻的 `ops-app-build-spec` 单测单独复跑仍因其 `assets/backend/AGENTS.md` 缺少既有期望文案失败，与本次改动无关。目标静态 eval 得分 `0.875`，本次新增三条门禁术语均已命中，但被 eval 原有的四个陈旧主文件术语要求（`查询组件只用于`、`确定性分页`、`断点续传`、`/api/v1/seller-sprite/jobs`）阻塞，未扩展本次范围修复。
+
+**影响范围**：只影响 `ops-app-data-builder` 对新建空远端项目的初始化判断。已有 `origin/master` 项目、项目身份校验、标准模板检查、数据合同验证和交付授权边界保持不变。
+
+**回滚方式**：恢复 `SKILL.md` 对 `origin/master` 的强制要求，将版本回退到 `0.1.13`，并还原对应契约测试与 eval 条目。
 
 ## 2026-09-14 构建配置 - 新增 .gitleaks.toml 解除测试假密钥误报
 

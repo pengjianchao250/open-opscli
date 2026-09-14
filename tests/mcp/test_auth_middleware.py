@@ -82,6 +82,85 @@ def test_remote_middleware_injects_auth_mode_into_scope_and_context(monkeypatch)
     }
 
 
+def test_trusted_upstream_injects_apphub_identity_without_gateway_key():
+    captured = {}
+
+    async def app(scope, receive, send):
+        from opscli.mcp.context import get_current_auth_mode, get_current_user_email
+
+        captured["scope_mode"] = scope.get("mcp_auth_mode")
+        captured["context_mode"] = get_current_auth_mode()
+        captured["email"] = get_current_user_email()
+
+    middleware = ApiKeyAuthMiddleware(
+        app,
+        api_key="regular-mcp-key",
+        trust_upstream_apphub_identity=True,
+    )
+    scope = {
+        "type": "http",
+        "path": "/mcp",
+        "query_string": b"",
+        "headers": [
+            (b"x-apphub-user-email", b"User@Example.com"),
+        ],
+    }
+
+    _run(middleware(scope, lambda: None, lambda message: None))
+
+    assert captured == {
+        "scope_mode": "internal",
+        "context_mode": "internal",
+        "email": "user@example.com",
+    }
+
+
+def test_apphub_identity_headers_do_not_bypass_auth_by_default():
+    sent = []
+
+    async def app(scope, receive, send):
+        raise AssertionError("普通 MCP 不应无条件信任 AppHub 身份头")
+
+    async def capture_send(message):
+        sent.append(message)
+
+    middleware = ApiKeyAuthMiddleware(app, api_key="regular-mcp-key")
+    scope = {
+        "type": "http",
+        "path": "/mcp",
+        "query_string": b"",
+        "headers": [(b"x-apphub-user-email", b"user@example.com")],
+    }
+
+    _run(middleware(scope, None, capture_send))
+
+    assert sent[0]["status"] == 401
+    assert b'"reason":"invalid_api_key"' in sent[1]["body"]
+
+
+def test_path_scoped_middleware_leaves_rest_outside_mcp_key_boundary():
+    captured = {}
+
+    async def app(scope, receive, send):
+        captured["path"] = scope["path"]
+
+    middleware = ApiKeyAuthMiddleware(
+        app,
+        api_key="mcp-key",
+        protected_path_prefixes=("/mcp", "/sse"),
+    )
+    scope = {
+        "type": "http",
+        "path": "/api/v1/keepa/run",
+        "query_string": b"",
+        "headers": [],
+    }
+
+    _run(middleware(scope, lambda: None, lambda message: None))
+
+    assert captured == {"path": "/api/v1/keepa/run"}
+
+
 @respx.mock
 def test_remote_verify_uses_short_cache():
     """同一 API Key 的连续校验应命中短缓存，避免轮询时重复访问 OPS。"""

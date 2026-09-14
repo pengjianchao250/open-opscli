@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -35,6 +37,7 @@ from .export_fallback import attach_json_data_fallback, build_export_payload_wit
 from .helpers import _err, _get_auth_pair, _ok, _parse_json_arg
 
 _KEEPA_API_MODE: ContextVar[bool] = ContextVar("keepa_api_mode", default=False)
+_logger = logging.getLogger("opscli.keepa.mcp")
 
 
 def _keepa_skill_dir() -> Path:
@@ -47,20 +50,6 @@ def _get_current_mcp_user_email() -> str | None:
     from opscli.mcp.context import get_current_user_email
 
     return get_current_user_email()
-
-
-def _load_keepa_settings():
-    """读取 Keepa 运行配置。"""
-    from opscli.keepa.config import load_settings
-
-    return load_settings()
-
-
-async def _try_auto_mcp_login() -> dict:
-    """在 HTTP/SSE MCP 模式下尝试一步登录并缓存 session。"""
-    from .auth import auth_mcp_login
-
-    return await auth_mcp_login()
 
 
 async def keepa_spec_must_read() -> dict:
@@ -138,8 +127,8 @@ async def keepa_run(
 ) -> dict:
     """执行 Keepa 场景并保存请求参数、原始响应、规范化结果和 XLSX/JSON 导出。
 
-    如果未提供 session_id / jwt，会自动尝试从当前 MCP 会话隔离凭证中加载。
-    若无 OPS 登录态但设置了 OPSCLI_KEEPA_API_KEY，也可直接执行。
+    Keepa API Key 默认从 MySQL 凭据池领取；session_id / jwt 仅用于可选的导出上传。
+    若凭据池不可用但设置了 OPSCLI_KEEPA_API_KEY，也可使用本地兜底 Key 执行。
     """
     return await _keepa_run_impl(
         scenario=scenario,
@@ -178,6 +167,7 @@ async def _keepa_run_impl(
     cache_mode: CacheMode = "prefer_cache",
 ) -> dict:
     """执行 Keepa，并允许 MCP Runtime 注入内部沉淀提交器。"""
+    started_at = time.monotonic()
     api_mode = _KEEPA_API_MODE.get()
     call_params = {
         "scenario": scenario,
@@ -235,27 +225,39 @@ async def _keepa_run_impl(
             return response
 
         sid, jw = _get_auth_pair("ops", session_id, jwt)
-        keepa_settings = _load_keepa_settings()
-        if not sid and not keepa_settings.api_key:
-            login_result = await _try_auto_mcp_login()
-            if login_result.get("success"):
-                sid, jw = _get_auth_pair("ops", session_id, jwt)
-            if not sid:
-                login_error = (login_result.get("error") or {}).get("message")
-                message = "无 session_id：请完成授权登录，或传入有效的 session_id"
-                if login_error:
-                    message = f"{message}。自动执行 auth_mcp_login 失败：{login_error}"
-                raise ValueError(message)
         manager_kwargs: dict[str, Any] = {"jwt": jw, "session_id": sid}
         if collection_submitter is not None:
             manager_kwargs["collection_submitter"] = collection_submitter
         result = await KeepaApiManager(**manager_kwargs).run(request)
-        public_result = _public_api_result(result.to_dict()) if api_mode else _public_result(result.to_dict())
+        public_result = (
+            _public_api_result(result.to_dict())
+            if api_mode
+            else _public_result(result.to_dict())
+        )
         return _ok(public_result)
     except ValueError as exc:
+        _log_keepa_failure(exc, call_params, started_at)
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params, auto_feedback=False)
     except Exception as exc:
+        _log_keepa_failure(exc, call_params, started_at)
         return _err(exc, tool="MCP → keepa_run(...)", call_params=call_params)
+
+
+def _log_keepa_failure(exc: Exception, call_params: dict[str, Any], started_at: float) -> None:
+    """记录场景级脱敏错误摘要，不输出业务 params 或认证信息。"""
+    to_dict = getattr(exc, "to_dict", None)
+    error = to_dict() if callable(to_dict) else {}
+    _logger.warning(
+        "[KEEPA-DIAG] run_failed scenario=%s site=%s code=%s status=%s "
+        "message=%s retry_after_seconds=%s elapsed_ms=%s",
+        call_params.get("scenario"),
+        call_params.get("site"),
+        error.get("code") or type(exc).__name__,
+        error.get("status_code"),
+        str(error.get("message") or exc)[:300],
+        error.get("retry_after_seconds"),
+        int((time.monotonic() - started_at) * 1000),
+    )
 
 
 async def keepa_job_status(job_id: str) -> dict:

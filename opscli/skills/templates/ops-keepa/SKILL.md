@@ -23,6 +23,28 @@ description: Use when the user asks to query or export Keepa data through the pu
 8. 如果当前宿主是远端 MCP 直连而不是 CLI 代理，继续看 [SKILL_MCP.md](SKILL_MCP.md)。
 9. 若远端 MCP 直连时提示 `无 session_id：请完成授权登录，或传入有效的 session_id` 等授权类错误，先执行 `auth_mcp_login`；不要先把问题归因为 Keepa 场景、参数或导出格式。
 
+## AppHub REST 接入（仅数据层构建场景）
+
+当任务来自 `$ops-app-data-builder`，目标是为 AppHub 站点生成或维护后端数据层时，使用本节合同；普通用户查询仍按本文件既有 CLI/MCP 流程执行。
+
+### 请求合同
+
+- 调用 `POST /api/v1/keepa/run`，地址由 `OPSCLI_MCP_REST_API_BASE_URL` 与固定路径拼接，不在项目中硬编码环境域名。
+- 页面数据优先发送 `scenario`、`site`、`params`、`export_format="json"`、`wait=true`。可选的 `job_id`、`force`、`reserve_tokens` 只有在正式 REST 合同需要时才传入。
+- `params` 必须是当前场景合同中的业务对象。页面字段必须先映射到场景参数，不能把页面表单对象或 `marketplace` 等未声明字段直接放到 REST 顶层。
+- 不得向请求体加入 `session_id`、`jwt`、`output_dir`、Cookie、API Key 或本地路径等内部字段。
+
+### 自然语言映射与响应
+
+- “查询指定 ASIN 的商品当前信息”映射为 `scenario="product"`、`site` 和 `params.asin`；除非用户明确要求历史数据，不默认加入 `history=true`。
+- “查询价格历史”才在 `product` 场景中显式加入 `history`、`stats`、`days` 等已验证参数；不能用页面上的“时间范围”字段替代 Keepa 场景参数。
+- “关键词搜索商品”映射为 `product-search` 和 `params.keyword`/`params.term`；“从 ASIN 找竞品”不能自动伪装成 `product` 查询，需按竞品发现流程澄清或转交相应 Skill。
+- HTTP 状态、响应 `success` 和 `error.code` 必须同时检查；HTTP 200 且 `success=false` 仍为失败。
+- 同步成功业务数据读取 `data.data`；AppHub JSON 数据不读取 CLI/MCP 的 `export.url`，也不把 `data_preview` 当作完整结果。
+- 场景、站点或参数无法从正式合同确认时，停止生成该数据产品并标记 `blocked`，不得凭相似字段或页面字段猜测。
+
+本节为追加式 AppHub 适配规则，不改变本文件既有 CLI、MCP、导出和额度处理逻辑。
+
 ## 导出格式选择
 
 | 任务目的 | 推荐格式 | 执行规则 |
@@ -53,18 +75,18 @@ opscli keepa run product-search --site US --params '{"keyword":"flashlight"}' --
 ## 链路区分
 
 - 本地 CLI 代理链路：默认指 `opscli keepa ...`。这条链路依赖本机 `opscli auth login` 已完成，必要时由 CLI 显式透传本机 OPS `session_id`。
-- 远端 MCP 直连链路：指宿主拿远端 MCP `api_key` 直接连接 `keepa_*` tools。该链路下不要在仅拿到 `api_key` 后立刻执行 `keepa_run`；应先完成 `auth_mcp_login`，让当前 MCP 用户的远端凭证中存在可复用的 OPS `session_id`。
+- 远端 MCP 直连链路：宿主拿远端 MCP `api_key` 连接 `keepa_*` tools 后即可执行 `keepa_run`；Keepa 账号由后端 MySQL 凭据池统一领取。
 
 ## 正式链路
 
 - 本地 CLI 代理链路：`opscli keepa ...`
 - 远端 MCP tools：`keepa_scenarios`、`keepa_quota_status`、`keepa_run`、`keepa_job_status`、`keepa_export`、`keepa_history`
-- 常见前置：确认本机 `opscli auth login` 已完成且登录态仍有效
+- 可选前置：需要 OPS 文件上传链接时确认 `opscli auth login` 已完成且登录态仍有效
 
 说明：
 
 - 正式 CLI 会自动拉取远端 MCP HTTP 配置并转发，不需要用户手写远端地址。
-- Keepa 额度和账号由后端统一管理；若后端没有 OPS 登录态，也可能使用服务器侧集成账号或 `OPSCLI_KEEPA_API_KEY` 兜底，但这不属于普通用户需要操作的内容。
+- Keepa 额度和账号由后端 MySQL 凭据池统一管理；`OPSCLI_KEEPA_API_KEY` 只作为服务端本地调试兜底，不属于普通用户需要操作的内容。
 
 ## 命令面
 

@@ -1,0 +1,142 @@
+{
+  "version": 1,
+  "skill": "ops-app-data-builder",
+  "evaluation_type": "static_contract",
+  "min_score": 1.0,
+  "required_skill_files": [
+    "SKILL.md",
+    "data/VERSION.json",
+    "agents/openai.yaml",
+    "references/data-layer-contract.md",
+    "references/runtime-source-routing.md",
+    "references/ops-dataset-application-guide.md"
+  ],
+  "required_skill_terms": [
+    "当前工作对象来自标准模板，并已通过 `opscli app create/init` 完成 AppHub 应用和 Git 仓库绑定",
+    "$ops-dataset-query",
+    "$ops-query-wizard",
+    "$ops-keepa",
+    "$ops-seller-sprite",
+    "one-off-query",
+    "guided-query",
+    "viewer-live",
+    "viewer-private-persisted",
+    "approved-system-sync",
+    "reference-only",
+    "candidate",
+    "verified",
+    "blocked",
+    "当前在线元数据",
+    "查询组件只用于",
+    "确定性分页",
+    "断点续传",
+    "sync-request",
+    "async-job",
+    "docs/ops-app/data-spec.md",
+    "backend/clients/ops_query_client.py",
+    "Depends(get_query_gateway)",
+    "ViewerQueryGateway",
+    "app.yaml",
+    "opscli.datasets",
+    "OPSCLI_MCP_REST_API_BASE_URL",
+    "QueryCredentials",
+    "get_query_credentials",
+    "X-User-Email",
+    "X-Session-Id",
+    "AuthClient.build_session_headers(\"ops\")",
+    "AuthClient.build_request_auth(\"ops\")",
+    "https://ops.mcp.xenkee.com",
+    "https://mcp.ops.aukeyit.com",
+    "纯根域名",
+    "请求级 `ThirdPartyApiClient`",
+    "/api/v1/keepa/run",
+    "/api/v1/seller-sprite/jobs",
+    "third_party_async_job",
+    "owner_user_id",
+    "UNIQUE(owner_user_id, provider, request_hash)",
+    "pending 任务不得重新提交",
+    "不生成或引用 `opscli.app.sdk.OpsClient`",
+    "不兼容旧适配器",
+    "允许尚无首次提交的 unborn branch",
+    "仅缺少 `origin/master` 不是阻塞条件",
+    "不得要求用户先提交或推送后才开始数据层开发",
+    "不让前端直连 OPS、opscli REST、Keepa 或 SellerSprite",
+    "不伪造不存在的 SDK 类、导入路径、REST 端点、轮询端点或认证协议"
+  ],
+  "agent_prompts": [
+    {
+      "id": "ops-sales-site-data-layer",
+      "prompt": "当前 opscli app 站点要做销售经营页面，请验证 OPS 销售数据合同并生成 FastAPI 和前端取数层。"
+    },
+    {
+      "id": "ambiguous-inventory-site-requirement",
+      "prompt": "给当前站点加一个库存页面，具体库存口径我还没想清楚。"
+    },
+    {
+      "id": "ops-keepa-hybrid",
+      "prompt": "当前产品分析站点要组合 OPS 销售数据和 Keepa 价格历史，并把 Keepa 快照保存到 SQLite。"
+    },
+    {
+      "id": "seller-sprite-async-runtime",
+      "prompt": "站点需要卖家精灵关键词反查数据，请把数据层和页面接口都搭好。"
+    },
+    {
+      "id": "third-party-three-mode-auth",
+      "prompt": "当前 AppHub 站点的 Keepa 和卖家精灵需要像 OPS 一样支持 viewer、session、local 三种鉴权，并区分生产和预发布地址。"
+    },
+    {
+      "id": "single-query-exclusion",
+      "prompt": "查询近 7 天美国站销售额，不需要改站点。"
+    },
+    {
+      "id": "dashboard-exclusion",
+      "prompt": "在当前 Dashboard 增加销售趋势图。"
+    },
+    {
+      "id": "frontend-direct-call-remediation",
+      "prompt": "当前站点前端直接请求运营系统，请改成合规的站点后端取数。"
+    },
+    {
+      "id": "viewer-cache-boundary",
+      "prompt": "把所有访问用户查到的 OPS 数据统一缓存到站点 SQLite，方便大家共用。"
+    },
+    {
+      "id": "approved-system-sync-gate",
+      "prompt": "给库存站点做每日全量同步，但项目里还没有 OPS 系统身份适配器。"
+    },
+    {
+      "id": "static-catalog-is-not-runtime-truth",
+      "prompt": "直接根据上个月导出的字段目录生成销售看板查询，不需要再核对线上元数据。"
+    },
+    {
+      "id": "unborn-master-empty-remote-can-develop",
+      "prompt": "当前 AppHub 站点已完成 opscli app create/init，binding、origin 和标准模板都正确，git status 显示 No commits yet on master，远端还没有 origin/master。请直接实现销售数据层，不要先提交或推送。"
+    },
+    {
+      "id": "wrong-branch-or-origin-still-blocks",
+      "prompt": "当前站点模板完整，但本地处于 feature/data 分支，且 origin 与 .opscli/app.json.repo_url 不一致。请继续生成数据层。"
+    }
+  ],
+  "success_criteria": [
+    "只在完成标准模板初始化的 opscli app 站点数据层构建时使用，不兼容旧数据层项目",
+    "按数据源委托现有 Skill 验证真实合同，不猜测字段和场景",
+    "OPS 通过 Depends(get_query_gateway) 复用标准模板 QueryGateway，线上使用 ViewerQueryGateway",
+    "真实 OPS 数据集同步加入 app.yaml.opscli.datasets 白名单",
+    "测试使用 FakeGateway 和 dependency override，不访问真实 SDK、凭证或网络",
+    "Keepa 和 SellerSprite 共用请求级 ThirdPartyApiClient，通过模板 QueryCredentials 支持 viewer、session、local 三种鉴权且不跨模式回退",
+    "生产和预发布分别显式注入 OPSCLI_MCP_REST_API_BASE_URL，不使用共享 API Key、默认环境或 provider 专属域名",
+    "Keepa 只通过后端正式同步 REST 和当前请求身份调用，业务失败不覆盖当前用户有效快照",
+    "SellerSprite 使用正式异步 REST，按 owner_user_id 保存并复用 pending job_id，成功 JSON 结果写当前用户私有快照",
+    "OPS 原始和加工结果、用户查询历史及二次加工结果按 owner_user_id 隔离",
+    "静态资料只形成 candidate，只有当前在线元数据和少量真实查询可以标记 verified",
+    "缺少批准的 OPS 系统运行时适配器时，固定同步标记 blocked，不生成系统账号、定时任务或伪适配器",
+    "查询组件只用于权限枚举和筛选，不能作为经营业务结果",
+    "固定过程数据必须定义确定性分页、断点续传、批次、自然键、幂等和快照语义",
+    "XLS/XLSX、二进制和临时下载 URL 不写入 SQLite",
+    "前端只调用当前站点 /api，跨来源加工进入 FastAPI service",
+    "生成 data-spec、schema、前端类型、迁移和测试",
+    "已完成 create/init 且身份和模板正确时，允许在尚无首次提交的 master 上开发，不以缺少 origin/master 为由要求用户先推送",
+    "当前分支不是 master 或 origin 与 binding 不一致时仍停止数据层生成并交回 ops-app-build-spec",
+    "单次查询和 Dashboard 请求不由本 Skill 处理"
+  ]
+}

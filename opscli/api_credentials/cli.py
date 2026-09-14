@@ -11,7 +11,7 @@ from opscli.api_credentials.config import load_settings
 from opscli.api_credentials.repository import MySqlApiCredentialRepository
 
 
-app = typer.Typer(help="统一管理 SerpAPI、Canopy、scrape.do 的多账号 API Key。")
+app = typer.Typer(help="统一管理 SerpAPI、Canopy、scrape.do、Keepa 和西柚的多账号 API Key。")
 
 
 @app.command("init-schema")
@@ -31,7 +31,11 @@ def init_schema() -> None:
 
 @app.command("add")
 def add_account(
-    provider: str = typer.Option(..., "--provider", help="serpapi/canopy/scrape_do"),
+    provider: str = typer.Option(
+        ...,
+        "--provider",
+        help="serpapi/canopy/scrape_do/keepa/xydc_mcp/xydc_openapi",
+    ),
     name: str = typer.Option(..., "--name", help="平台内唯一账号名称"),
     priority: int = typer.Option(100, "--priority", min=1, help="数值越小越优先"),
     remark: str | None = typer.Option(None, "--remark", help="账号用途或负责人"),

@@ -153,6 +153,7 @@ def build_dual_endpoint_app(
     api_key: str | None = None,
     auth_verify_url: str | None = None,
     app_wrapper: Callable[[Any], Any] | None = None,
+    trust_upstream_apphub_identity: bool = False,
 ) -> Any:
     """构建同时暴露 SSE 与 Streamable HTTP 的鉴权 ASGI 应用。"""
     from starlette.applications import Starlette
@@ -177,6 +178,8 @@ def build_dual_endpoint_app(
         combined,
         api_key=api_key,
         auth_verify_url=auth_verify_url,
+        protected_path_prefixes=("/mcp", "/sse") if app_wrapper is not None else None,
+        trust_upstream_apphub_identity=trust_upstream_apphub_identity,
     )
 
 
@@ -224,6 +227,25 @@ def _print_http_startup_banner(
         print(f"[{service_name}] Streamable HTTP: {local_url}/mcp")
 
 
+def _configure_keepa_diagnostic_logging() -> None:
+    """确保 Keepa 边界日志在 Uvicorn 外壳中有独立输出通道。"""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    )
+    setattr(handler, "_opscli_keepa_diagnostic", True)
+
+    for logger_name in ("opscli.keepa", "opscli.api"):
+        logger = logging.getLogger(logger_name)
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        if not any(
+            getattr(existing, "_opscli_keepa_diagnostic", False)
+            for existing in logger.handlers
+        ):
+            logger.addHandler(handler)
+
+
 def run_mcp_app(
     mcp: FastMCP,
     *,
@@ -231,6 +253,7 @@ def run_mcp_app(
     catalog: list[dict],
     api_key_filename: str = "mcp_api_key",
     app_wrapper: Callable[[Any], Any] | None = None,
+    trust_upstream_apphub_identity: bool = False,
 ) -> None:
     """按统一参数解析规则运行 MCP 服务。"""
     from opscli.auth.config import get_ops_url
@@ -293,6 +316,7 @@ def run_mcp_app(
             api_key=api_key,
             auth_verify_url=auth_verify_url,
             app_wrapper=app_wrapper,
+            trust_upstream_apphub_identity=trust_upstream_apphub_identity,
         )
     else:
         transport_name = "sse" if transport_val == "sse" else "streamable-http"
@@ -304,10 +328,15 @@ def run_mcp_app(
             sub_app,
             api_key=api_key,
             auth_verify_url=auth_verify_url,
+            protected_path_prefixes=("/mcp", "/sse") if app_wrapper is not None else None,
+            trust_upstream_apphub_identity=trust_upstream_apphub_identity,
         )
 
     async def _serve() -> None:
         config = uvicorn.Config(asgi_app, host=host, port=port, log_level="info")
+        # Uvicorn only guarantees handlers for its own loggers; configure business
+        # loggers explicitly so Keepa diagnostics are visible in deployment logs.
+        _configure_keepa_diagnostic_logging()
         await uvicorn.Server(config).serve()
 
     try:

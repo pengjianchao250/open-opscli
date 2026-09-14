@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from opscli.collector_monitor.storage.account_repository import AccountMonitorRepository
+from opscli.shared.collection_storage.config import MySqlSettings
 
 
 NOW = datetime(2026, 8, 5, 4, 30, tzinfo=timezone.utc)
@@ -260,6 +261,119 @@ def test_usage_today_uses_shanghai_day_and_counts_refunded_failures(tmp_path: Pa
     }
 
 
+def test_feature_usage_today_includes_pnd_executor_and_proxy_rows(tmp_path: Path) -> None:
+    """功能调用区应展示鹰眼执行与代理转发，并保持两种口径分行。"""
+    binding_db = tmp_path / "bindings.sqlite3"
+    queue_db = tmp_path / "queue.sqlite3"
+    quota_db = tmp_path / "quota.sqlite3"
+    _create_binding_db(binding_db)
+    _create_queue_db(queue_db, _account_key("Dedicated A", "seller.account@example.com"))
+    _create_quota_db(quota_db)
+
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.params = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+        def execute(self, sql, params):
+            assert "FROM mcp_call_events" in sql
+            self.params = params
+
+        def fetchall(self):
+            return [
+                {
+                    "user_email": "alice.smith@example.com",
+                    "service": "external_pnd",
+                    "operation": "ext_pnd_execute_readonly_sql",
+                    "runtime_role": "executor",
+                    "calls": 5,
+                    "avg_duration_ms": 120,
+                    "max_duration_ms": 240,
+                    "last_called_at": datetime(2026, 8, 5, 4, 20),
+                },
+                {
+                    "user_email": None,
+                    "service": "external_pnd",
+                    "operation": "ext_pnd_list_available_datasets",
+                    "runtime_role": "gateway_proxy",
+                    "calls": 2,
+                    "avg_duration_ms": None,
+                    "max_duration_ms": None,
+                    "last_called_at": datetime(2026, 8, 5, 3, 0),
+                },
+            ]
+
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.cursor_obj = FakeCursor()
+            self.closed = False
+
+        def cursor(self):
+            return self.cursor_obj
+
+        def close(self):
+            self.closed = True
+
+    connection = FakeConnection()
+    repository = AccountMonitorRepository(
+        queue_db_path=queue_db,
+        binding_db_path=binding_db,
+        quota_db_path=quota_db,
+        clock=lambda: NOW,
+        telemetry_mysql=MySqlSettings(
+            host="mysql.internal",
+            database="polaris_ops_mcp",
+            user="monitor_reader",
+            password="secret",
+        ),
+        mysql_connection_factory=lambda _settings: connection,
+    )
+
+    payload = repository.feature_usage_today(limit=100)
+
+    assert connection.cursor_obj.params == (
+        datetime(2026, 8, 4, 16, 0),
+        datetime(2026, 8, 5, 16, 0),
+        100,
+    )
+    assert connection.closed is True
+    assert payload == {
+        "day": "20260805",
+        "timezone": "Asia/Shanghai",
+        "source": {"ready": True, "error": None},
+        "usage": [
+            {
+                "identity": "a***@example.com",
+                "service": "external_pnd",
+                "service_label": "鹰眼",
+                "operation": "ext_pnd_execute_readonly_sql",
+                "runtime_role": "executor",
+                "calls": 5,
+                "avg_duration_ms": 120,
+                "max_duration_ms": 240,
+                "last_called_at": "2026-08-05T04:20:00+00:00",
+            },
+            {
+                "identity": "(unknown)",
+                "service": "external_pnd",
+                "service_label": "鹰眼",
+                "operation": "ext_pnd_list_available_datasets",
+                "runtime_role": "gateway_proxy",
+                "calls": 2,
+                "avg_duration_ms": None,
+                "max_duration_ms": None,
+                "last_called_at": "2026-08-05T03:00:00+00:00",
+            },
+        ],
+    }
+    assert "alice.smith@example.com" not in repr(payload)
+
+
 def test_high_volume_account_does_not_hide_another_accounts_latest_result(
     tmp_path: Path,
 ) -> None:
@@ -406,6 +520,7 @@ def test_unavailable_sources_return_stable_errors_without_creating_sqlite_files(
 
     accounts = repository.accounts(limit=100)
     usage = repository.usage_today(limit=100)
+    feature_usage = repository.feature_usage_today(limit=100)
 
     assert accounts == {
         "source": {
@@ -425,6 +540,14 @@ def test_unavailable_sources_return_stable_errors_without_creating_sqlite_files(
         },
     }
     assert usage["usage"] == []
+    assert feature_usage["source"] == {
+        "ready": False,
+        "error": {
+            "code": "telemetry_source_unavailable",
+            "message": "MCP 功能调用数据源不可用",
+        },
+    }
+    assert feature_usage["usage"] == []
     assert not queue_db.exists()
     assert not binding_db.exists()
     assert not quota_db.exists()

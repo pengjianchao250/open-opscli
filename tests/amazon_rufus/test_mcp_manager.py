@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -41,7 +42,7 @@ def _rufus_data() -> dict:
     }
 
 
-def _manager(rufus_manager, remote_consent_store=None) -> RufusMcpManager:
+def _manager(rufus_manager, remote_consent_store=None, report_publisher=None) -> RufusMcpManager:
     """构造测试用 RufusMcpManager。"""
 
     class EmptyConsentStore:
@@ -51,13 +52,21 @@ def _manager(rufus_manager, remote_consent_store=None) -> RufusMcpManager:
         def save(self, *, country, allowed, source):
             return {"country": country, "status": "allowed" if allowed else "denied", "source": source}
 
+    class DummyReportPublisher:
+        def publish(self, data):
+            return SimpleNamespace(
+                path=Path("output/amazon-rufus/B0TEST1234-test.md"),
+                url="https://files.example.com/B0TEST1234-test.md",
+            )
+
     return RufusMcpManager(
         rufus_manager=rufus_manager,
         remote_consent_store=remote_consent_store or EmptyConsentStore(),
+        report_publisher=report_publisher or DummyReportPublisher(),
     )
 
 
-def test_mcp_manager_get_writes_report_and_filters_sensitive(monkeypatch, tmp_path: Path):
+def test_mcp_manager_get_publishes_report_and_filters_sensitive(monkeypatch, tmp_path: Path):
     captured = {}
 
     class DummyRufusManager:
@@ -65,8 +74,16 @@ def test_mcp_manager_get_writes_report_and_filters_sensitive(monkeypatch, tmp_pa
             captured.update(kwargs)
             return _rufus_data()
 
+    class CapturingReportPublisher:
+        def publish(self, data):
+            captured["published_data"] = data
+            return SimpleNamespace(
+                path=Path("output/amazon-rufus/B0TEST1234-test.md"),
+                url="https://files.example.com/B0TEST1234-test.md",
+            )
+
     monkeypatch.chdir(tmp_path)
-    manager = _manager(DummyRufusManager())
+    manager = _manager(DummyRufusManager(), report_publisher=CapturingReportPublisher())
 
     result = manager.get(
         RufusGetRequest(
@@ -76,22 +93,20 @@ def test_mcp_manager_get_writes_report_and_filters_sensitive(monkeypatch, tmp_pa
         )
     )
 
-    report_path = tmp_path / result["report_path"]
-    report_text = report_path.read_text(encoding="utf-8")
-
     assert captured["include_upload_payload"] is False
     assert captured["timeout_seconds"] == 180
+    assert captured["published_data"]["asin"] == "B0TEST1234"
     assert result == {
         "report_path": result["report_path"],
+        "report_url": "https://files.example.com/B0TEST1234-test.md",
         "asin": "B0TEST1234",
         "country": "US",
         "question_count": 1,
         "answer_count": 1,
-        "next_action": "已生成 Rufus 报告，请读取 report_path 查看完整答案。",
+        "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
     }
     assert result["report_path"].startswith("output/amazon-rufus/B0TEST1234-")
-    assert "适合送礼" in report_text
-    combined = json.dumps(result, ensure_ascii=False).lower() + report_text.lower()
+    combined = json.dumps(result, ensure_ascii=False).lower()
     assert "cookie" not in combined
     assert "storage_state" not in combined
     assert "seed_request" not in combined
@@ -127,9 +142,7 @@ def test_mcp_manager_get_accepts_multiple_questions(monkeypatch, tmp_path: Path)
     assert captured["question"] is None
     assert captured["questions"] == questions
     assert result["question_count"] == 2
-    report_text = (tmp_path / result["report_path"]).read_text(encoding="utf-8")
-    assert "## 第 1 题：这个商品适合送礼吗？" in report_text
-    assert "## 第 2 题：差评主要集中在哪些方面？" in report_text
+    assert result["report_url"] == "https://files.example.com/B0TEST1234-test.md"
 
 
 def test_mcp_manager_remote_consent_uses_safe_payload():
@@ -416,7 +429,17 @@ def test_mcp_manager_factory_uses_current_request_credential_dir(monkeypatch, tm
 
     class DummyTransport:
         def __init__(self, auth_client=None):
-            captured["auth_client"] = auth_client
+            captured["transport_auth_client"] = auth_client
+
+    class DummyFileUploadClient:
+        def __init__(self, auth_client=None, jwt=None, session_id=None):
+            captured["upload_auth_client"] = auth_client
+            captured["upload_jwt"] = jwt
+            captured["upload_session_id"] = session_id
+
+    class DummyReportPublisher:
+        def __init__(self, file_upload_client=None):
+            captured["file_upload_client"] = file_upload_client
 
     class DummyRufusManager:
         def __init__(self, transport_client=None):
@@ -428,16 +451,58 @@ def test_mcp_manager_factory_uses_current_request_credential_dir(monkeypatch, tm
 
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AuthClient", DummyAuthClient)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RufusTransportClient", DummyTransport)
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.FileUploadClient", DummyFileUploadClient)
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AnswerReportPublisher", DummyReportPublisher)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RufusManager", DummyRufusManager)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RemoteConsentStore", DummyConsentStore)
 
-    manager = RufusMcpManager.for_current_request(credential_dir=tmp_path)
+    manager = RufusMcpManager.for_current_request(credential_dir=tmp_path, jwt="request-jwt", session_id="request-session")
 
     assert isinstance(manager.rufus_manager, DummyRufusManager)
     assert captured["base_dir"] == tmp_path
-    assert isinstance(captured["auth_client"], DummyAuthClient)
+    assert captured["upload_jwt"] == "request-jwt"
+    assert captured["upload_session_id"] == "request-session"
+    assert captured["transport_auth_client"] is captured["upload_auth_client"]
     assert isinstance(captured["transport_client"], DummyTransport)
+    assert isinstance(captured["file_upload_client"], DummyFileUploadClient)
+    assert isinstance(manager.report_publisher, DummyReportPublisher)
     assert captured["consent_base_dir"] == tmp_path / "amazon-rufus"
+
+
+@pytest.mark.parametrize("session_id,jwt", [("user-session", "user-jwt"), ("user-session", None), (None, "user-jwt"), (None, None)])
+def test_factory_upload_request_uses_provided_credentials(monkeypatch, tmp_path, session_id, jwt):
+    """验证上传 HTTP 请求实际带当前请求的凭证，缺失时保留 API Key 分支。"""
+    import httpx
+    from opscli.mcp.context import mcp_request_ctx
+
+    class DummyAuth:
+        def __init__(self, base_dir=None):
+            assert base_dir == tmp_path
+
+        def get_token_by_session(self, sid, alias):
+            assert (sid, alias) == ("user-session", "ops")
+            return "refreshed-jwt"
+
+        def build_request_auth(self, alias):
+            raise AssertionError("禁止读取其他本地用户凭证")
+
+    def post(url, **kwargs):
+        assert kwargs["headers"]["X-MCP-API-Key"] == "request-key"
+        expected_jwt = jwt or ("refreshed-jwt" if session_id else None)
+        assert kwargs["headers"].get("Authorization") == (f"Bearer {expected_jwt}" if expected_jwt else None)
+        assert kwargs["cookies"] == ({"polarisUserToken": session_id} if session_id else {})
+        return httpx.Response(200, json={"data": {"url": "https://files.example/report.md"}})
+
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AuthClient", DummyAuth)
+    monkeypatch.setattr("opscli.shared.file_uploads.httpx.post", post)
+    monkeypatch.chdir(tmp_path)
+    token = mcp_request_ctx.set({"api_key": "request-key"})
+    try:
+        manager = RufusMcpManager.for_current_request(credential_dir=tmp_path, jwt=jwt, session_id=session_id)
+        report = manager.report_publisher.publish({"asin": "B0TEST1234", "answers": []})
+        assert report.url == "https://files.example/report.md"
+    finally:
+        mcp_request_ctx.reset(token)
 
 
 def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
@@ -449,7 +514,17 @@ def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
 
     class DummyTransport:
         def __init__(self, auth_client=None):
-            captured["auth_client"] = auth_client
+            captured["transport_auth_client"] = auth_client
+
+    class DummyFileUploadClient:
+        def __init__(self, auth_client=None, jwt=None, session_id=None):
+            captured["upload_auth_client"] = auth_client
+            captured["upload_jwt"] = jwt
+            captured["upload_session_id"] = session_id
+
+    class DummyReportPublisher:
+        def __init__(self, file_upload_client=None):
+            captured["file_upload_client"] = file_upload_client
 
     class DummyRufusManager:
         def __init__(self, transport_client=None):
@@ -461,6 +536,8 @@ def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
 
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AuthClient", DummyAuthClient)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RufusTransportClient", DummyTransport)
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.FileUploadClient", DummyFileUploadClient)
+    monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.AnswerReportPublisher", DummyReportPublisher)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RufusManager", DummyRufusManager)
     monkeypatch.setattr("opscli.amazon_rufus.services.mcp_manager.RemoteConsentStore", DummyConsentStore)
 
@@ -468,4 +545,9 @@ def test_mcp_manager_factory_keeps_default_credentials_for_stdio(monkeypatch):
 
     assert isinstance(manager.rufus_manager, DummyRufusManager)
     assert captured["base_dir"] == "default"
+    assert captured["upload_jwt"] is None
+    assert captured["upload_session_id"] is None
+    assert captured["transport_auth_client"] is captured["upload_auth_client"]
+    assert isinstance(captured["file_upload_client"], DummyFileUploadClient)
+    assert isinstance(manager.report_publisher, DummyReportPublisher)
     assert captured["consent_base_dir"] == "default"

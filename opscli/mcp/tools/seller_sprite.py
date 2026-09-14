@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from asyncio import sleep as _status_wait_sleep
 from dataclasses import replace
 from pathlib import Path
@@ -189,6 +190,35 @@ def _sanitize_status(status: dict[str, Any]) -> dict[str, Any]:
     ):
         normalized.pop(key, None)
     return normalized
+
+
+def _load_formatted_json_export(status: dict[str, Any]) -> dict[str, Any] | None:
+    """读取任务已生成的 JSON v2 工作簿，不向调用方暴露本地路径。"""
+    export = status.get("export")
+    if not isinstance(export, dict):
+        return None
+    export_format = str(export.get("format") or "").strip().lower()
+    filename = str(export.get("filename") or "").strip().lower()
+    if export_format != "json" and not filename.endswith(".json"):
+        return None
+
+    path_value = export.get("path")
+    if not isinstance(path_value, str) or not path_value.strip():
+        raise ValueError("卖家精灵 JSON 导出缺少格式化结果文件")
+    path = Path(path_value)
+    if not path.is_file():
+        raise ValueError("卖家精灵 JSON 格式化结果文件不存在")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("卖家精灵 JSON 格式化结果文件无效") from exc
+    if (
+        not isinstance(payload, dict)
+        or not isinstance(payload.get("columns"), list)
+        or not isinstance(payload.get("rows"), list)
+    ):
+        raise ValueError("卖家精灵 JSON 格式化结果合同无效")
+    return payload
 
 
 def _build_request(
@@ -1479,6 +1509,9 @@ async def seller_sprite_export(job_id: str) -> dict:
         if not export:
             raise ValueError(f"任务无导出文件：{job_id}")
         export_payload = build_export_payload_with_fallback(status)
+        formatted_json = _load_formatted_json_export(status)
+        if formatted_json is not None:
+            export_payload["json_data"] = formatted_json
         return _ok(
             _sanitize_export(
                 export_payload,

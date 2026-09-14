@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 
 from opscli.api_credentials.config import ApiCredentialMySqlSettings
-from opscli.api_credentials.models import ACCOUNT_STATUSES
+from opscli.api_credentials.models import ACCOUNT_STATUSES, SUPPORTED_PROVIDERS
 from opscli.api_credentials.repository import (
     ApiCredentialSchemaError,
     MySqlApiCredentialRepository,
@@ -106,6 +106,12 @@ def test_schema_models_provider_accounts_credentials_runtime_and_audit():
     assert "UNIQUE KEY uq_api_provider_account (provider, account_name)" in sql
     assert "secret_value TEXT NOT NULL" in sql
     assert "secret_ciphertext" not in sql
+
+
+def test_provider_whitelist_accepts_xydc_trial_and_future_openapi_channels():
+    assert "xydc_mcp" in SUPPORTED_PROVIDERS
+    assert "xydc_openapi" in SUPPORTED_PROVIDERS
+    assert "keepa" in SUPPORTED_PROVIDERS
 
 
 def test_list_accounts_reads_multiple_plaintext_accounts_but_public_output_is_masked():

@@ -6,10 +6,8 @@ from starlette.testclient import TestClient
 
 
 def _authenticate(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "opscli.mcp.tools.helpers._get_authenticated_user_email",
-        lambda: "user@example.com",
-    )
+    monkeypatch.setenv("LOCAL_AUTH_FALLBACK_ENABLED", "true")
+    monkeypatch.setenv("OPSCLI_LOCAL_AUTH_EMAIL", "user@example.com")
 
 
 def test_seller_sprite_submit_requires_authenticated_user(monkeypatch):
@@ -154,27 +152,60 @@ def test_seller_sprite_json_status_hides_download_link(monkeypatch):
     assert "export" not in response.json()["data"]
 
 
-def test_seller_sprite_json_result_returns_inline_business_data(monkeypatch):
+def test_seller_sprite_json_result_returns_formatted_workbook(monkeypatch):
     from opscli.api import create_api_app
     from opscli.api import seller_sprite as api_module
 
     _authenticate(monkeypatch)
-    captured = {}
+    tools = []
+    formatted_workbook = {
+        "schema_version": "2.0",
+        "sheet_name": "Competitor-US-Last-30-days",
+        "row_count": 1,
+        "columns": ["ASIN", "品牌", "月销量", "价格($)"],
+        "number_formats": [None, None, "#,##0", "#,##0.00"],
+        "rows": [["B0TEST1234", "Demo", 1200, 29.99]],
+        "additional_sheets": [],
+        "warnings": [],
+    }
 
     async def fake_proxy(fn, **kwargs):
-        captured["tool"] = fn.__name__
-        captured["kwargs"] = kwargs
+        tools.append((fn.__name__, kwargs))
+        if fn.__name__ == "seller_sprite_export":
+            return {
+                "success": True,
+                "data": {
+                    "format": "json",
+                    "json_data": formatted_workbook,
+                },
+                "error": None,
+            }
         return {
             "success": True,
             "data": {
                 "job_id": "job-json",
-                "scenario": "keyword-reverse",
+                "scenario": "competitor-lookup",
                 "site": "US",
                 "period": "30d",
                 "state": "succeeded",
                 "stage": "finished",
                 "row_count": 1,
-                "data": [{"keyword": "charger"}],
+                "data": [{
+                    "guestId": None,
+                    "pages": 0,
+                    "page": 0,
+                    "size": None,
+                    "total": 0,
+                    "took": 0,
+                    "url": None,
+                    "order": {"field": "", "desc": True},
+                    "items": None,
+                    "terminal": None,
+                    "asin": "B0TEST1234",
+                    "brand": "Demo",
+                    "totalUnits": 1200,
+                    "price": 29.99,
+                }],
                 "warnings": [],
                 "export": {
                     "format": "json",
@@ -194,21 +225,21 @@ def test_seller_sprite_json_result_returns_inline_business_data(monkeypatch):
         "success": True,
         "data": {
             "job_id": "job-json",
-            "scenario": "keyword-reverse",
+            "scenario": "competitor-lookup",
             "site": "US",
             "period": "30d",
             "state": "succeeded",
             "stage": "finished",
             "ready": None,
             "row_count": 1,
-            "result": [{"keyword": "charger"}],
+            "result": formatted_workbook,
         },
         "error": None,
     }
-    assert captured == {
-        "tool": "seller_sprite_job_status",
-        "kwargs": {"job_id": "job-json", "wait_seconds": 30},
-    }
+    assert tools == [
+        ("seller_sprite_job_status", {"job_id": "job-json", "wait_seconds": 30}),
+        ("seller_sprite_export", {"job_id": "job-json"}),
+    ]
 
 
 def test_seller_sprite_json_result_returns_202_while_running(monkeypatch):
@@ -266,9 +297,20 @@ def test_seller_sprite_json_export_route_returns_inline_result(monkeypatch):
 
     _authenticate(monkeypatch)
     tools = []
+    workbook = {
+        "schema_version": "2.0",
+        "columns": ["关键词"],
+        "rows": [["charger"]],
+    }
 
     async def fake_proxy(fn, **_kwargs):
         tools.append(fn.__name__)
+        if fn.__name__ == "seller_sprite_export":
+            return {
+                "success": True,
+                "data": {"format": "json", "json_data": workbook},
+                "error": None,
+            }
         return {
             "success": True,
             "data": {
@@ -290,9 +332,9 @@ def test_seller_sprite_json_export_route_returns_inline_result(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["data"]["result"] == [{"keyword": "charger"}]
+    assert response.json()["data"]["result"] == workbook
     assert "url" not in str(response.json())
-    assert tools == ["seller_sprite_job_status"]
+    assert tools == ["seller_sprite_job_status", "seller_sprite_export"]
 
 
 def test_seller_sprite_xlsx_export_keeps_download_contract(monkeypatch):
@@ -448,8 +490,19 @@ def test_seller_sprite_listing_analysis_json_result_is_inline(monkeypatch):
     from opscli.api import seller_sprite as api_module
 
     _authenticate(monkeypatch)
+    workbook = {
+        "schema_version": "2.0",
+        "columns": ["ASIN", "评分"],
+        "rows": [["B012345678", 88]],
+    }
 
-    async def fake_proxy(_fn, **_kwargs):
+    async def fake_proxy(fn, **_kwargs):
+        if fn.__name__ == "seller_sprite_export":
+            return {
+                "success": True,
+                "data": {"format": "json", "json_data": workbook},
+                "error": None,
+            }
         return {
             "success": True,
             "data": {
@@ -472,17 +525,13 @@ def test_seller_sprite_listing_analysis_json_result_is_inline(monkeypatch):
     )
 
     assert response.status_code == 200
-    assert response.json()["data"]["result"] == [
-        {"asin": "B012345678", "score": 88}
-    ]
+    assert response.json()["data"]["result"] == workbook
     assert "url" not in str(response.json())
 
 
 def test_seller_sprite_route_is_behind_shared_api_key_middleware(monkeypatch):
     from opscli.api import seller_sprite as api_module
     from opscli.mcp.server import _build_dual_endpoint_app
-
-    _authenticate(monkeypatch)
 
     async def fake_proxy(fn, **kwargs):
         assert fn.__name__ == "seller_sprite_scenarios"
@@ -496,7 +545,10 @@ def test_seller_sprite_route_is_behind_shared_api_key_middleware(monkeypatch):
         unauthorized = client.get("/api/v1/seller-sprite/scenarios")
         authorized = client.get(
             "/api/v1/seller-sprite/scenarios",
-            headers={"Authorization": "Bearer test-api-key"},
+            headers={
+                "X-Ops-Token": "apphub-token",
+                "X-User-Email": "user@example.com",
+            },
         )
 
     assert unauthorized.status_code == 401

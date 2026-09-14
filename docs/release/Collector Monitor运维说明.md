@@ -116,6 +116,7 @@ Monitor 应以 SQLite URI `mode=ro` 并启用 `PRAGMA query_only=ON`。业务库
 | `OPSCLI_SELLER_SPRITE_QUEUE_DB_PATH` | `~/.config/opscli/seller_sprite/task_queue.sqlite3` | 两个服务配置同一绝对路径 | SellerSprite 写端与 Monitor 读端共享的主路径合同 |
 | SellerSprite 账号绑定库 | `~/.config/opscli/seller_sprite/account_bindings.sqlite3` | 与绑定服务共享只读挂载 | 沿用绑定模块默认路径，没有 Monitor 专用覆盖变量 |
 | `OPSCLI_MCP_QUOTA_SQLITE_PATH` | `~/.config/opscli/mcp_quota/quota.sqlite3` | 与 Collector MCP 配置同一绝对路径 | Monitor 继承现有 quota 路径，不另建配置 |
+| `OPSCLI_COLLECTION_MYSQL_HOST/PORT/DATABASE/USER/PASSWORD/SSL_CA` | 空 | 使用只读账号 | 功能调用区复用统一采集 MySQL；读取 `mcp_call_events`，不创建或迁移表 |
 | `OPSCLI_COLLECTOR_MONITOR_QUEUE_DB_PATH` | 同 SellerSprite 主路径 | 建议省略 | 兼容变量；同时显式配置且不一致时 Monitor 拒绝启动 |
 | `OPSCLI_COLLECTOR_MONITOR_STATE_DB_PATH` | `~/.config/opscli/collector_monitor/state.sqlite3` | 独立持久卷 | 不得通过路径、符号链接或硬链接指向业务库 |
 | `OPSCLI_COLLECTOR_MONITOR_URL` | `http://127.0.0.1:8767` | HTTPS 或回环 URL | Monitor 基址；加载时去除尾部 `/`，不得包含凭证 |
@@ -388,6 +389,7 @@ opscli collector-monitor probe --target queue-source
 | `GET` | `/api/v1/incidents?status=<值>&rule=<值>&limit=<1..500>` | 事故列表；过滤均可选，默认 100 条 |
 | `GET` | `/api/v1/accounts?limit=<1..500>` | SellerSprite 执行账号健康、掩码绑定用户、活跃占用与最近结果 |
 | `GET` | `/api/v1/usage/today?limit=<1..500>` | 北京时间当日已落入 `mcp_quota_daily` 的计费执行摘要 |
+| `GET` | `/api/v1/usage/tools/today?limit=<1..500>` | 北京时间当日统一 MCP 功能调用摘要，按用户、服务、Tool 和运行角色分组 |
 | `POST` | `/api/v1/probes/collector` | 同步手动探测固定 Collector MCP，最多 5 秒；可选一次性 `{"api_key":"..."}` |
 | `POST` | `/api/v1/probes/queue-source` | 同步只读探测固定 SellerSprite 队列源，最多 5 秒 |
 | `GET` | `/api/v1/commands/scenario-test` | 返回固定关键词反查场景、开关和默认参数，不返回 Key |
@@ -410,6 +412,8 @@ curl --fail --silent --show-error http://127.0.0.1:8767/api/v1/status
 任务过滤允许 `health` 六种健康值、`status=queued|running|succeeded|failed`、`task_kind=generic|listing_analysis`；事故过滤允许 `status=active|resolved` 与四种 `rule`。两个列表的 `limit` 默认为 100、最大 500，但 API 只过滤轮询缓存：当前快照最多 1000 条任务和最近 500 条事故。
 
 账号页的 `calls` 是成功且最终消耗额度的调用，`failures` 是业务失败后已经退回额度的执行，`total` 为两者之和，`remaining = daily_limit - calls`。这不是所有请求统计：配额检查直接拒绝、认证层拒绝、没有进入业务执行的请求，以及走专属账号无限额模式的用户都不会出现在今日表中。排查入口流量时必须结合网关/Collector 日志，不能用今日表反推总请求数。
+
+“今日 MCP 功能调用”读取统一 MySQL 的 `mcp_call_events`，包括 `executor` 和 `gateway_proxy`，但按角色分行而不合计，避免中央代理和实际执行重复计算。`external_pnd` 显示为“鹰眼”；公共遥测的 `status` 固定为 `called`，因此该区域只能回答调用次数和耗时，不能作为成功率或计费依据。Monitor 应使用仅具备 `mcp_call_events` 查询权限的数据库账号；未配置、表不存在或查询失败时仅返回 `telemetry_source_unavailable`。
 
 账号、队列和 quota 三个业务 SQLite 都由 Monitor 以只读 URI 打开并启用 `query_only`；Monitor 不创建、不迁移这些库。缺库或 schema 不匹配时账号 Tab 显示固定低敏错误，不会创建空文件。事故去重使用的 `collector_monitor/state.sqlite3` 是 Monitor 私有状态，不得与任一业务库指向同一物理文件。
 

@@ -55,6 +55,7 @@ def build_service(settings: MonitorSettings) -> CollectorMonitorService:
             queue_db_path=settings.queue_db_path,
             binding_db_path=binding_db_path,
             quota_db_path=quota_db_path,
+            telemetry_mysql=settings.telemetry_mysql,
         ),
     )
 

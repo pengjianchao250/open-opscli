@@ -205,6 +205,9 @@ def _get_authenticated_user_email() -> str | None:
 
     auth_mode = get_current_auth_mode()
     api_key = get_current_api_key()
+    if auth_mode == "internal" or str(auth_mode or "").startswith("apphub_"):
+        verified_email = str(get_current_user_email() or "").strip().lower()
+        return verified_email or None
     if auth_mode == "remote":
         # 只有远程校验模式注入的 transport 邮箱可视为已验证身份。
         verified_email = str(get_current_user_email() or "").strip().lower()
@@ -334,19 +337,24 @@ def _get_auth_pair(
     return session_id, jwt
 
 
-def _query_manager(jwt: str | None = None, session_id: str | None = None) -> Any:
+def _query_manager(
+    jwt: str | None = None,
+    session_id: str | None = None,
+    timeout: float | None = None,
+) -> Any:
     """创建 QueryManager 实例，支持外部传入认证凭证。
 
     Args:
         jwt:        可选，已有 JWT Token
         session_id: 可选，OAuth 授权后的 Session ID
+        timeout:    可选，查询执行接口的 HTTP 超时秒数（REST API 按请求传入）
 
     Returns:
         QueryManager 实例
     """
     from opscli.query.services.manager import QueryManager
 
-    return QueryManager(auth_client=_auth_client(), jwt=jwt, session_id=session_id)
+    return QueryManager(auth_client=_auth_client(), jwt=jwt, session_id=session_id, timeout=timeout)
 
 
 def _registry() -> Any:

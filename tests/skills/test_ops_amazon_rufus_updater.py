@@ -1,3 +1,5 @@
+"""Rufus 题库升级与 Skill 文档契约测试。"""
+
 import json
 from pathlib import Path
 
@@ -251,7 +253,7 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
     assert "timeout_seconds=180" in docs
     assert "外层请求上限" in docs
     assert "RUFUS_HEADLESS_CAPTURE_ERROR" in docs
-    assert "amazon_rufus_logout -> amazon_rufus_watch_login -> amazon_rufus_get" in docs
+    assert "仅在来源要求预清理时调用 `amazon_rufus_logout(country)`" in docs
     assert "#nav-tools" in docs
     assert "sso-state-main" in docs
     assert "at-main" in docs
@@ -262,7 +264,7 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
     assert "OPS 平台 Cookie 接口 content" in docs
     assert "旧 `browser-state-<COUNTRY>.bin`" in docs
     assert "browser-state-<COUNTRY>.json` 和 `.browser-state-key` 不再作为默认读写源" in docs
-    assert "保存完成后，重新按原问题来源调用 `amazon_rufus_get`" in docs
+    assert "仅在 `can_get_backend=true` 时返回来源流程继续获取或重试" in docs
     assert "发起 Rufus 获取前" in docs
     assert "can_get_backend" in docs
     assert "没有可用亚马逊 Rufus 登录态" in docs
@@ -272,7 +274,7 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
     assert "必需 MCP Tool 不可用" in docs
     assert "用户拒绝保存并复用该站点亚马逊 Rufus 登录态" in docs
     assert "状态为 `denied` 时进入 CLI fallback" in docs
-    assert "拒绝远程授权" in docs
+    assert "remote_consent_denied" in docs
     assert "opscli amazon-rufus login-status" in docs
     assert "opscli amazon-rufus watch-login" in docs
     assert "opscli amazon-rufus get-backend" in docs
@@ -317,8 +319,8 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
         assert forbidden not in docs
 
 
-def test_ops_amazon_rufus_docs_require_fresh_report_path():
-    """约束 Agent 只读取本次 Rufus 获取返回的最新报告路径。"""
+def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
+    """约束 Agent 成对使用本次 Rufus 获取返回的报告路径和 URL。"""
     skill_dirs = [
         Path("opscli/skills/templates/ops-amazon-rufus"),
         Path(".agents/skills/ops-amazon-rufus"),
@@ -328,12 +330,58 @@ def test_ops_amazon_rufus_docs_require_fresh_report_path():
         skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
         readme_text = (skill_dir / "README.md").read_text(encoding="utf-8")
         workflow_text = (skill_dir / "references" / "rufus-mcp-workflow.md").read_text(encoding="utf-8")
+        formatting_text = (skill_dir / "references" / "rufus-report-formatting.md").read_text(encoding="utf-8")
 
-        assert "本次工具返回的 `report_path`" in skill_text
-        assert "不得返回历史 ASIN 报告" in readme_text
+        assert "`report_path` 和 `report_url`" in skill_text
+        assert "`report_path` 和 `report_url` 成对替换旧值" in skill_text
+        assert "Rufus 报告：<report_url>" in skill_text
+        assert "`report_path` 和 `report_url` 是不可拆分的一对" in readme_text
+        assert "不得返回历史 ASIN 报告或历史 URL" in readme_text
         assert "报告新鲜度约束" in workflow_text
         assert "禁止仅凭 ASIN" in workflow_text
-        assert "本次 `report_path`" in workflow_text
+        assert "`report_path` 和 `report_url` 成对替换旧值" in workflow_text
+        assert "不得使用历史 `report_path`、历史 `report_url`" in workflow_text
+        assert "Rufus 报告：<report_url>" in workflow_text
+        assert "<ASIN>-<YYYYMMDD-HHMMSS>-<UUID>.md" in formatting_text
+
+        docs = "\n".join([skill_text, readme_text, workflow_text])
+        assert "`--no-upload-payload` 只关闭旧 Rufus `upload_payload`" in docs
+        assert "不关闭 Markdown 报告上传" in docs
+
+
+def test_ops_amazon_rufus_template_matches_installed_copy():
+    """模板契约和仓库安装副本必须完全一致。"""
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus")
+    installed_dir = Path(".agents/skills/ops-amazon-rufus")
+
+    for relative_path in [
+        Path("SKILL.md"),
+        Path("README.md"),
+        Path("references/rufus-mcp-workflow.md"),
+        Path("references/rufus-report-formatting.md"),
+    ]:
+        assert (template_dir / relative_path).read_bytes() == (installed_dir / relative_path).read_bytes()
+
+    # 登录操作只在 reference 中定义，入口文档通过链接复用，避免再次复制流程。
+    workflow_path = Path("references/rufus-mcp-workflow.md")
+    workflow_text = (template_dir / workflow_path).read_text(encoding="utf-8")
+    login_section = workflow_text.split("## 登录采集入口\n", 1)[1].split("\n## ", 1)[0]
+    command_markers = (
+        "amazon_rufus_watch_login(",
+        "amazon_rufus_logout(",
+        "opscli amazon-rufus watch-login ",
+    )
+    for marker in command_markers:
+        assert marker in login_section
+        for path in template_dir.rglob("*.md"):
+            text = path.read_text(encoding="utf-8")
+            if path == template_dir / workflow_path:
+                text = text.replace(login_section, "")
+            assert marker not in text, path
+
+    for name in ("SKILL.md", "README.md"):
+        text = (template_dir / name).read_text(encoding="utf-8")
+        assert f"]({workflow_path.as_posix()}#登录采集入口)" in text
 
 
 def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():

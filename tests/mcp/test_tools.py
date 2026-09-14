@@ -49,6 +49,7 @@ def test_mcp_exposes_expected_tools():
     assert "prefetch_schedule_delete" in names
     assert "prefetch_schedule_run_now" in names
     assert "prefetch_schedule_runs" in names
+    assert "ops_amazon_reviews" in names
     assert "mcp_user_list" not in names
 
 
