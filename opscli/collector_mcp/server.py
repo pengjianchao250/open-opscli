@@ -85,7 +85,7 @@ def run() -> None:
         service_name="opscli-collector-mcp",
         catalog=catalog.get_catalog(),
         api_key_filename="collector_mcp_api_key",
-        internal_api_key_file_env="OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE",
+        trust_upstream_apphub_identity=True,
     )
 
 

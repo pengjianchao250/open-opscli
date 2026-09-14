@@ -1,6 +1,6 @@
 # opscli API 使用文档
 
-> 版本：v1.1（2026-09-08）｜适用：`aukeys-opscli >= 0.0.129`
+> 版本：v1.2（2026-09-14）｜适用：`aukeys-opscli >= 0.0.129`
 > 本文面向**通过 HTTP 调用 opscli 服务端**的使用者。调用纪律与部署约束见 [API调用规范](../spec/API调用规范.md)；进程内 Python 调用见 [SDK使用文档](SDK使用文档.md)。
 
 ---
@@ -56,7 +56,7 @@ REST 业务请求使用以下任一方式：
 - viewer：`X-Ops-Token` + `X-User-Email`，可选 `X-User-Id` / `X-User-Name`；
 - 本地开发：显式设置 `LOCAL_AUTH_FALLBACK_ENABLED=true`，生产必须关闭。
 
-SellerSprite 还要求通用网关和 Collector 配置同一个 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。该内部 Key 不得发送给浏览器。
+SellerSprite 不需要额外配置 Collector Gateway Key。Collector 必须部署在受限网络中，仅允许通用 opscli MCP 访问；浏览器和公网不得直连 Collector。
 
 ---
 

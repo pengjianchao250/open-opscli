@@ -1,6 +1,6 @@
 # API 调用规范
 
-> 版本：v1.1（2026-09-08）
+> 版本：v1.2（2026-09-14）
 > 适用范围：所有通过 HTTP 调用 opscli 服务端 REST API（`/api/v1/*`）的网站前端、业务系统与脚本；以及部署、扩展该服务的开发者。
 > 配套文档：[API使用文档](OPSCLI_API使用文档.md)（端点逐个参考与示例）、[SDK调用规范](OPSCLI_SDK调用规范.md)（进程内 SDK 调用约束）。
 
@@ -53,7 +53,7 @@ opscli 服务端以 `opscli-mcp` 为唯一对外 HTTP 入口：REST API 与 MCP 
 
 `/mcp`、`/sse` 保持既有 API Key 鉴权和远程校验行为，支持 Bearer、`?api_key=` 与 MCP Inspector 代理 Header。该凭证仅供 MCP 客户端使用，不得复用于 `/api/v1/*` 浏览器 REST 请求。
 
-SellerSprite REST 由通用服务代理到 Collector。网关和 Collector 使用同一受限文件 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 建立内部服务身份，浏览器不得读取或传递此 Key；最终用户身份和任务级 Session/JWT 由已验证网关请求转发。
+SellerSprite REST 由通用服务代理到 Collector。Collector 显式信任通用服务转发的已验证用户身份和任务级 Session/JWT，不再使用单独的 Gateway Key。该信任仅在 Collector 网络入口只允许通用 opscli MCP 访问时成立；浏览器、普通 MCP 客户端和公网不得直连 Collector。
 
 ### 2.3 鉴权失败语义
 
@@ -61,7 +61,7 @@ SellerSprite REST 由通用服务代理到 Collector。网关和 Collector 使�
 | ---- | ---- |
 | AppHub Session 缺失、无效或已过期 | `401` 统一信封 `authentication_required` |
 | viewer 缺 Token 或用户邮箱 | `401` 统一信封 `authentication_required` |
-| SellerSprite Collector 内部凭证缺失/错误 | `503`，`COLLECTOR_MCP_CONFIG_MISSING` / `COLLECTOR_MCP_CONFIG_INVALID` |
+| SellerSprite Collector 地址未配置或服务不可达 | `503`，`COLLECTOR_MCP_CONFIG_MISSING` / `COLLECTOR_MCP_UNAVAILABLE` |
 | MCP API Key 缺失/无效（仅 `/mcp`、`/sse`） | `401` 中间件裸响应，reason=`invalid_api_key` |
 
 **A-3 重试纪律**：REST `401` 先刷新 AppHub 登录态，不自动重放业务请求；`503` 按指示退避；`502` 仅在业务幂等时重试；`422/400` 修改请求后才重试。MCP Key 远程校验缓存策略只影响 `/mcp`、`/sse`。
@@ -138,9 +138,9 @@ SellerSprite REST 由通用服务代理到 Collector。网关和 Collector 使�
 
 ## 5. 安全规范（A-Security）
 
-1. **凭证保管**：REST Token、Session、Cookie 与 Collector 内部 Key 都不得进入日志、业务请求体或前端打包产物；MCP API Key 继续按既有密钥规范保管。
+1. **凭证保管**：REST Token、Session 与 Cookie 不得进入日志、业务请求体或前端打包产物；MCP API Key 继续按既有密钥规范保管。
 2. **传输安全**：生产部署必须在 HTTPS 反向代理之后；浏览器 Cookie 应由 AppHub 域策略控制。
-3. **内部 Key**：`OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 必须指向权限受限文件，通用网关和 Collector 读取同一内容，不得配置成前端环境变量。
+3. **Collector 网络隔离**：Collector 的 MCP 端口只能由通用 opscli MCP 访问，禁止浏览器、普通客户端或公网直连；网络策略是可信上游身份头的安全边界。
 4. **CORS**：服务端仅放行本地原型来源；生产前端必须同域或经部署层代理，**不得**依赖放宽 CORS。
 5. **身份来源**：viewer Header 只能由受信 AppHub 宿主或同等网关注入；对公网不得允许任意客户端自报 `X-User-*`。
 6. **最小部署**：`--host 0.0.0.0` 仅应在容器/内网使用；公网必须经 AppHub/受信网关，并关闭 local fallback。
@@ -156,7 +156,7 @@ SellerSprite REST 由通用服务代理到 Collector。网关和 Collector 使�
 opscli-mcp --transport both --host 0.0.0.0 --port 8765
 ```
 
-`--auth-verify-url` 仅控制 `/mcp`、`/sse` 的 MCP Key 远程校验。SellerSprite REST 还要求通用网关和 Collector 都配置 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。
+`--auth-verify-url` 仅控制 `/mcp`、`/sse` 的 MCP Key 远程校验。SellerSprite REST 不需要额外 Gateway Key，但部署必须通过防火墙、安全组、容器网络或反向代理访问控制，确保 Collector 只接受通用 opscli MCP 的连接。
 
 ### 6.2 变更纪律
 

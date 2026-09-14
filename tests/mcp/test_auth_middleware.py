@@ -82,7 +82,7 @@ def test_remote_middleware_injects_auth_mode_into_scope_and_context(monkeypatch)
     }
 
 
-def test_internal_gateway_key_injects_trusted_apphub_identity():
+def test_trusted_upstream_injects_apphub_identity_without_gateway_key():
     captured = {}
 
     async def app(scope, receive, send):
@@ -95,14 +95,13 @@ def test_internal_gateway_key_injects_trusted_apphub_identity():
     middleware = ApiKeyAuthMiddleware(
         app,
         api_key="regular-mcp-key",
-        internal_api_key="collector-gateway-key",
+        trust_upstream_apphub_identity=True,
     )
     scope = {
         "type": "http",
         "path": "/mcp",
         "query_string": b"",
         "headers": [
-            (b"x-collector-gateway-key", b"collector-gateway-key"),
             (b"x-apphub-user-email", b"User@Example.com"),
         ],
     }
@@ -114,6 +113,29 @@ def test_internal_gateway_key_injects_trusted_apphub_identity():
         "context_mode": "internal",
         "email": "user@example.com",
     }
+
+
+def test_apphub_identity_headers_do_not_bypass_auth_by_default():
+    sent = []
+
+    async def app(scope, receive, send):
+        raise AssertionError("普通 MCP 不应无条件信任 AppHub 身份头")
+
+    async def capture_send(message):
+        sent.append(message)
+
+    middleware = ApiKeyAuthMiddleware(app, api_key="regular-mcp-key")
+    scope = {
+        "type": "http",
+        "path": "/mcp",
+        "query_string": b"",
+        "headers": [(b"x-apphub-user-email", b"user@example.com")],
+    }
+
+    _run(middleware(scope, None, capture_send))
+
+    assert sent[0]["status"] == 401
+    assert b'"reason":"invalid_api_key"' in sent[1]["body"]
 
 
 def test_path_scoped_middleware_leaves_rest_outside_mcp_key_boundary():

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import logging
 import os
-import secrets
 import time
 import urllib.parse
 from datetime import datetime, timezone
@@ -104,7 +103,7 @@ class ApiKeyAuthMiddleware:
         api_key: str | None = None,
         auth_verify_url: str | None = None,
         protected_path_prefixes: tuple[str, ...] | None = None,
-        internal_api_key: str | None = None,
+        trust_upstream_apphub_identity: bool = False,
     ):
         """
         Args:
@@ -112,12 +111,15 @@ class ApiKeyAuthMiddleware:
             api_key: 固定 API Key（单用户模式，向后兼容）
             auth_verify_url: OPS 后端校验地址（多用户模式），
                              如 https://ops.example.com/v1/mcp/verify-key
+            protected_path_prefixes: 仅对指定路径前缀执行鉴权
+            trust_upstream_apphub_identity: 信任上游注入的 AppHub 身份头；
+                                            仅限网络入口受控的内部服务启用
         """
         self.app = app
         self._api_key = api_key
         self._auth_verify_url = auth_verify_url
         self._protected_path_prefixes = protected_path_prefixes
-        self._internal_api_key = internal_api_key
+        self._trust_upstream_apphub_identity = trust_upstream_apphub_identity
         # 缓存结构：api_key -> (last_verified_ts, user_data)
         # last_verified_ts 为最近一次远程校验成功的时间戳，用于计算新鲜期与宽限期。
         self._verify_cache: dict[str, tuple[float, dict]] = {}
@@ -145,10 +147,7 @@ class ApiKeyAuthMiddleware:
         return any(path.startswith(prefix) for prefix in self._protected_path_prefixes)
 
     def _internal_identity(self, scope: Scope) -> dict[str, str | None] | None:
-        if not self._internal_api_key:
-            return None
-        supplied = self._header(scope, b"x-collector-gateway-key")
-        if not supplied or not secrets.compare_digest(supplied, self._internal_api_key):
+        if not self._trust_upstream_apphub_identity:
             return None
         email = self._header(scope, b"x-apphub-user-email")
         if not email:

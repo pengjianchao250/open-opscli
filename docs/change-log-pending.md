@@ -1,3 +1,17 @@
+## 2026-09-14 SellerSprite - 移除 Collector Gateway Key
+
+**变更原因**：Collector MCP 已通过部署网络限制为仅允许通用 opscli MCP 访问，额外的 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE` 与现有信任边界重复，并会在服务器未配置凭证文件时阻断 SellerSprite REST 请求。
+
+**改动点**：通用 MCP 代理不再读取或发送 `X-Collector-Gateway-Key`；Collector MCP 显式启用可信上游 AppHub 身份模式，直接接收通用 MCP 转发的 `X-AppHub-User-*` 身份和任务级 Session/JWT；普通 MCP 默认不信任这些身份头，原 API Key 鉴权保持不变；同步移除环境变量和部署文档要求。
+
+**验证结果**：MCP 鉴权、SellerSprite 工具/代理和服务生命周期回归 `130 passed`；完整 API 与 Collector 回归 `79 passed`；App 建站 Skill 版本、安装和文档镜像回归 `3 passed`；Python `compileall` 与 `git diff --check` 通过。扩展收集整个 `tests/mcp` 时被分支既有的 Shopify `_shopify_manager` 导入错误阻断；完整 App 建站 Skill 回归另有分支既有的后端 `AGENTS.md` 模板断言失败，均不在本次修改文件中。
+
+**影响范围**：SellerSprite REST 到 Collector MCP 的内部调用链。部署必须保证 Collector MCP 端口仅通用 opscli MCP 可访问，禁止浏览器、普通客户端或公网直连。
+
+**回滚方式**：恢复内部 Gateway Key 文件加载、代理 Header 和 Collector Key 校验，并重新配置 `OPSCLI_COLLECTOR_GATEWAY_API_KEY_FILE`。
+
+---
+
 ## 2026-09-14 Git - 合并远端 release 并解决变更日志冲突
 
 **变更原因**：`feature/sellersprite` 需要同步最新 `origin/release` 的 AppHub MCP REST 环境变量与数据合同改动，同时保留功能分支刚完成的 Keepa MySQL 凭据池迁移。
