@@ -318,7 +318,6 @@ def test_keepa_api_mode_is_scoped_to_shared_tool_call(monkeypatch):
         return {"success": True, "data": {"request_source": "api"}, "error": None}
 
     monkeypatch.setattr(keepa_module, "keepa_run", fake_keepa_run)
-    monkeypatch.setattr(keepa_router, "_trace_keepa_api", lambda message: None)
     monkeypatch.setattr(
         "opscli.mcp.instrumentation.quota_wrap",
         lambda fn, **kwargs: fn,

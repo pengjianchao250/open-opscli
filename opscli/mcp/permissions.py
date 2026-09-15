@@ -8,12 +8,14 @@
 config('opscli.tool_permission_enabled')）。显式为 False 时表示后端未开启管控，
 本端直接全量放行；字段缺失（旧后端，None）时维持按 allowed_tools 过滤的原有行为。
 
-三种运行模式的权限来源（自动探测，无需启动参数）：
+运行模式的权限来源（自动探测，无需启动参数）：
 1. HTTP/SSE 远程校验模式：ApiKeyAuthMiddleware 调用 /v1/mcp/verify-key 时
    后端已返回 allowed_tools / permission_enabled，随用户信息注入请求上下文（contextvar/scope）
 2. HTTP/SSE 固定 API Key 模式 / 旧后端：上下文中 allowed_tools 为 None
    → 全量放行（保持向后兼容，不破坏单用户部署）
-3. stdio 本地模式：无 API Key，读取本地 CredentialStore 的 session_id，
+3. 可信 AppHub/internal 模式：使用认证中间件注入的请求权限，不读取服务器本地登录态。
+   权限策略缺失时仅开放基础安全工具，不沿用固定 Key/旧后端的兼容放行。
+4. stdio 本地模式：既无 API Key 也无可信请求身份，读取本地 CredentialStore 的 session_id，
    调用 GET /v1/mcp/allowed-tools 查询（结果缓存 5 分钟）
 
 stdio 模式网络兜底策略：
@@ -91,11 +93,14 @@ async def _resolve_allowed_tools() -> frozenset[str] | None:
     Returns:
         工具名集合（已并入基础 auth 白名单），或 None 表示全量放行
     """
-    from opscli.mcp.context import get_current_api_key, mcp_request_ctx
+    from opscli.mcp.context import get_current_api_key, get_current_auth_mode, mcp_request_ctx
     from opscli.mcp.context import _get_scope_from_mcp_request_ctx
 
-    # ── HTTP/SSE 模式：上下文中存在 API Key ──────────────────────────
-    if get_current_api_key():
+    # 可信上游不携带 API Key；仅依据认证中间件标记识别，不能把它当成 stdio。
+    trusted_identity = get_current_auth_mode() in {
+        "internal", "apphub_session", "apphub_viewer", "apphub_local",
+    }
+    if get_current_api_key() or trusted_identity:
         # 双重读取：优先 contextvar，降级读 POST 请求 scope（SSE 模式下 contextvar 可能丢失）
         allowed: list | None = None
         permission_enabled: bool | None = None
@@ -103,22 +108,26 @@ async def _resolve_allowed_tools() -> frozenset[str] | None:
         if ctx:
             allowed = ctx.get("allowed_tools")
             permission_enabled = ctx.get("permission_enabled")
-        if allowed is None:
+        if allowed is None or permission_enabled is None:
             scope = _get_scope_from_mcp_request_ctx()
             if scope:
-                allowed = scope.get("mcp_allowed_tools")
+                if allowed is None:
+                    allowed = scope.get("mcp_allowed_tools")
                 if permission_enabled is None:
                     permission_enabled = scope.get("mcp_permission_enabled")
 
-        # 后端显式关闭权限管控（permission_enabled=False）→ 全量放行
+        # 只遵循已经验证的请求策略，包括受控 Collector 入口显式委托给上游的策略。
         if permission_enabled is False:
             return None
         if allowed is None:
+            if trusted_identity:
+                # 可信身份也不能在策略缺失时继承服务器默认用户或旧后端兼容权限。
+                return BASE_ALWAYS_ALLOWED_TOOLS
             # 固定 API Key 模式 / 旧后端（verify-key 响应无 allowed_tools 字段）→ 全量放行
             return None
         return frozenset(allowed) | BASE_ALWAYS_ALLOWED_TOOLS
 
-    # ── stdio 模式：无 API Key，按本地登录用户查询 ──────────────────
+    # ── stdio 模式：无 API Key 和可信身份，按本地登录用户查询 ────────
     return await _stdio_allowed_tools()
 
 
