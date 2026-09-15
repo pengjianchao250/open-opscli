@@ -713,6 +713,16 @@ if ($response.data.state -eq "succeeded") {
 再调用 REST `/api/v1/seller-sprite/scenarios`；三条路径都成功后，复现原任务或结果接口。
 可信身份对照只能在获准访问 Collector 的内部网关环境执行。
 
+若远端摘要为“无权限调用工具 seller_sprite_scenarios”，且 MCP Key 调用成功、
+REST 调用失败，应检查 Collector 是否已包含 AppHub 权限来源修复：旧版权限解析仅按
+API Key 有无区分远端与 stdio，导致可信 internal 请求读取服务器默认登录态的权限。
+修复版按已验证的 internal/AppHub 认证模式读取请求级策略，并保留 contextvar/scope
+降级；显式白名单仍然生效，可信身份缺失策略时仅开放基础安全工具。
+
+此修复需要更新 **Collector 进程实际使用的 Python 环境/代码并重启 Collector 服务**。
+仅重启本地网关或只部署网关侧日志改动无法使远端修复生效。部署后先验收场景列表，
+再验收任务提交与结果读取；本项修复不覆盖任务凭证恢复或账号池调度问题。
+
 ## 9. 线上验收记录
 
 2026-09-04 使用 `.env` 中配置的线上地址和 API Key 完成以下真实验证。该记录发生在本次自动凭据保障增强部署前：
