@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
+import time
 from collections.abc import Callable
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 
+from opscli.config import __version__
 from opscli.mcp.context import (
     get_current_api_key,
     get_current_auth_mode,
@@ -18,7 +22,7 @@ from opscli.mcp.context import (
     get_current_user_email,
     get_current_user_id,
 )
-from opscli.mcp_client import RemoteMcpClient
+from opscli.mcp_client import RemoteMcpClient, RemoteMcpToolError
 
 from .helpers import _err
 
@@ -45,30 +49,40 @@ async def call_collector(
     client_factory: Callable[..., RemoteMcpClient] = RemoteMcpClient,
 ) -> dict[str, Any]:
     """以当前最终用户身份调用 Collector 的同名 Tool。"""
+    started = time.monotonic()
+    url = os.environ.get(ENV_COLLECTOR_MCP_URL, "").strip()
+    headers: dict[str, str] = {}
+    forwarded: dict[str, Any] = {}
+    stage = "configuration"
     try:
         url = _collector_url()
+        stage = "identity"
         headers, apphub_request = _collector_headers()
+        stage = "arguments"
+        forwarded = _proxy_arguments(
+            tool_name, arguments, include_apphub_auth=apphub_request,
+        )
+        stage = "remote_call"
         client = client_factory(
             url,
             headers=headers,
         )
         result = await client.call_tool(
             tool_name,
-            _proxy_arguments(
-                tool_name,
-                arguments,
-                include_apphub_auth=apphub_request,
-            ),
+            forwarded,
         )
         if isinstance(result, dict) and result.get("success") is not True:
             error = result.get("error") if isinstance(result.get("error"), dict) else {}
-            _logger.warning(
-                "Collector MCP 代理返回失败 tool=%s error_code=%s",
-                tool_name,
-                str(error.get("code") or "UNKNOWN")[:128],
+            _log_collector_failure(
+                tool_name, url, headers, forwarded, started, "remote_result",
+                result_error=error,
             )
         return result
     except CollectorMcpProxyError as exc:
+        _log_collector_failure(
+            tool_name, url, headers, forwarded, started, stage,
+            exception=exc, mapped_code=exc.code,
+        )
         return _err(exc, tool=f"MCP → {tool_name}（Collector 代理）")
     except Exception as exc:  # noqa: BLE001
         if _is_collector_unavailable(exc):
@@ -81,16 +95,149 @@ async def call_collector(
                 "COLLECTOR_MCP_CALL_FAILED",
                 f"数据采集服务调用失败：{type(exc).__name__}",
             )
-        cause = exc.__cause__ or exc.__context__
-        _logger.warning(
-            "Collector MCP proxy failed tool=%s error_type=%s cause_type=%s nested_types=%s mapped_code=%s",
-            tool_name,
-            type(exc).__name__,
-            type(cause).__name__ if cause is not None else "-",
-            _nested_exception_types(exc),
-            error.code,
+        _log_collector_failure(
+            tool_name, url, headers, forwarded, started, stage,
+            exception=exc, mapped_code=error.code,
         )
         return _err(error, tool=f"MCP → {tool_name}（Collector 代理）")
+
+
+def _safe_diagnostic_text(value: Any, secrets: list[str], *, limit: int = 1024) -> str:
+    """只记录标量摘要；先脱敏再截断，避免截断后的凭证逃过匹配。"""
+    if not isinstance(value, (str, int, float)):
+        return "-"
+    text = str(value)
+    # 当前请求凭证即使被远端以无字段名文本回显，也不能进入日志。
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"https?://[^\s\"'<>]+", "[REDACTED_URL]", text, flags=re.I)
+    text = re.sub(r"\bBearer\s+[^\s\"',;]+", "Bearer [REDACTED]", text, flags=re.I)
+    text = re.sub(r"\beyJ[\w-]*\.[\w-]+\.[\w-]+", "[REDACTED]", text)
+    # Cookie 可能包含多个以分号分隔的键值，整段删除而非只处理第一个键。
+    text = re.sub(
+        r"""(?i)\b(?:set-cookie|cookie)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\r\n]+)""",
+        "cookie=[REDACTED]", text,
+    )
+    text = re.sub(
+        r"""(?i)\b([\w-]*(?:token|secret|password|passwd|pwd|jwt|authorization|"""
+        r"""api[_-]?key|session[_-]?id)[\w-]*)["']?\s*[:=]\s*"""
+        r"""(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)""",
+        r"\1=[REDACTED]", text,
+    )
+    text = re.sub(r"[\w.+-]+@[\w.-]+", "[REDACTED_EMAIL]", text)
+    return " ".join(text.split())[:limit] or "-"
+
+
+def _log_collector_failure(
+    tool_name: str,
+    url: str,
+    headers: dict[str, str],
+    forwarded: dict[str, Any],
+    started: float,
+    stage: str,
+    *,
+    exception: Exception | None = None,
+    mapped_code: str = "-",
+    result_error: dict[str, Any] | None = None,
+) -> None:
+    """记录低敏调用边界和远端错误，保持原有返回信封及 HTTP 映射。"""
+    secrets = [
+        str(value) for value in (
+            get_current_api_key(), get_current_session_id(), get_current_jwt(),
+            forwarded.get("session_id"), forwarded.get("jwt"),
+        ) if value
+    ]
+    target = "-"
+    try:
+        parsed = urlsplit(url)
+        secrets.extend(value for value in (parsed.username, parsed.password) if value)
+        secrets.extend(value for _, value in parse_qsl(parsed.query) if value)
+        # 目标独立记录，仅保留主机/端口/路径，禁止带入 userinfo、查询串或 fragment。
+        if parsed.hostname:
+            target = f"{parsed.scheme}://{parsed.netloc.rsplit('@', 1)[-1]}{parsed.path}"
+    except ValueError:
+        target = "[INVALID_URL]"
+
+    remote_error = result_error or {}
+    message: Any = remote_error.get("message")
+    remote_code: Any = remote_error.get("code")
+    downstream_status = None
+    message_priority = -1
+    pending: list[BaseException] = [exception] if exception else []
+    seen: set[int] = set()
+    # AnyIO 会把下游错误包在异常组内；沿两种异常链寻找真实 HTTP/工具失败。
+    while pending and len(seen) < 32:
+        current = pending.pop(0)
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, httpx.HTTPStatusError):
+            downstream_status = current.response.status_code
+        if isinstance(current, RemoteMcpToolError):
+            message_priority = 2
+            message = current.raw_text or str(current)
+            payload = getattr(current.result, "structuredContent", None)
+            if current.raw_text:
+                try:
+                    payload = json.loads(current.raw_text)
+                except (ValueError, RecursionError):
+                    pass
+            if isinstance(payload, dict):
+                detail = payload.get("error", payload)
+                if isinstance(detail, dict):
+                    remote_code = detail.get("code")
+                    message = detail.get("message") or "Remote MCP tool returned an error"
+                else:
+                    message = "Remote MCP tool returned an error"
+        else:
+            # 工具正文优先于 HTTP 错误，HTTP 错误优先于外层异常组摘要。
+            priority = 1 if isinstance(current, httpx.HTTPError) else 0
+            if priority >= message_priority:
+                message = str(current)
+                message_priority = priority
+        pending.extend(
+            item for item in (current.__cause__, current.__context__)
+            if isinstance(item, BaseException)
+        )
+        pending.extend(
+            item for item in getattr(current, "exceptions", ())
+            if isinstance(item, BaseException)
+        )
+
+    mode = str(get_current_auth_mode() or "")
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if secret:
+            target = target.replace(secret, "[REDACTED]")
+    diagnostic = {
+        "stage": stage,
+        "gateway_version": __version__,
+        # 身份模式仅记录已知枚举，身份字段仅记录有无。
+        "auth_mode": mode if mode in {
+            "remote", "fixed", "internal", "apphub_session", "apphub_viewer", "apphub_local",
+        } else "unknown",
+        "collector_target": " ".join(target.split())[:512],
+        "elapsed_ms": round((time.monotonic() - started) * 1000, 2),
+        "identity_forwarded": bool(headers.get("X-AppHub-User-Email")),
+        "api_key_forwarded": bool(headers.get("Authorization")),
+        "session_forwarded": bool(forwarded.get("session_id")),
+        "jwt_forwarded": bool(forwarded.get("jwt")),
+        "downstream_status": downstream_status,
+        "remote_code": _safe_diagnostic_text(remote_code, secrets, limit=128),
+        "remote_message": _safe_diagnostic_text(message, secrets),
+    }
+    cause = (exception.__cause__ or exception.__context__) if exception else None
+    _logger.warning(
+        "Collector MCP proxy failed tool=%s error_code=%s error_type=%s "
+        "cause_type=%s nested_types=%s mapped_code=%s diagnostic=%s",
+        _safe_diagnostic_text(tool_name, secrets, limit=128),
+        diagnostic["remote_code"],
+        type(exception).__name__ if exception else "-",
+        type(cause).__name__ if cause else "-",
+        _nested_exception_types(exception) if exception else "-",
+        mapped_code,
+        json.dumps(diagnostic, ensure_ascii=True),
+    )
 
 
 def collector_proxy_tool(

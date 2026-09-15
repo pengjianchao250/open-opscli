@@ -1,0 +1,22 @@
+# gitleaks 扫描配置
+# 作用：pre-commit 钩子（.git/hooks/pre-commit）会优先读取本文件，
+#       在默认规则集基础上放行项目内已确认的"测试用假密钥样本"，避免误报阻断提交。
+#
+# 维护原则：
+#   1. 只放行逐条确认过的假值，禁止按目录整体放行（否则真密钥混入 tests/ 将不再被拦截）
+#   2. 新增放行项必须写明来源文件与用途，便于后续审计
+
+title = "opscli gitleaks config"
+
+[extend]
+# 继承 gitleaks 默认规则集，本文件只做增量放行
+useDefault = true
+
+[allowlist]
+description = "项目内已确认的测试假密钥样本"
+regexes = [
+  # 来源：tests/shared/test_file_uploads.py
+  # 用途：验证 opscli/shared/file_uploads.py 的脱敏正则 (?:LTAI|AKIA)[A-Za-z0-9]+ 能识别并屏蔽阿里云 AK 形态的业务码
+  # 该值为占位字符串，非真实凭证
+  '''LTAI1234567890abc''',
+]
