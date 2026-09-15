@@ -11572,4 +11572,26 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：恢复 `SKILL.md` 对 `origin/master` 的强制要求，将版本回退到 `0.1.13`，并还原对应契约测试与 eval 条目。
 
+## 2026-09-14 构建配置 - 新增 .gitleaks.toml 解除测试假密钥误报
+
+**变更原因**：master 合并 release 时被 `.git/hooks/pre-commit` 的 `gitleaks protect --staged` 阻断（leaks found: 1）。经定位，命中项为 `tests/shared/test_file_uploads.py:22` 的 `LTAI1234567890abc`，该值是验证 `opscli/shared/file_uploads.py:43` 脱敏正则 `(?:LTAI|AKIA)[A-Za-z0-9]+` 的测试占位样本，非真实凭证，属误报。
+**改动点**：新增仓库根目录 `.gitleaks.toml`，`[extend] useDefault = true` 继承默认规则集，`[allowlist].regexes` 精确放行 `LTAI1234567890abc` 一条。未按目录放行 `tests/`，以保留真密钥混入测试文件时的检测能力。钩子已有 `-c $CFG` 分支，文件落在 `$(git rev-parse --show-toplevel)` 即自动生效。
+**验证结果**：
+1. `gitleaks git --log-opts="master..release" -c .gitleaks.toml` → 命中数由 3 降至 2（剩余 2 条 `idempotency_key=` 仅存在于历史 commit，release 末端已不存在，不进入暂存区）。
+2. `git merge --no-commit --no-ff release` 后复刻钩子原命令 `gitleaks protect --staged --redact -c .gitleaks.toml` → `no leaks found`，扫描字节数 1948742（1.95 MB）与原始报错输出一致，确认为同一份暂存内容。
+3. 验证后已 `git merge --abort`，工作区追踪文件恢复干净。
+**影响范围**：仅影响本地 pre-commit 的 gitleaks 扫描与 CI 中读取该配置的扫描任务；不涉及任何运行时代码。
+**回滚方式**：`rm .gitleaks.toml`（钩子会自动回退到 gitleaks 默认规则集分支）。
+---
+
+## 2026-09-15 keepa - 修复 Cython 编译失败导致 v0.0.134 发版中断
+
+**变更原因**：GitHub Actions run 34834031562（tag v0.0.134）全部 5 个 job 失败。根因是 commit `31ef1849 feat(keepa): migrate accounts to mysql credential pool` 在 `opscli/keepa/accounts.py:54` 引入了 `del refresh`，而 `refresh: bool` 注解会被 Cython 编译成 C 的 `bint`，C 类型变量不可 `del`，报 `opscli/keepa/accounts.py:54:12: Deletion of non-Python, non-C++ object`。三个平台的 cibuildwheel 与 sdist 构建同时挂掉，Publish 任务因无产物在 `ls -lh dist/` 处失败。本地开发一律用 `SKIP_CYTHON=1`，pytest 也不编译，因此该问题只在发版时暴露。
+**改动点**：`opscli/keepa/accounts.py` `KeepaAccountManager.get_default()` —— 将 `del refresh` 改为 `_ = refresh`（普通赋值，Cython 安全），并补三行中文注释说明该参数保留原因及为什么不能用 `del`。未改动函数签名与任何业务逻辑。
+**验证结果**：
+1. AST 全量扫描 `opscli/**/*.py` 的 `del <带注解形参>` 写法，命中 2 处：本次修复的 `keepa/accounts.py:54`（`bool`，C 类型，必须改）与 `google_trends/api/scenarios.py:135`（`del geo`，`str` 是 Python 对象，Cython 允许，且已随 v0.0.133 成功发布，不动）。
+2. `python -m build --sdist`（走 build isolation，按 pyproject 解析 `cython>=3,<3.3`，与 CI 同版本）→ `EXIT=0`，`Successfully built aukeys_opscli-0.0.134.tar.gz`；日志中 `Error compiling Cython` / `CompileError` / `Deletion of non-Python` 命中数为 0，350/350 文件全部 cythonize 通过，原失败文件 `[150/350] Cythonizing opscli/keepa/accounts.py` 正常生成 `accounts.c`（编号与 CI 失败日志完全一致）。
+3. 追加 `python -m build --wheel` 覆盖 `.c` → `.so` 的 C 编译阶段。
+**影响范围**：仅 `KeepaAccountManager.get_default()` 一行语句，运行时行为不变（`del` 与 `_ =` 都只是标记参数未使用）。解除全平台 wheel/sdist 构建与 PyPI 发布的阻塞。
+**回滚方式**：`git checkout opscli/keepa/accounts.py`（回滚后 Cython 构建会重新失败）。
 ---
