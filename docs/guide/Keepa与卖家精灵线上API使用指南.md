@@ -667,7 +667,7 @@ if ($response.data.state -eq "succeeded") {
 | 409 | 用 JSON result 接口读取 XLS/XLSX 任务 | 改用 `/export` |
 | 422 | 请求字段、类型、范围或场景参数无效 | 修正请求，不要原样重试 |
 | 502 | 上游接口、Collector 调用或结果转换失败 | 记录错误码和任务 ID，有限重试或联系管理员 |
-| 503 | Collector 配置缺失或服务暂时不可用 | 检查内部网关 Key 配置并退避重试 |
+| 503 | Collector 配置缺失、不可达或模块未就绪 | 检查 `error.code`、Collector 地址及模块状态 |
 
 常见错误码：
 
@@ -688,6 +688,30 @@ if ($response.data.state -eq "succeeded") {
 建议日志只记录请求时间、耗时、`scenario`、`site`、`job_id`、HTTP 状态、`success`、`state`、`error.code` 和 `row_count`。
 
 禁止记录 OPS Token、Session、JWT、Cookie、Collector 内部 Key、MCP API Key、卖家精灵账号密码和完整敏感业务响应。
+
+### SellerSprite REST 502/503 预发布排查
+
+更新并重启通用 opscli MCP/REST 网关后，复现失败接口，在**通用网关服务日志**中搜索
+`Collector MCP proxy failed`。该日志使用 WARNING 级别，无需打开全局 DEBUG。
+按请求时间和 `tool` 找到对应记录，读取行尾 `diagnostic` JSON：
+
+| 字段 | 排查用途 |
+| --- | --- |
+| `stage` | `configuration`、`identity`、`arguments`、`remote_call` 或 `remote_result`，区分失败边界 |
+| `gateway_version`、`collector_target` | 核对网关版本和实际下游主机/端口/路径；目标不含用户名、密码、查询串和 fragment |
+| `auth_mode` | 对比 `remote` MCP Key 路径与 `apphub_session` / `apphub_viewer` REST 路径 |
+| `identity_forwarded`、`api_key_forwarded` | 是否实际构造了可信身份头或 Bearer 头 |
+| `session_forwarded`、`jwt_forwarded` | 实际工具参数是否携带任务凭证；场景列表等只读工具为 false 属正常情况 |
+| `elapsed_ms`、`downstream_status` | 调用耗时，以及从 HTTP 异常提取的下游状态；无法取得时状态为 null |
+| `remote_code`、`remote_message` | 远端错误码和脱敏摘要，摘要最多 1024 字符；缺失值为 `-` |
+
+日志只描述网关侧观测：`remote_call` 覆盖 MCP 初始化、工具调用和会话清理，
+`identity_forwarded=true` 不代表 Collector 已接受身份。若摘要仍是通用的工具失败提示，
+按同一时间和工具名查 Collector 服务端异常日志。HTTP 响应合同保持不变，不回传远端原始正文。
+
+先对同一 Collector 地址使用 MCP Key 与可信 AppHub 身份对照调用 `seller_sprite_scenarios`，
+再调用 REST `/api/v1/seller-sprite/scenarios`；三条路径都成功后，复现原任务或结果接口。
+可信身份对照只能在获准访问 Collector 的内部网关环境执行。
 
 ## 9. 线上验收记录
 
