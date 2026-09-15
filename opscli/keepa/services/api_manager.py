@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import re
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -152,18 +151,10 @@ class KeepaApiManager:
 
     async def run(self, request: KeepaScenarioRequest) -> KeepaScenarioResult:
         """执行一个 Keepa API 场景。"""
-        started_at = time.monotonic()
         export_format = _normalize_export_format(request.export_format)
         scenario = get_scenario(request.scenario)
         site = (request.site or "US").upper()
         job_id = request.job_id or _build_job_id(request, site)
-        logger.info(
-            "[KEEPA-TRACE] manager_start scenario=%s site=%s job_id=%s export_format=%s",
-            request.scenario,
-            site,
-            job_id,
-            export_format,
-        )
         root_dir = self._build_root_dir(request, job_id)
         root_dir.mkdir(parents=True, exist_ok=True)
         params_path = root_dir / "params.json"
@@ -190,15 +181,8 @@ class KeepaApiManager:
                 if last_credential_error is not None:
                     raise last_credential_error
                 raise
-            logger.info(
-                "[KEEPA-TRACE] credential_ready scenario=%s site=%s source=%s",
-                request.scenario,
-                site,
-                credential.source,
-            )
             try:
                 async with KeepaApiClient(api_key=credential.api_key) as client:
-                    logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=before", job_id)
                     try:
                         before_status = await client.token_status()
                     except KeepaApiError as exc:
@@ -209,7 +193,6 @@ class KeepaApiManager:
                             continue
                         _append_token_status_warning(warnings, exc)
                         before_status = {}
-                    logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=before", job_id)
                     before_quota = extract_quota(before_status)
                     quota_warning = _build_quota_warning(
                         before_quota=before_quota,
@@ -284,20 +267,8 @@ class KeepaApiManager:
                         ),
                     )
 
-                    logger.info(
-                        "[KEEPA-TRACE] scenario_request_start job_id=%s endpoint=%s",
-                        job_id,
-                        scenario.endpoint,
-                    )
                     raw_response = await client.get_json(scenario.endpoint, normalized_params)
-                    logger.info(
-                        "[KEEPA-TRACE] scenario_request_done job_id=%s endpoint=%s",
-                        job_id,
-                        scenario.endpoint,
-                    )
-                    logger.info("[KEEPA-TRACE] token_status_start job_id=%s phase=after", job_id)
                     after_status = await _safe_token_status(client, warnings)
-                    logger.info("[KEEPA-TRACE] token_status_done job_id=%s phase=after", job_id)
             except KeepaApiError as exc:
                 _report_provider_failure(self.api_key_provider, credential, exc)
                 if _can_rotate_credential(self.api_key_provider, credential, exc):
@@ -425,7 +396,6 @@ class KeepaApiManager:
                 extra_sheets=formatted.extra_sheets(),
             )
         if request.upload_export:
-            logger.info("[KEEPA-TRACE] export_upload_start job_id=%s", job_id)
             _upload_export_if_enabled(
                 export=export,
                 job_id=job_id,
@@ -435,9 +405,6 @@ class KeepaApiManager:
                 jwt=self.jwt,
                 session_id=self.session_id,
             )
-            logger.info("[KEEPA-TRACE] export_upload_done job_id=%s", job_id)
-        else:
-            logger.info("[KEEPA-TRACE] export_upload_skipped job_id=%s reason=api_mode", job_id)
         quota = {
             "estimated_tokens": estimated_tokens,
             "before": extract_quota(before_status),
@@ -460,14 +427,6 @@ class KeepaApiManager:
         )
         _write_json(result_path, result.to_dict())
         self._submit_collection_result(request=request, result=result)
-        logger.info(
-            "[KEEPA-TRACE] manager_done scenario=%s site=%s job_id=%s row_count=%s elapsed_ms=%s",
-            request.scenario,
-            site,
-            job_id,
-            result.row_count,
-            int((time.monotonic() - started_at) * 1000),
-        )
         return result
 
     def job_status(self, job_id: str) -> dict[str, Any]:
