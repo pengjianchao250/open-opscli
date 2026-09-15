@@ -30,11 +30,11 @@ PUT /api/v1/apps/{app_id}/env
 | AppHub 控制面 origin | `OPSCLI_MCP_REST_API_BASE_URL` |
 |---|---|
 | `https://apphub.qa.aukeyit.com` | `https://mcp.ops.aukeyit.com` |
-| `https://apphub.api.xenkee.com` | `https://ops.mcp.xenkee.com` |
+| `https://apphub.xenkee.com` | `https://ops.mcp.xenkee.com` |
 
 映射只接受去除末尾 `/` 并转为小写后的精确 origin。不得通过域名是否包含 `qa`、`test` 或其他字符串推断环境。未知 AppHub 地址返回 `APPHUB-ENVIRONMENT-UNSUPPORTED`，不得默认写入预发布或生产地址。
 
-生产 AppHub 域名当前仍为暂定值；正式域名变化时必须同步更新该映射及测试。
+生产 AppHub 正式域名为 `https://apphub.xenkee.com`；域名变化时必须同步更新该映射及测试。
 
 ## 4. 执行流程
 

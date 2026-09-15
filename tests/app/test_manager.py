@@ -348,7 +348,7 @@ def test_init_preserves_existing_mismatched_mcp_rest_env(tmp_path: Path) -> None
 
 def test_init_uses_production_mcp_rest_env_mapping(tmp_path: Path) -> None:
     client = FakeClient()
-    client.control_plane_url = "https://apphub.api.xenkee.com/"
+    client.control_plane_url = "https://apphub.xenkee.com/"
     client.env_by_app["Ab123"] = {}
 
     result = _manager(client, FakeGit()).init_git(tmp_path, app_id="Ab123")
