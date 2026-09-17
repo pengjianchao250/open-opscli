@@ -83,6 +83,7 @@ class AppManager:
         app_id: str | None = None,
     ) -> dict:
         """初始化已绑定应用，或通过明确的公开 ID 恢复已有应用。"""
+        git_environment = self._ensure_git_environment()
         root = self.binding_store.prepare_root(path)
         binding, credential_result, git_result, runtime_env_result = (
             self._prepare_repository(
@@ -100,10 +101,12 @@ class AppManager:
             **credential_result,
             **git_result,
             **runtime_env_result,
+            "git_environment": git_environment,
         }
 
     def push(self, path: str | Path = ".", *, message: str) -> dict:
         summary = self._validate_message(message, command="push")
+        git_environment = self._ensure_git_environment()
         root = self.binding_store.prepare_root(path)
         binding, credential_result, git_init_result, runtime_env_result = (
             self._prepare_repository(
@@ -118,7 +121,7 @@ class AppManager:
             branch=binding.default_branch,
         )
         message_text = (
-            "源码已推送到远端仓库。"
+            "推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。"
             if git_result.get("pushed")
             else f"远端 {binding.default_branch} 已是最新源码，无需重复推送。"
         )
@@ -128,8 +131,15 @@ class AppManager:
             **git_init_result,
             **runtime_env_result,
             **git_result,
+            "git_environment": git_environment,
             "message": message_text,
         }
+
+    def _ensure_git_environment(self) -> dict:
+        ensure = getattr(self.git_service, "ensure_environment", None)
+        if ensure is None:
+            return {}
+        return ensure(install=True)
 
     def _prepare_repository(
         self,

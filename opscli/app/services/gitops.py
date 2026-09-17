@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from opscli.app.domain.constants import GIT_DEFAULT_BRANCH, GIT_MIN_VERSION
 from opscli.app.domain.exceptions import AppGitError, GitUnavailableError
+from opscli.app.services.git_environment import GitEnvironmentService
 
 _CREDENTIAL_URL_RE = re.compile(r"(https?://)([^/@\s]+)@", re.IGNORECASE)
 _SECRET_LINE_RE = re.compile(
@@ -27,8 +28,17 @@ class GitCommandResult:
 
 
 class GitRunner:
-    def __init__(self, *, timeout: float = 120.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 120.0,
+        executable: str | Path | None = None,
+    ) -> None:
         self.timeout = timeout
+        self.executable = str(executable or "git")
+
+    def set_executable(self, executable: str | Path) -> None:
+        self.executable = str(executable)
 
     def run(
         self,
@@ -52,7 +62,7 @@ class GitRunner:
             env.update(env_overrides)
         try:
             completed = subprocess.run(
-                ["git", *args],
+                [self.executable, *args],
                 cwd=cwd,
                 env=env,
                 input=input_text,
@@ -85,8 +95,25 @@ class GitRunner:
 
 
 class GitService:
-    def __init__(self, runner: GitRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: GitRunner | None = None,
+        environment_service: GitEnvironmentService | None = None,
+    ) -> None:
         self.runner = runner or GitRunner()
+        self.environment_service = environment_service or GitEnvironmentService()
+
+    def ensure_environment(self, *, install: bool = True) -> dict:
+        state = self.environment_service.ensure(install=install)
+        if not state.get("ready"):
+            raise GitUnavailableError(
+                "GIT-001",
+                state.get("message") or "本机 Git 环境未就绪。",
+                fix_hint="执行 opscli app ensure-git --install --json，并按返回状态完成权限或系统确认。",
+                detail=state,
+            )
+        self.runner.set_executable(state["git_path"])
+        return state
 
     def initialize(
         self,

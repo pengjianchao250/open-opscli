@@ -2,6 +2,8 @@
 
 `opscli app` 负责创建应用、初始化 Git 和推送源码；线上构建、发布、健康检查和回滚由 AppHub 处理。本文件只维护交付检查，具体构建方式、依赖版本和存储配置以项目 `docs/apphub-contract.md` 及实际发布文件为准。
 
+执行仓库初始化、状态核对、提交或推送前，必须先通过 [Git 本地环境规范](git-environment-standard.md) 门禁；Git 未就绪时不得创建或修改 binding、提交记录和远端状态。
+
 ## 提交前配置检查
 
 - 使用 OPS viewer、Keepa 或 SellerSprite 时，后端只读取 `OPSCLI_MCP_REST_API_BASE_URL`；生产环境显式注入 `https://ops.mcp.xenkee.com`，预发布环境显式注入 `https://mcp.ops.aukeyit.com`。
@@ -53,6 +55,12 @@
 用户已明确授权本次源码提交且范围一致时继续执行，不重复询问；范围含未授权的其他改动时停止，不通过删除或隐藏他人改动来凑出可推送状态。
 
 不得把业务代码推回统一模板仓库；origin 与 binding 不一致时停止核对。clone、Git 清理或 create/init 失败时，停止后续开发。
+
+推送结果提示遵循以下合同：
+
+- 返回 `pushed=true` 时，Codex 最终回复原样使用：“推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。”
+- 上述提示中的部署与发布是运营系统接手后的异步流程，不是当前部署或发布成功的状态证据。
+- 返回 `pushed=false` 时，说明远端 `master` 已是最新源码，应说明无需重复推送，不使用成功提示。
 
 ## 职责结束边界
 

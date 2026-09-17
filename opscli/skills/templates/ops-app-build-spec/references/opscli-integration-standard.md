@@ -39,6 +39,7 @@ OPS 业务路由必须通过 FastAPI `Depends(get_query_gateway)` 获取模板 `
 - 每个正式 OPS 数据集都必须进入 `app.yaml.opscli.datasets` 白名单。
 - 查询 payload 由 Gateway/`QueryManager.build_simple()` 构造；禁止手写 `userEmail`、`query.from.table`、`query.from.permission` 或 `query.from.database`。
 - 销售额等带币种指标必须把币种作为查询条件传入服务端，禁止先查默认币种再在后端换算。
+- AppHub viewer 查询的单次 `limit` 必须遵守已在线验证的 REST 合同；当前上限为 `50000`，不得沿用 SDK 文档中的更大值。需要全量数据时使用确定性分页，不通过提高单次 `limit` 绕过上限。
 - 读取结果时检查 `truncated`、`total_count` 与分页合同；需要全量时按确定性顺序翻页，不反复全量拉取后本地过滤。
 
 ## 其他 SDK 与第三方调用
@@ -64,12 +65,14 @@ OPS 业务路由必须通过 FastAPI `Depends(get_query_gateway)` 获取模板 `
 | 超时或网络不可达 | 返回稳定上游不可用错误，保留可观测记录 |
 
 - 禁止裸 `except Exception` 吞掉 opscli 异常；捕获后必须记录安全日志或向上转译。
+- HTTP 200 且内层 `success=false` 时必须复用模板 `extract_inner_error()` 或等价的结构化解析，保留 `error.code`、`details.errors` 和安全的具体原因。若 `error.message` 只是“请求验证失败”，但详情包含 `LIMIT_TOO_LARGE`、字段名、实际值或允许上限，站点 API 必须返回可行动文案，例如“OPS 请求使用了 limit=100000，超过上游最大限制 50000”，不得只回传泛化消息。
 - 日志不得包含完整 JWT、session_id、Cookie、viewer ticket 或完整 Header；需要定位时只使用不可逆摘要。
 - OPS 和第三方服务地址必须与凭证签发环境一致；地址只通过项目 Settings 和部署环境配置，不自动纠正或按鉴权模式推断。
 
 ## 测试
 
 - OPS 测试使用 FakeGateway 和 `app.dependency_overrides` 覆盖 `get_query_gateway`、`get_current_user`，不访问真实网络或本机凭证。
+- OPS 错误测试至少覆盖“泛化顶层消息 + 结构化详细原因”，并断言 `LIMIT_TOO_LARGE` 等具体原因能够到达站点 API 和前端错误提示。
 - 第三方 Client 测试分别构造 viewer、session、local 和未认证 `QueryCredentials`，断言只发送允许的 Header 且不跨模式回退。
 - 网络统一使用 mock transport 或 `respx`；禁止访问真实账号、Keychain、用户数据库或远端服务。
 - 测试不得默认构造读取真实本机状态的 `AuthClient()`；local 分支通过 fake factory 验证标准方法调用。
