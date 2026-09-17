@@ -37,6 +37,33 @@
 **影响范围**：影响 Codex 使用 `ops-app-build-spec` 处理已有看板迁移重构时的任务识别、实施顺序、文档产物和验收标准；不修改模板仓库、AppHub 运行时、数据查询合同或真实应用。
 
 **回滚方式**：还原 `SKILL.md`、`migration-standard.md`、契约测试和版本文件，删除本次需求文档，并移除本条变更记录。
+## 2026-09-15 Keepa - 清理 API 排障临时追踪日志
+
+**变更原因**：Keepa API 排障期间增加了大量阶段追踪和专用日志输出，常规运行时产生冗余日志。
+**改动点**：移除 Keepa 路由、HTTP 客户端、Manager、共享账号/上传客户端及 MCP 认证/额度/遥测层的 KEEPA-TRACE、文件追踪、专用 handler 和相关计时包装；保留原有异常映射、重试、额度、遥测和非临时错误日志。更新原测试中已删除追踪函数的 monkeypatch。
+**验证结果**：代码和测试中已无 KEEPA-TRACE、追踪函数或文件写入引用；改动模块 AST 解析及导入引用检查、git diff --check 通过。Keepa、REST、共享上传、MCP 额度/遥测/权限/代理回归 300 passed，共享账号认证回归 6 passed，合计 306 passed。
+**影响范围**：临时排障输出；Collector 代理诊断日志继续保留。
+**回滚方式**：还原本次 Keepa 追踪清理涉及文件及测试行。
+
+---
+
+## 2026-09-15 MCP - 修复 AppHub 身份误走 stdio 工具权限
+
+**变更原因**：REST 经 Collector 转发可信 internal 身份时没有 API Key，工具权限解析将其误判为 stdio，读取服务器默认登录态，导致场景列表等接口报无权限并被包装为 502/503。
+**改动点**：权限解析依据已验证的 internal/AppHub 认证模式进入请求策略分支，复用 contextvar/scope 读取；可信身份缺失权限策略时仅开放基础安全工具。新增真实认证中间件与工具权限中间件组合回归，覆盖可信身份、scope 降级、显式白名单和不可信身份头。
+**验证结果**：修复前新增回归 10 failed / 1 passed，其中真实中间件组合复现与远端一致的 seller_sprite_scenarios 权限拒绝；修复后权限、认证、代理及 REST 回归共 81 passed，覆盖 scope 降级、未知模式、部分上下文、白名单拒绝及未受信任身份头。未部署远端 Collector，线上完整任务仍需部署后验收。
+**影响范围**：Collector/AppHub 请求的 MCP 工具权限解析；不改认证信任开关、角色配置或任务凭证调度。
+**回滚方式**：还原本次 permissions.py 修改及对应回归测试。
+
+---
+
+## 2026-09-15 MCP - 补齐 Collector 远端错误与认证路径诊断
+
+**变更原因**：预发布和生产 REST 返回 502/503，但 MCP 路径成功；现有代理日志隐藏远端错误正文，无法定位两种身份路径的差异。
+**改动点**：新增代理边界回归；失败日志追加 JSON diagnostic，包含网关版本、目标主机/路径、认证模式、实际转发凭证有无、调用阶段、耗时、下游 HTTP 状态、远端错误码和脱敏摘要。覆盖配置、身份、参数、远端异常及业务失败；沿异常组提取远端正文，不输出完整响应或请求凭证。线上 API 指南增加预发布复现和日志字段说明。
+**验证结果**：新增回归在实现前为 9 failed / 1 passed，确认捕获原有诊断缺失；诊断、SellerSprite/Yingyan 代理、远端 MCP 客户端、认证中间件、OPS 凭证和 SellerSprite REST 相关回归共 90 passed。网络客户端均为测试替身，未访问预发布或生产。
+**影响范围**：通用 MCP 到 Collector 的失败日志；不修改认证、调度器或 REST 状态映射。
+**回滚方式**：还原本次代理日志改动并删除新增诊断测试。
 
 ---
 
@@ -11614,6 +11641,28 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：恢复 `SKILL.md` 对 `origin/master` 的强制要求，将版本回退到 `0.1.13`，并还原对应契约测试与 eval 条目。
 
+## 2026-09-14 构建配置 - 新增 .gitleaks.toml 解除测试假密钥误报
+
+**变更原因**：master 合并 release 时被 `.git/hooks/pre-commit` 的 `gitleaks protect --staged` 阻断（leaks found: 1）。经定位，命中项为 `tests/shared/test_file_uploads.py:22` 的 `LTAI1234567890abc`，该值是验证 `opscli/shared/file_uploads.py:43` 脱敏正则 `(?:LTAI|AKIA)[A-Za-z0-9]+` 的测试占位样本，非真实凭证，属误报。
+**改动点**：新增仓库根目录 `.gitleaks.toml`，`[extend] useDefault = true` 继承默认规则集，`[allowlist].regexes` 精确放行 `LTAI1234567890abc` 一条。未按目录放行 `tests/`，以保留真密钥混入测试文件时的检测能力。钩子已有 `-c $CFG` 分支，文件落在 `$(git rev-parse --show-toplevel)` 即自动生效。
+**验证结果**：
+1. `gitleaks git --log-opts="master..release" -c .gitleaks.toml` → 命中数由 3 降至 2（剩余 2 条 `idempotency_key=` 仅存在于历史 commit，release 末端已不存在，不进入暂存区）。
+2. `git merge --no-commit --no-ff release` 后复刻钩子原命令 `gitleaks protect --staged --redact -c .gitleaks.toml` → `no leaks found`，扫描字节数 1948742（1.95 MB）与原始报错输出一致，确认为同一份暂存内容。
+3. 验证后已 `git merge --abort`，工作区追踪文件恢复干净。
+**影响范围**：仅影响本地 pre-commit 的 gitleaks 扫描与 CI 中读取该配置的扫描任务；不涉及任何运行时代码。
+**回滚方式**：`rm .gitleaks.toml`（钩子会自动回退到 gitleaks 默认规则集分支）。
+---
+
+## 2026-09-15 keepa - 修复 Cython 编译失败导致 v0.0.134 发版中断
+
+**变更原因**：GitHub Actions run 34834031562（tag v0.0.134）全部 5 个 job 失败。根因是 commit `31ef1849 feat(keepa): migrate accounts to mysql credential pool` 在 `opscli/keepa/accounts.py:54` 引入了 `del refresh`，而 `refresh: bool` 注解会被 Cython 编译成 C 的 `bint`，C 类型变量不可 `del`，报 `opscli/keepa/accounts.py:54:12: Deletion of non-Python, non-C++ object`。三个平台的 cibuildwheel 与 sdist 构建同时挂掉，Publish 任务因无产物在 `ls -lh dist/` 处失败。本地开发一律用 `SKIP_CYTHON=1`，pytest 也不编译，因此该问题只在发版时暴露。
+**改动点**：`opscli/keepa/accounts.py` `KeepaAccountManager.get_default()` —— 将 `del refresh` 改为 `_ = refresh`（普通赋值，Cython 安全），并补三行中文注释说明该参数保留原因及为什么不能用 `del`。未改动函数签名与任何业务逻辑。
+**验证结果**：
+1. AST 全量扫描 `opscli/**/*.py` 的 `del <带注解形参>` 写法，命中 2 处：本次修复的 `keepa/accounts.py:54`（`bool`，C 类型，必须改）与 `google_trends/api/scenarios.py:135`（`del geo`，`str` 是 Python 对象，Cython 允许，且已随 v0.0.133 成功发布，不动）。
+2. `python -m build --sdist`（走 build isolation，按 pyproject 解析 `cython>=3,<3.3`，与 CI 同版本）→ `EXIT=0`，`Successfully built aukeys_opscli-0.0.134.tar.gz`；日志中 `Error compiling Cython` / `CompileError` / `Deletion of non-Python` 命中数为 0，350/350 文件全部 cythonize 通过，原失败文件 `[150/350] Cythonizing opscli/keepa/accounts.py` 正常生成 `accounts.c`（编号与 CI 失败日志完全一致）。
+3. 追加 `python -m build --wheel` 覆盖 `.c` → `.so` 的 C 编译阶段。
+**影响范围**：仅 `KeepaAccountManager.get_default()` 一行语句，运行时行为不变（`del` 与 `_ =` 都只是标记参数未使用）。解除全平台 wheel/sdist 构建与 PyPI 发布的阻塞。
+**回滚方式**：`git checkout opscli/keepa/accounts.py`（回滚后 Cython 构建会重新失败）。
 ---
 ## 2026-09-17 App - 新增看板迁移重构状态机与阶段门禁
 

@@ -51,7 +51,10 @@ class KeepaApiKeyProvider:
         exclude_account_ids: set[int] | None = None,
     ) -> KeepaApiKey:
         """领取默认 Keepa API Key。"""
-        del refresh
+        # 保留 refresh 参数以兼容调用方签名，当前实现由凭证池托管刷新，不需要该标志。
+        # 注意：此处不能写 `del refresh`——bool 注解会被 Cython 编译成 C 的 bint，
+        # C 类型变量不可 del，会导致 "Deletion of non-Python, non-C++ object" 编译错误。
+        _ = refresh
         try:
             lease = self._pool().acquire(
                 "keepa",
