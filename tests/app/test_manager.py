@@ -517,8 +517,34 @@ def test_push_only_pushes_source_and_never_publishes(tmp_path: Path) -> None:
     assert git.push_calls[0][1]["branch"] == "master"
     assert "release_id" not in result
     assert "version" not in result
-    assert result["message"] == "源码已推送到远端仓库。"
+    assert result["message"] == (
+        "推送成功；运营系统将自动部署并发布当前站点，"
+        "您可以前往运营系统查看发布状态、或进行站点权限设置。"
+    )
     assert "title: 本地标题" in (tmp_path / "app.yaml").read_text(encoding="utf-8")
+
+
+def test_push_without_source_change_does_not_report_push_success(tmp_path: Path) -> None:
+    BindingStore().save(
+        tmp_path,
+        SiteBinding(
+            app_id="Ab123",
+            app_name="销售看板",
+            slug="sales-dashboard",
+            repo_url=_repo_url("sales-dashboard"),
+            git_username="owner",
+            apphub_url="https://apphub.example/api/v1",
+        ),
+    )
+    _write_manifest(tmp_path, app_id="Ab123")
+    client = FakeClient()
+    git = FakeGit(pushed=False)
+    git.initialized_roots.add(tmp_path)
+
+    result = _manager(client, git).push(tmp_path, message="检查最新源码")
+
+    assert result["pushed"] is False
+    assert result["message"] == "远端 master 已是最新源码，无需重复推送。"
 
 
 def test_push_auto_refreshes_invalid_bound_credential(tmp_path: Path) -> None:

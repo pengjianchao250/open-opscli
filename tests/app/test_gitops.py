@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from opscli.app.domain.exceptions import AppGitError
-from opscli.app.services.gitops import GitCommandResult, GitService, _parse_git_version
+from opscli.app.services.gitops import GitCommandResult, GitRunner, GitService, _parse_git_version
 
 
 def test_git_runner_disables_windows_credential_manager_prompt(monkeypatch, tmp_path: Path) -> None:
@@ -53,6 +53,22 @@ class FakeRunner:
 
 def test_parse_git_version() -> None:
     assert _parse_git_version("git version 2.45.2.windows.1") == (2, 45, 2)
+
+
+def test_git_runner_uses_configured_absolute_executable(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(command, 0, "git version 2.45.2", "")
+
+    monkeypatch.setattr("opscli.app.services.gitops.subprocess.run", fake_run)
+    executable = tmp_path / "Git" / "cmd" / "git.exe"
+    runner = GitRunner(executable=executable)
+
+    runner.run(tmp_path, ["--version"])
+
+    assert captured["command"] == [str(executable), "--version"]
 
 
 def test_new_credential_probe_uses_ephemeral_basic_header(tmp_path: Path) -> None:

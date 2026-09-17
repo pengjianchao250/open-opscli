@@ -42,6 +42,8 @@ Dashboard 专用 Skill 的路由必须基于能力和对象，而不是页面外
 
 页面、API 或数据库需要持续取数时，由 `$ops-app-data-builder` 判定 `viewer-live`、用户私有持久化或经过批准的系统同步。缺少批准的系统运行时适配器时，固定同步必须标记为 `blocked`，不得复用访问者身份建立共享数据。
 
+业务范围已经足以构造正式查询时，委托过程必须包含真实调用尝试。不得因为用户没有提供数据集别名、字段名、第三方场景 ID 或轮询参数，就直接生成固定 `blocked` API 或展示“尚未完成在线验证”。查询成功但零行仍表示技术合同已验证；临时服务错误、超时和上游不可用记录为 `degraded`，按反馈规则处理后继续其他数据产品。
+
 `ops-app-build-spec` 不选择或猜测数据集、字段、聚合、筛选、第三方场景或运行时方法签名，也不复制数据 Skill 的规则。
 
 OPS 正式查询必须使用 `$ops-app-data-builder` 在线验证并固化的精确 `dataset_alias`、`table_id` 和 `field_name`。显示名、描述、中文业务词和 `global_alias` 只能用于候选发现；不得通过关键词打分、`includes`、子串搜索或最相近字段回退决定正式查询字段。`validate_fields=true` 只能验证字段引用可执行，不能证明字段符合业务语义。
@@ -110,6 +112,7 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 有真实数据需求时必须生成或更新：
 
 - `docs/ops-app/data-spec.md`：数据产品、合同、执行模式、站点 API、加工、存储、安全、测试和阻塞项。
+- `docs/ops-app/data-contracts.json`：开发期验证凭证；记录状态、验证方式、精确技术合同、降级和结构性阻塞证据，不保存真实结果行或凭证。
 - `docs/ops-app/project-spec.md`：数据层摘要和前后端边界。
 - `docs/ops-app/migration-plan.md`：接口、加工和存储映射。
 - `docs/ops-app/development.md`：Mock、联调和安全环境变量。
@@ -131,5 +134,10 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
 - data-spec 与实际代码、Pydantic Schema 和前端类型一致。
+- `data-contracts.json` 已通过 `ops-app-data-builder/scripts/validate_data_contracts.py --mode delivery --project-root <project-directory>`，不存在未完成的合同或实现状态。
+- 每个真实数据产品同时满足 `contract_status=verified` 和 `implementation_status=verified`；`contract_verified_only`、`layout_only`、`not_started`、`in_progress` 不能视为完成。
+- `implementation_artifacts` 已覆盖并验证后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI，前端不再包含待接入或仅布局验证占位文本。
+- 页面没有把“合同未验证”“字段尚未补齐”等开发诊断直接展示给业务用户。
+- 固定返回 `blocked` 的业务 API 没有被描述成真实取数完成。
 - 正式 OPS 查询使用精确数据集和字段合同，业务聚合位于后端 service，前端没有读取 metadata 后自行选择字段或拼装通用查询。
 - 测试包含相似字段干扰、字段缺失、零行、上游失败和 metadata 漂移，且不会把合法但语义错误的字段当成目标字段。

@@ -29,10 +29,12 @@ def _rewrite_bundled_links(content: str, replacements: dict[str, str]) -> str:
 def test_ops_app_build_spec_has_consistent_metadata() -> None:
     """Skill 名称、版本和后端规范入口必须一致。"""
     skill = _read("SKILL.md")
+    openai = _read("agents/openai.yaml")
     version = json.loads(_read("data/VERSION.json"))
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.19"}
+    assert 'display_name: "Ops App Build"' in openai
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.29"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -42,6 +44,20 @@ def test_ops_app_build_spec_entry_references_resolve() -> None:
     assert references
     for relative_path in references:
         assert (SKILL_DIR / relative_path).is_file(), relative_path
+
+
+def test_ops_app_build_spec_requires_project_identity_for_local_preview() -> None:
+    """本地预览验收不得把旧标签页或其他项目的端口响应当作当前项目。"""
+    skill = _read("SKILL.md")
+
+    for required in (
+        "opscli app dev-status <project-root> --json",
+        "running=true",
+        "identity_verified=true",
+        "单独请求健康检查得到 HTTP 200",
+        "不得继续声称“保持运行”",
+    ):
+        assert required in skill
 
 
 def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
@@ -94,6 +110,30 @@ def test_ops_app_build_spec_routes_backend_contracts_to_redlines() -> None:
     assert "OPSCLI_THIRD_PARTY_DATA_API_BASE_URL" not in skill + data_access
 
 
+def test_ops_app_build_spec_enforces_real_data_delivery_gate() -> None:
+    """AppHub 真实数据页面不能以未尝试或固定 blocked 冒充完成。"""
+    skill = _read("SKILL.md")
+    data_access = _read("references/data-access-standard.md")
+    content = "\n".join((skill, data_access))
+
+    for required in (
+        "AppHub 真实取数交付门禁",
+        "需求识别 → 正式查询尝试 → 合同固化 → 业务 API/页面接入",
+        "不得直接交付 `blocked` 页面或固定返回 `blocked` 的 API",
+        "查询成功但零行属于合同已验证",
+        "`degraded`",
+        "docs/ops-app/data-contracts.json",
+        "scripts/validate_data_contracts.py",
+        "implementation_status=verified",
+        "contract_verified_only",
+        "layout_only",
+        "后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI",
+        "合同未验证",
+        "开发诊断",
+    ):
+        assert required in content
+
+
 def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     """新项目必须安全克隆、脱离模板 Git，再创建并初始化 AppHub 应用。"""
     skill = _read("SKILL.md")
@@ -101,7 +141,7 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     for required in (
         "http://10.1.13.143:3000/aukeys-admin/template",
         "分支：`master`",
-        'python "<skill-directory>/scripts/clone_template.py" "<project-directory>"',
+        'opscli app clone-template "<project-directory>" --json',
         "成功后立即删除项目根目录 `.git` 并验证其不存在",
         'opscli app create "<app-name>" --path "<project-directory>" --json',
         'opscli app init "<project-directory>" --json',
@@ -123,7 +163,7 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     assert ".gitignore` 必须忽略 `.opscli/" in deployment
     assert "slug、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
-    assert skill.index('python "<skill-directory>/scripts/clone_template.py"') < skill.index(
+    assert skill.index('opscli app clone-template "<project-directory>" --json') < skill.index(
         'opscli app create "<app-name>" --path "<project-directory>" --json'
     )
     assert skill.index(
@@ -132,6 +172,37 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     assert skill.index('opscli app init "<project-directory>" --json') < skill.index(
         "开发前读取目标项目的"
     )
+
+
+def test_ops_app_build_spec_requires_git_environment_gate() -> None:
+    skill = _read("SKILL.md")
+    git_environment = _read("references/git-environment-standard.md")
+    deployment = _read("references/deployment-standard.md")
+    migration = _read("references/migration-standard.md")
+
+    for required in (
+        "opscli app ensure-git --check --json",
+        "opscli app ensure-git --install --json",
+        "纯规范咨询",
+        "elevation_required",
+        "user_confirmation_required",
+        "Git 环境规范",
+    ):
+        assert required in skill
+
+    for required in (
+        "https://git-scm.com/install/windows",
+        "Git-*-64-bit.exe",
+        "Git-*-arm64.exe",
+        "Authenticode",
+        "Homebrew",
+        "xcode-select --install",
+        "不要求 AppHub 构建服务器或线上站点安装 Git",
+    ):
+        assert required in git_environment
+
+    assert "git-environment-standard.md" in deployment
+    assert "git-environment-standard.md" in migration
 
 
 def test_ops_app_build_spec_frontend_follows_backend_contract() -> None:
@@ -145,6 +216,8 @@ def test_ops_app_build_spec_frontend_follows_backend_contract() -> None:
         "前端不得维护第二套口径",
         "具体端点及字段仍从目标项目后端合同读取",
         "是否存在 HTTP 200 内的业务失败，只按目标项目合同判断",
+        "data.inner_error.message",
+        "LIMIT_TOO_LARGE",
         "先由后端更新路由、Schema、相关测试和 OpenAPI",
         "不新增前端兼容分支掩盖漂移",
         "应用代码不得读取、复制或持久化平台密钥、JWT、Cookie",
@@ -274,6 +347,9 @@ def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
         "asyncio.to_thread",
         "跨请求缓存凭证",
         "userEmail",
+        "当前上限为 `50000`",
+        "extract_inner_error()",
+        "OPS 请求使用了 limit=100000，超过上游最大限制 50000",
     ):
         assert required in integration
 
@@ -282,21 +358,70 @@ def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
 
 
 def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
-    """迁移规范只负责迁移流程，不复制实现细节。"""
+    """迁移必须统一为模板基础上的业务能力重构。"""
+    skill = _read("SKILL.md")
     migration = _read("references/migration-standard.md")
 
     for required in (
-        "先判断现有项目是否已满足模板合同",
-        "保留源项目",
-        "只迁移业务代码与必要配置",
+        "“站点”和“看板”含义相同",
+        "迁移统一指基于当前统一模板的业务能力迁移与代码重构",
+        "旧看板源码目录始终只读",
+        "业务能力覆盖矩阵",
+        "不得通过复制、移动、批量同步、改扩展名或机械翻译旧文件完成迁移",
         "取数能力按当前 `data-access-standard.md` 重新核对",
-        "无法确认行为等价时停止",
+        "`blocked`",
+        "`deferred_attachment`",
+        "能够构建”都不能代替业务行为一致",
         "assets/backend/",
     ):
         assert required in migration
 
+    for required in (
+        "## 任务分流",
+        "新建看板",
+        "已有合规模板看板开发",
+        "已有看板迁移重构",
+        "旧看板源码只读",
+        "唯一的迁移规范",
+    ):
+        assert required in skill
+
+    assert "dashboard-migration-standard.md" not in skill
+    assert not (SKILL_DIR / "references" / "dashboard-migration-standard.md").exists()
+
     for duplicated_detail in ("alembic upgrade head", "migrations/versions", "data/app.db"):
         assert duplicated_detail not in migration
+
+
+def test_ops_app_build_spec_requires_command_driven_migration_gates() -> None:
+    """迁移必须使用机器可读矩阵、UI 蓝图和 UI/数据/发布门禁。"""
+    skill = _read("SKILL.md")
+    migration = _read("references/migration-standard.md")
+    content = "\n".join((skill, migration))
+
+    for required in (
+        "opscli app migrate init",
+        ".opscli/migration/current.json",
+        "coverage-matrix.json",
+        "ui-blueprint.json",
+        "先一比一还原导航、路由、页面区域、模块顺序、父子层级",
+        "opscli app migrate verify-ui",
+        "UI 门禁通过前不得开始真实数据接入",
+        "opscli app migrate verify-data",
+        "opscli app migrate verify-release",
+        "opscli app migrate export",
+        "delivery_ready",
+        "next_required_gate",
+        "Schema v2",
+        "remaining_issues",
+        "unblock_conditions",
+        "contract_verified_only",
+        "candidate` 不能通过数据门禁",
+        "migration-acceptance.md",
+        "不是第二套状态源",
+        "opscli:migration-data",
+    ):
+        assert required in content
 
 
 def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
@@ -316,6 +441,8 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "远端 `master`",
         "整体暂存当前项目改动",
         "push 成功只表示源码到达远端",
+        "推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。",
+        "返回 `pushed=false`",
         "不提供 release 命令",
         "不创建 release、不查询版本、不消费发布事件",
         "不得报告“已发布”或“部署成功”",
@@ -386,20 +513,23 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.19"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.29"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
     for relative_path in (
         "SKILL.md",
+        "agents/openai.yaml",
         "references/frontend-standard.md",
         "references/backend-redlines.md",
         "references/sqlite-standard.md",
         "references/opscli-integration-standard.md",
         "references/data-access-standard.md",
+        "references/git-environment-standard.md",
         "references/migration-standard.md",
         "references/deployment-standard.md",
         "scripts/clone_template.py",
+        "scripts/validate_frontend_contracts.py",
         "assets/backend/AGENTS.md",
         "assets/backend/CLAUDE.md",
     ):

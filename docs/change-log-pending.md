@@ -1,3 +1,45 @@
+## 2026-09-16 opscli app - 统一 push 成功提示
+
+**变更原因**：`opscli app push` 成功后仅提示源码已到达远端，Codex 面向运营用户的后续说明不统一。需要明确运营系统将接手自动部署和发布，并引导用户查看发布状态或配置站点权限，同时避免把异步流程误报为已经完成。
+
+**改动点**：新增需求文档 `docs/plans/2026-09-16-opscli-app-push成功提示统一需求.md`；将 `pushed=true` 的 CLI 与 JSON 成功文案统一为“推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。”；保留 `pushed=false` 的“无需重复推送”分支；同步更新 App 回归测试、用户指南、源码交付设计、`ops-app-build-spec` 主入口和部署合同，Skill 版本升级至 `v0.0.22`。
+
+**验证结果**：App CLI、push 业务分支及 Skill 版本、部署合同、安装契约共 `12 passed`；Skill Creator `quick_validate.py` 返回 `Skill is valid!`；目标 Python 文件 `compileall` 通过。首次扩大回归受 Windows 默认 pytest 临时目录 ACL 阻断，并命中既有 `assets/backend/AGENTS.md` 文案断言，本次改用工作区独立临时目录完成相关聚焦验证。
+
+**影响范围**：影响 `opscli app push` 实际发生推送后的普通输出、JSON `data.message` 和 Codex 最终交付提示；不改变 Git 推送、AppHub API、自动部署流程或发布状态。
+
+**回滚方式**：恢复原成功文案和相关测试、Skill、指南及设计说明，将 Skill 版本恢复为 `v0.0.21`，并删除本次需求文档和变更记录。
+
+---
+
+## 2026-09-16 Skill - 简化 Ops App Build 展示名称
+
+**变更原因**：`ops-app-build-spec` 未提供 Codex UI 元数据，界面会直接将内部名称自动显示为 “Ops App Build Spec”；用户希望保留稳定调用名，仅将可见名称简化为 “Ops App Build”。
+
+**改动点**：新增 `agents/openai.yaml` 并设置 `interface.display_name` 为 “Ops App Build”；保持 `name: ops-app-build-spec` 和 `$ops-app-build-spec` 调用方式不变；版本升级至 `v0.0.20`，并补充元数据与安装文件契约断言。
+
+**验证结果**：展示元数据定向测试 `1 passed`；Skill Creator `quick_validate.py` 返回 `Skill is valid!`。完整 Skill 测试文件另有 1 个既有后端 `AGENTS.md` 文案断言失败；安装契约测试在当前 Windows 环境被 Python 临时目录 ACL 的 `PermissionError` 阻断，本次新增文件已由安装文件清单断言覆盖。
+
+**影响范围**：仅影响 Codex 等支持 `agents/openai.yaml` 的界面展示名称及该 Skill 的发布版本，不改变自动发现、显式调用或业务开发规范。
+
+**回滚方式**：删除 `agents/openai.yaml`，将版本和测试断言恢复为 `v0.0.19`。
+
+---
+
+## 2026-09-16 ops-app-build-spec - 统一已有看板模板迁移重构规范
+
+**变更原因**：现有迁移规范容易被理解为复制或搬运旧项目，并把站点、看板和看板专项迁移误解为不同对象或不同流程。需要统一“迁移即基于模板的迁移重构”定义，并固化旧看板只读、业务能力审计、真实数据和行为验收边界。
+
+**改动点**：新增需求文档 `docs/plans/2026-09-16-已有看板模板迁移重构规范需求.md`；更新 `ops-app-build-spec/SKILL.md`，统一站点与看板概念并增加新建、已有合规开发、迁移重构三种任务入口；重写唯一的 `references/migration-standard.md`，加入目录与模板门禁、覆盖矩阵、模板内重新实现、真实数据、`blocked`、`deferred_attachment` 和交付验收要求；不新增 `dashboard-migration-standard.md`；Skill 版本升级至 `v0.0.21`，同步更新契约测试。
+
+**验证结果**：聚焦契约回归 `4 passed, 10 deselected`，覆盖版本、引用、迁移合同和安装；Skill `quick_validate.py` 返回 `Skill is valid!`；发布清单检查未发现 `ops-app-build-spec` 问题。完整目标测试文件为 `1 failed, 13 passed`，唯一失败是既有 `assets/backend/AGENTS.md` 文案与旧断言不一致，本次未修改该资产或断言。
+
+**影响范围**：影响 Codex 使用 `ops-app-build-spec` 处理已有看板迁移重构时的任务识别、实施顺序、文档产物和验收标准；不修改模板仓库、AppHub 运行时、数据查询合同或真实应用。
+
+**回滚方式**：还原 `SKILL.md`、`migration-standard.md`、契约测试和版本文件，删除本次需求文档，并移除本条变更记录。
+
+---
+
 ## 2026-09-14 SellerSprite - 增强 Collector 代理故障诊断日志
 
 **变更原因**：QA SellerSprite REST 提交返回 `COLLECTOR_MCP_CALL_FAILED` / 503 时，原日志只能看到统一错误码，无法区分 Collector 网络不可达、超时或远端工具调用异常。
@@ -11572,4 +11614,21 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：恢复 `SKILL.md` 对 `origin/master` 的强制要求，将版本回退到 `0.1.13`，并还原对应契约测试与 eval 条目。
 
+---
+## 2026-09-17 App - 新增看板迁移重构状态机与阶段门禁
+
+**变更原因**：旧看板迁移主要依赖文字步骤，缺少 UI 结构基线、机器可读覆盖矩阵和阶段门禁，导致页面模块布局还原不足且容易遗漏功能。
+**改动点**：新增 `opscli app migrate` 命令族和 `MigrationService`，支持初始化、只读审计、计划、状态、门禁检查、UI/数据/发布验证及文档导出；在目标项目生成迁移状态、覆盖矩阵、UI 蓝图和四份迁移文档；升级 `ops-app-build-spec` 至 `v0.0.26`、`ops-app-data-builder` 至 `v0.1.16`，要求 UI 结构先行、动态模块合同回写和三段门禁；新增需求规格与定向测试。
+**验证结果**：App 模块完整回归 `171 passed`；两个 Skill 定向回归在排除一个既有后端模板文案失败后 `30 passed, 1 deselected`；首次组合回归为 `51 passed, 1 failed`，唯一失败是 `assets/backend/AGENTS.md` 缺少既有期望文案，与本次迁移改动无关；新增 Python 文件通过 `py_compile` 和 120 字符行长检查。虚拟环境未安装 `ruff`，未擅自新增依赖。
+**影响范围**：新增 AppHub 看板迁移工作流，不改变现有 `app create/init/dev/push` 行为。
+**回滚方式**：删除迁移服务和命令注册，移除迁移测试及需求文档，并删除本条变更记录。
+
+---
+## 2026-09-17 AppHub 迁移交付闭环 - 区分合同验证与数据层交付
+
+**变更原因**：迁移任务可能在只完成 UI 和部分上游合同验证时被误报为完整交付，需要由机器门禁区分合同就绪、实现就绪和最终可交付状态。
+**改动点**：升级 `app migrate` 覆盖矩阵与状态输出，接入共享数据合同校验，增加实现状态、项目工件和前端占位检查；同步更新两个 AppHub Skill、需求文档、版本和回归测试。
+**验证结果**：`tests/app` 175 项通过；迁移与合同校验核心测试 33 项通过；两个 Skill 契约、安装和打包定向测试 30 项通过、1 项既有后端模板文案断言被排除；相关 Python 文件通过 `py_compile`，JSON 文件通过解析检查。当前半成品项目事故回归稳定返回 `delivery_ready=false` 和 `next_required_gate=data`。
+**影响范围**：影响迁移重构门禁及有真实数据需求的新建 AppHub 项目的最终交付校验；不改变 `app create/init/dev/push`、查询内核和认证流程。
+**回滚方式**：回滚迁移服务、共享合同校验模块、两个 Skill 版本及本条对应测试和文档。
 ---

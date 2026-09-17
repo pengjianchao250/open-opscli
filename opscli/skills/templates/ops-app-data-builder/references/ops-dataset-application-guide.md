@@ -60,11 +60,15 @@
 
 验证后为每个来源标记：
 
-- `candidate`：只有参考依据，尚未在线验证。
-- `verified`：当前身份在线元数据和少量真实查询均确认。
-- `blocked`：无权限、未返回、字段不完整、服务异常或运行时适配器缺失。
+- `candidate`：只有参考依据，尚未发起在线验证。
+- `verifying`：正在调用正式查询或执行合同给出的恢复流程。
+- `verified`：当前身份在线元数据和少量真实查询均确认；查询成功但零行仍属于本状态。
+- `degraded`：已实际调用，但临时服务错误、超时或上游异常导致本轮未完成。
+- `blocked`：正式能力不支持、权限缺失、业务口径无法确认或运行时适配器缺失。
 
-记录验证时间、验证方式、数据集真实名称、字段、粒度、时间、筛选、分页和空值行为。真实结果和导出文件不得提交源码。
+业务范围足以构造查询时，必须从 `candidate` 进入 `verifying` 并实际调用 `$ops-dataset-query`；不得因为用户没有提供 `dataset_alias`、`table_id` 或 `field_name` 而停止。规划合同返回正式 `recovery_command` 时按合同恢复一次并重新验证。认证外的 CLI/MCP 失败按 `ops-feedback` 规范处理；服务异常、超时和上游不可用进入 `degraded`，不得写成“尚未完成在线验证”的最终 `blocked`。
+
+记录验证时间、验证方式、数据集真实名称、字段、粒度、时间、筛选、分页、零行和空值行为。真实结果和导出文件不得提交源码。
 
 验证完成后必须把正式技术合同收敛为精确 `dataset_alias`、`table_id` 和 `field_name`。显示名、描述、中文业务词与 `global_alias` 只能作为候选线索；禁止使用关键词打分、`includes`、子串搜索或最相近字段回退生成运行时代码。存在多个相似字段时必须通过字段角色、口径和少量真实查询确认唯一字段，无法确认则标记 `blocked`。
 
@@ -114,11 +118,16 @@
 7. 分页、截断、新鲜度、超时、重试和空值处理。
 8. 站点 API、加工、存储、迁移、测试和阻塞项。
 
+同时生成 `docs/ops-app/data-contracts.json`。合同确认使用 `scripts/validate_data_contracts.py` 的 `contract` 模式，最终交付使用 `delivery --project-root <project-directory>`；后者要求真实数据产品同时满足 `contract_status=verified` 和 `implementation_status=verified`。`candidate`、`verifying`、`contract_verified_only`、`layout_only`、`not_started` 和 `in_progress` 只能存在于开发中间态；`verified`、`degraded` 和 `blocked` 必须满足各自证据合同。
+
 ## 10. 验收清单
 
 - [ ] 单次查询没有被扩展成站点数据工程任务。
 - [ ] 只有同时提供 `dashboard_session_get_context`、`dashboard-tools.v2` 且目标是上下文中的平台仪表盘对象时才转 Dashboard 专用 Skill；普通 AppHub 看板源码没有被误路由。
 - [ ] 候选来源和已验证合同有明确状态区分。
+- [ ] 清晰需求已经实际进入 `verifying` 并调用正式查询，未出现未尝试即 `blocked`。
+- [ ] 零行结果记录为 `verified + zero_rows`，没有被误判为失败或待接入。
+- [ ] 临时服务异常记录为 `degraded`，并且没有影响其他数据产品继续交付。
 - [ ] 数据集、字段和筛选来自当前在线元数据。
 - [ ] 正式查询使用精确 `dataset_alias`、`table_id` 和 `field_name`，不存在关键词打分、子串搜索、`global_alias` 回退或相似字段替换。
 - [ ] 查询组件只用于枚举和关联。
@@ -128,3 +137,4 @@
 - [ ] 固定同步具有批准适配器，或者被明确标记为 `blocked`。
 - [ ] 分页、截断、数据量和新鲜度已披露。
 - [ ] 真实查询结果、导出和凭证未进入源码。
+- [ ] `docs/ops-app/data-contracts.json` 已通过交付模式校验。

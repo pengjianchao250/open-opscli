@@ -11,7 +11,6 @@ import yaml
 from opscli.skills.manager import SkillsManager
 from opscli.skills.packaging import selected_skill_names, validate_release_manifest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 TEMPLATES_DIR = ROOT / "opscli" / "skills" / "templates"
 SKILL_NAME = "ops-app-data-builder"
@@ -43,8 +42,8 @@ def test_ops_app_data_builder_metadata_is_consistent():
     version = json.loads(VERSION_FILE.read_text(encoding="utf-8"))
 
     assert frontmatter["name"] == SKILL_NAME
-    assert frontmatter["metadata"]["version"] == "0.1.14"
-    assert version == {"name": SKILL_NAME, "version": "v0.1.14"}
+    assert frontmatter["metadata"]["version"] == "0.1.18"
+    assert version == {"name": SKILL_NAME, "version": "v0.1.19"}
     assert (SKILL_DIR / "agents" / "openai.yaml").exists()
     assert CONTRACT_FILE.exists()
     assert ROUTING_FILE.exists()
@@ -121,6 +120,63 @@ def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
         "只获取足以验证合同的少量样本",
     ):
         assert required in text
+
+
+def test_ops_app_data_builder_updates_migration_coverage_matrix() -> None:
+    """迁移数据层必须读取动态模块、回写合同证据并通过数据门禁。"""
+    text = SKILL_MD.read_text(encoding="utf-8")
+
+    for required in (
+        ".opscli/migration/current.json",
+        "coverage-matrix.json",
+        "dynamic=true",
+        "opscli app migrate verify-ui",
+        "当前迁移阶段至少是 `data_integration`",
+        "data_contract",
+        "candidate`、`verified`、`degraded`、`blocked`、`deferred_attachment`",
+        "FakeGateway 测试和线上真实查询必须分别记录",
+        "unblock_conditions",
+        "implementation_status",
+        "contract_verified_only",
+        "layout_only",
+        "全部未阻塞动态项",
+        "opscli app migrate export",
+        "opscli app migrate verify-data",
+    ):
+        assert required in text
+
+
+def test_ops_app_data_builder_requires_real_query_closure() -> None:
+    """清晰的真实数据需求必须查询、留证并通过交付校验。"""
+    skill = SKILL_MD.read_text(encoding="utf-8")
+    guide = APPLICATION_GUIDE_FILE.read_text(encoding="utf-8")
+    contract = CONTRACT_FILE.read_text(encoding="utf-8")
+    content = "\n".join((skill, guide, contract))
+
+    for required in (
+        "必须实际发起正式合同验证",
+        "不得在没有查询尝试的情况下直接生成最终 `blocked` 页面",
+        "`verifying`",
+        "`degraded`",
+        "查询成功但零行仍是 `verified`",
+        "docs/ops-app/data-contracts.json",
+        "scripts/validate_data_contracts.py",
+        "--mode contract",
+        "--mode delivery",
+        "--project-root",
+        "implementation_status=verified",
+        "implementation_artifacts",
+        "后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI",
+        "required_business_roles",
+        "not_attempted",
+        "not_validated",
+        "service_error",
+        "timeout",
+    ):
+        assert required in content
+
+    validator = SKILL_DIR / "scripts" / "validate_data_contracts.py"
+    assert validator.is_file()
 
 
 def test_ops_app_data_builder_requires_exact_ops_field_contracts():
@@ -265,6 +321,37 @@ def test_ops_app_data_builder_defines_data_layer_and_sqlite_outputs():
         "XLS/XLSX",
         "第一阶段只生成 Markdown 规范，不新增运行时 YAML",
         "Pydantic Schema 与前端类型的一致性",
+        "extract_inner_error()",
+        "data.inner_error.message",
+        "LIMIT_TOO_LARGE",
+        "不超过 `50000`",
+    ):
+        assert required in content
+
+
+def test_ops_app_data_builder_requires_exact_third_party_projection_contracts():
+    """第三方数据必须固化真实响应形状，并在快照前完成投影校验。"""
+    skill = SKILL_MD.read_text(encoding="utf-8")
+    contract = CONTRACT_FILE.read_text(encoding="utf-8")
+    routing = ROUTING_FILE.read_text(encoding="utf-8")
+    content = chr(10).join((skill, contract, routing))
+
+    for required in (
+        'schema_version: "1.1"',
+        "response_shape",
+        "shape_evidence",
+        "required_business_roles",
+        "source_field",
+        "source_path",
+        "result_field",
+        "data_type",
+        "validate_before_snapshot",
+        "degraded_preserve_snapshot",
+        "$.data.data[*]",
+        "currentAmazonPrice",
+        "currentSalesRank",
+        "columns + rows",
+        "不生成猜测的生产字段投影器",
     ):
         assert required in content
 
@@ -276,6 +363,20 @@ def test_ops_app_data_builder_contract_example_is_valid_json():
 
     assert example["product_key"] == "seller_sprite_competitor_analysis"
     assert example["source"] == "seller_sprite"
+    assert example["verification"]["shape_evidence"] == {
+        "records_path": "$.data.result.rows[*]",
+        "record_type": "array",
+        "observed_fields": ["商品标题", "价格", "月销量"],
+    }
+    assert example["technical_contract"]["response_shape"] == {
+        "records_path": "$.data.result.rows[*]",
+        "record_type": "array",
+        "columns_path": "$.data.result.columns",
+    }
+    assert example["technical_contract"]["projection_policy"] == {
+        "validate_before_snapshot": True,
+        "on_schema_mismatch": "degraded_preserve_snapshot",
+    }
     assert example["execution_mode"] == "async-job"
     assert example["source_execution"]["auth"] == "query-credentials"
     assert example["source_execution"]["auth_modes"] == ["viewer", "session", "local"]
@@ -291,6 +392,19 @@ def test_ops_app_data_builder_contract_example_is_valid_json():
     assert example["site_api"].startswith("GET /api/")
 
 
+def test_ops_app_data_builder_requires_project_identity_for_runtime_preview():
+    """数据层运行验收必须复用建站 Skill 的项目身份状态。"""
+    content = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
+
+    for required in (
+        "opscli app dev-status <project-root> --json",
+        "running=true",
+        "identity_verified=true",
+        "单独 HTTP 200",
+    ):
+        assert required in content
+
+
 def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path: Path):
     """通用 SkillsManager 和发行清单应完整支持新模板。"""
     problems = validate_release_manifest(TEMPLATES_DIR)
@@ -302,7 +416,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
     )
     templates = {item["name"]: item for item in manager.list_templates()}
 
-    assert templates[SKILL_NAME]["version"] == "v0.1.14"
+    assert templates[SKILL_NAME]["version"] == "v0.1.19"
     assert "ops-business-data-orchestrator" not in templates
 
     result = manager.install(SKILL_NAME, skills_dir=str(tmp_path / "skills"))
@@ -315,6 +429,7 @@ def test_ops_app_data_builder_is_discoverable_installable_and_declared(tmp_path:
         "references/data-layer-contract.md",
         "references/runtime-source-routing.md",
         "references/ops-dataset-application-guide.md",
+        "scripts/validate_data_contracts.py",
     ):
         assert (installed_path / relative).exists()
 

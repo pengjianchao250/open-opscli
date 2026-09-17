@@ -89,6 +89,8 @@ OPS 原始数据和基于 OPS 的加工结果如果持久化，必须写入带 `
 
 使用 `$ops-keepa` 验证正式场景、参数和少量返回样本。场景列表只用于合同验证或新增场景确认，不生成页面运行时动态场景发现逻辑。
 
+验证结果必须记录精确 `response_shape` 与脱敏 `shape_evidence`。商品场景的正式记录路径是 `$.data.data[*]`，记录类型是 `object`；页面需要的标题、当前价格和 BSR 分别绑定在线观察到的 `title`、`currentAmazonPrice`、`currentSalesRank`，不得继续按旧项目的 `data.products` 或相似字段猜测。
+
 ### 4.2 运行期
 
 站点后端只通过正式同步接口调用 Keepa：
@@ -111,13 +113,15 @@ Client 必须：
 - 为请求设置显式超时，只对幂等且允许重试的上游失败做有限重试。
 - 以规范化后的 `scenario + site + params` 生成 `request_hash`；`job_id`、`wait`、`force`、`reserve_tokens`、凭证和用户身份不进入哈希。
 
-Keepa 可以实时调用，也可以按新鲜度写入 `third_party_source_snapshot`。成功响应通过 `UNIQUE(owner_user_id, provider, request_hash)` 和 `UPSERT` 保存为当前用户私有快照。只有同一用户较新的 `source_fetched_at` 可以覆盖，失败不得清空该用户最后有效快照。
+Keepa 可以实时调用，也可以按新鲜度写入 `third_party_source_snapshot`。HTTP 状态和 `success` 成功后，必须先按合同提取记录、投影页面字段并校验全部 `required_business_roles`；只有 `validate_before_snapshot` 通过才执行 `UPSERT`。成功响应通过 `UNIQUE(owner_user_id, provider, request_hash)` 保存为当前用户私有快照。只有同一用户较新的 `source_fetched_at` 可以覆盖，路径或字段漂移按 `degraded_preserve_snapshot` 处理，不得清空该用户最后有效快照。
 
 ## 5. SellerSprite
 
 ### 5.1 开发期验证
 
 使用 `$ops-seller-sprite` 验证正式场景、参数、返回结构和少量样本。新增场景先确认正式场景列表和参数手册，不凭 SDK、CLI、MCP 或旧项目实现猜测 REST 合同。
+
+对于 `columns + rows` JSON 结果，合同必须记录 `columns_path`、`records_path`、`record_type: "array"`，并把在线响应中的正式列名写入 `shape_evidence.observed_fields`。每个业务字段都要声明精确 `source_field`、`source_path`、`result_field` 和 `data_type`；不得按列序猜测或用相似列名回退。
 
 ### 5.2 普通异步任务
 
@@ -130,7 +134,8 @@ POST /api/v1/seller-sprite/jobs
   或 POST /api/v1/seller-sprite/jobs/status
 → queued/running：继续查询，不重新提交
 → succeeded：GET /api/v1/seller-sprite/jobs/{job_id}/result
-→ JSON data.result 写入当前用户私有快照
+→ 按 response_shape 投影并校验 required_business_roles
+→ 校验通过后把 JSON data.result 写入当前用户私有快照
 → failed/cancelled：停止轮询并返回稳定错误
 ```
 
@@ -156,7 +161,9 @@ Listing Analysis 提交地址由当前环境 Base URL 与 `/api/v1/seller-sprite
 
 ### 5.4 JSON 与导出边界
 
-- JSON 任务成功后读取 `data.result` 并写入当前用户私有快照。
+- JSON 任务成功后读取 `data.result`，先完成精确投影与必填角色校验，再写入当前用户私有快照。
+- 返回路径、容器类型、列名或字段与合同不一致时标记 `degraded`，保留最后有效快照。
+- 在线验证处于 `degraded` 时只生成传输、任务、缓存和恢复基础设施，不生成猜测的生产字段投影器。
 - JSON 任务不得持久化冗余下载 URL。
 - XLS/XLSX 任务通过正式 export 合同返回文件信息。
 - XLS/XLSX、二进制内容和临时下载 URL 不写入 SQLite。
