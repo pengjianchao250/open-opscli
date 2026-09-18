@@ -368,7 +368,7 @@ traffic-extend, market-research, listing-analysis
 | `site` | string | 否 | `US` | 2-8 字符 |
 | `period` | string | 否 | `30d` | 1-32 字符，如 `30d`、`nearly`、`2026-08`、ABA 周结束日 |
 | `page_size` | integer | 否 | `100` | 1-100；部分场景固定使用 100 或只取第一页 |
-| `export_format` | string | 否 | `xls` | `xls`、`xlsx`、`json` |
+| `export_format` | string | 否 | `json` | `xls`、`xlsx`、`json` |
 | `job_id` | string | 否 | 自动生成 | 规则与 Keepa `job_id` 相同 |
 
 请求成功返回 HTTP 202。`state=queued` 或 `state=running` 只表示已受理，不表示采集完成。
