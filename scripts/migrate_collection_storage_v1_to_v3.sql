@@ -77,6 +77,18 @@ WHERE request_params IS NOT NULL
       )
   );
 
+-- SellerSprite 结果是平台公共数据。历史版本曾按专属账号写入
+-- dedicated:*，升级后统一迁移到共享作用域。
+UPDATE collection_runs
+SET cache_scope = 'shared_pool',
+    request_params = JSON_SET(
+        COALESCE(request_params, JSON_OBJECT()),
+        '$._cache.cache_scope',
+        'shared_pool'
+    )
+WHERE source_system = 'seller_sprite'
+  AND cache_scope LIKE 'dedicated:%';
+
 SET @collection_migration_sql := IF(
     EXISTS(
         SELECT 1

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ CacheMode = Literal["prefer_cache", "live"]
 ENV_RESULT_CACHE_ENABLED = "OPSCLI_COLLECTION_RESULT_CACHE_ENABLED"
 ENV_RESULT_CACHE_TTL_SECONDS = "OPSCLI_COLLECTION_RESULT_CACHE_TTL_SECONDS"
 DEFAULT_RESULT_CACHE_TTL_SECONDS = 86400
+logger = logging.getLogger(__name__)
 
 _cache_hit_context: ContextVar[bool] = ContextVar(
     "collection_result_cache_hit",
@@ -142,7 +144,17 @@ async def find_cached_result(
             ttl_seconds=result_cache_ttl_seconds(),
             include_datasets=include_datasets,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "采集结果缓存读取失败，降级实时执行：source_system=%s "
+            "scenario=%s site=%s cache_key=%s error_type=%s",
+            source_system,
+            scenario,
+            site,
+            str(cache_key)[:12],
+            type(exc).__name__,
+            exc_info=True,
+        )
         return None
 
 

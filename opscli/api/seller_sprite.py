@@ -47,7 +47,7 @@ class SellerSpriteRunRequest(BaseModel):
     site: str = Field(default="US", min_length=2, max_length=8)
     period: str = Field(default="30d", min_length=1, max_length=32)
     page_size: int = Field(default=100, ge=1, le=100)
-    export_format: SellerSpriteExportFormat = "xls"
+    export_format: SellerSpriteExportFormat = "json"
     job_id: SellerSpriteJobId | None = None
 
 
