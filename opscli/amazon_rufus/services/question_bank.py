@@ -31,14 +31,14 @@ class QuestionBankService:
         templates = [self._parse_template(item) for item in items]
         question_count = sum(len(template.questions) for template in templates)
         if question_count == 0:
-            raise QuestionBankNotReadyError("题库为空，请执行 `opscli skills upgrade ops-amazon-rufus` 同步默认题库")
+            raise QuestionBankNotReadyError("题库为空，请执行 `opscli skills upgrade ops-amazon-rufus-or-alexa` 同步默认题库")
         return templates
 
     def _resolve_question_templates_path(self) -> Path:
         """解析题库文件路径。"""
         if self.skills_dir:
-            return self.skills_dir / "ops-amazon-rufus" / "data" / "question_templates.json"
-        return Path.cwd() / ".agents" / "skills" / "ops-amazon-rufus" / "data" / "question_templates.json"
+            return self.skills_dir / "ops-amazon-rufus-or-alexa" / "data" / "question_templates.json"
+        return Path.cwd() / ".agents" / "skills" / "ops-amazon-rufus-or-alexa" / "data" / "question_templates.json"
 
     def _parse_template(self, item: dict) -> QuestionTemplate:
         """解析单个模板。"""
@@ -64,6 +64,6 @@ class QuestionBankService:
     def _not_ready(self) -> QuestionBankNotReadyError:
         """构造可操作的缺失题库错误。"""
         return QuestionBankNotReadyError(
-            "题库未就绪，请先执行 `opscli skills install ops-amazon-rufus`，"
-            "再执行 `opscli skills upgrade ops-amazon-rufus`"
+            "题库未就绪，请先执行 `opscli skills install ops-amazon-rufus-or-alexa`，"
+            "再执行 `opscli skills upgrade ops-amazon-rufus-or-alexa`"
         )

@@ -15,7 +15,7 @@
 - [x] 3. 同步文档和指引
   - [x] 3.1 更新安装后 next_steps。
   - [x] 3.2 更新模板 Skill `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`。
-  - [x] 3.3 同步 `.agents/skills/ops-amazon-rufus` 副本。
+  - [x] 3.3 同步 `.agents/skills/ops-amazon-rufus-or-alexa` 副本。
   - [x] 3.4 追加 `docs/change-log-pending.md`。
 
 - [x] 4. 验证

@@ -44,7 +44,7 @@ def test_country_map_rejects_unknown_country():
 
 
 def test_question_bank_loads_merged_templates(tmp_path: Path):
-    data_dir = tmp_path / "ops-amazon-rufus" / "data"
+    data_dir = tmp_path / "ops-amazon-rufus-or-alexa" / "data"
     data_dir.mkdir(parents=True)
     (data_dir / "question_templates.json").write_text(
         json.dumps(
@@ -81,13 +81,13 @@ def test_question_bank_missing_file_raises_actionable_error(tmp_path: Path):
     with pytest.raises(QuestionBankNotReadyError) as exc:
         bank.load_templates()
 
-    assert "opscli skills install ops-amazon-rufus" in str(exc.value)
-    assert "opscli skills upgrade ops-amazon-rufus" in str(exc.value)
+    assert "opscli skills install ops-amazon-rufus-or-alexa" in str(exc.value)
+    assert "opscli skills upgrade ops-amazon-rufus-or-alexa" in str(exc.value)
 
 
 def test_question_bank_rejects_empty_items(tmp_path: Path):
     # 空题库会导致 get 静默输出 0 个问题，必须提前失败。
-    data_dir = tmp_path / "ops-amazon-rufus" / "data"
+    data_dir = tmp_path / "ops-amazon-rufus-or-alexa" / "data"
     data_dir.mkdir(parents=True)
     (data_dir / "question_templates.json").write_text('{"items": []}', encoding="utf-8")
 
@@ -100,7 +100,7 @@ def test_question_bank_rejects_empty_items(tmp_path: Path):
 
 
 def test_manager_renders_asin_placeholder_from_question_bank(tmp_path: Path):
-    data_dir = tmp_path / "ops-amazon-rufus" / "data"
+    data_dir = tmp_path / "ops-amazon-rufus-or-alexa" / "data"
     data_dir.mkdir(parents=True)
     (data_dir / "question_templates.json").write_text(
         json.dumps(

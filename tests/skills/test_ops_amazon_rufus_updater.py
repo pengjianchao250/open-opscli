@@ -41,17 +41,44 @@ def _question_template_response(url: str) -> httpx.Response:
     )
 
 
+def _record(tmp_path: Path, version: str = "v0.0.0") -> SkillRecord:
+    """创建隔离的 Rufus Skill 记录。"""
+    skill_root = tmp_path / "ops-amazon-rufus-or-alexa"
+    data_dir = skill_root / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    version_file = data_dir / "VERSION.json"
+    version_file.write_text(json.dumps({"name": "ops-amazon-rufus-or-alexa", "version": version}), encoding="utf-8")
+    return SkillRecord(
+        name="ops-amazon-rufus-or-alexa",
+        version=version,
+        runtime="codex",
+        root=skill_root,
+        version_file=version_file,
+    )
+
+
+def _patch_rufus_http(monkeypatch, builtin_dir: Path) -> None:
+    """隔离题库接口和内置模板目录。"""
+    monkeypatch.setattr("opscli.skills.sync.updater.get_builtin_templates_dir", lambda: builtin_dir)
+    monkeypatch.setattr("opscli.skills.sync.updater.OPS_URL", "https://ops.example.com/api")
+    monkeypatch.setattr("opscli.skills.sync.updater.AuthClient", lambda: DummyAuthClient())
+    monkeypatch.setattr(
+        "opscli.skills.sync.updater.httpx.get",
+        lambda url, **kwargs: _question_template_response(url),
+    )
+
+
 def test_upgrade_ops_amazon_rufus_writes_merged_question_templates(tmp_path: Path, monkeypatch):
-    skill_root = tmp_path / "ops-amazon-rufus"
+    skill_root = tmp_path / "ops-amazon-rufus-or-alexa"
     data_dir = skill_root / "data"
     data_dir.mkdir(parents=True)
     (data_dir / "VERSION.json").write_text(
-        '{"name":"ops-amazon-rufus","version":"v0.0.0"}',
+        '{"name":"ops-amazon-rufus-or-alexa","version":"v0.0.0"}',
         encoding="utf-8",
     )
 
     record = SkillRecord(
-        name="ops-amazon-rufus",
+        name="ops-amazon-rufus-or-alexa",
         version="v0.0.0",
         runtime="codex",
         root=skill_root,
@@ -82,7 +109,10 @@ def test_upgrade_ops_amazon_rufus_writes_merged_question_templates(tmp_path: Pat
         "follow_redirects": True,
     }
     assert result.updated is True
-    assert result.to_version == "v0.0.1"
+    builtin_version = json.loads(
+        (Path("opscli/skills/templates") / record.name / "data" / "VERSION.json").read_text(encoding="utf-8")
+    )["version"]
+    assert result.to_version == builtin_version
     assert json.loads((data_dir / "question_templates.json").read_text(encoding="utf-8")) == {
         "items": [
             {
@@ -100,19 +130,72 @@ def test_upgrade_ops_amazon_rufus_writes_merged_question_templates(tmp_path: Pat
     assert not (data_dir / "questions").exists()
 
 
+def test_upgrade_ops_amazon_rufus_uses_newest_builtin_version_and_preserves_metadata(
+    tmp_path: Path,
+    monkeypatch,
+):
+    """未提供远端版本时跟随内置版本，并保留已有版本元数据。"""
+    builtin_dir = tmp_path / "builtin"
+    builtin_version_file = builtin_dir / "ops-amazon-rufus-or-alexa" / "data" / "VERSION.json"
+    builtin_version_file.parent.mkdir(parents=True)
+    builtin_version_file.write_text('{"name":"ops-amazon-rufus-or-alexa","version":"v1.2.0"}', encoding="utf-8")
+    record = _record(tmp_path, "v1.1.0")
+    payload = json.loads(record.version_file.read_text(encoding="utf-8"))
+    payload["data_state"] = "ready"
+    record.version_file.write_text(json.dumps(payload), encoding="utf-8")
+    _patch_rufus_http(monkeypatch, builtin_dir)
+
+    result = SkillsUpdater().upgrade_ops_amazon_rufus(record)
+
+    assert result.to_version == "v1.2.0"
+    saved = json.loads(record.version_file.read_text(encoding="utf-8"))
+    assert saved["version"] == "v1.2.0"
+    assert saved["data_state"] == "ready"
+
+
+def test_upgrade_ops_amazon_rufus_does_not_downgrade_installed_version(tmp_path: Path, monkeypatch):
+    """保留较新的已安装版本，同时仍刷新题库。"""
+    builtin_dir = tmp_path / "builtin"
+    builtin_version_file = builtin_dir / "ops-amazon-rufus-or-alexa" / "data" / "VERSION.json"
+    builtin_version_file.parent.mkdir(parents=True)
+    builtin_version_file.write_text('{"name":"ops-amazon-rufus-or-alexa","version":"v0.0.3"}', encoding="utf-8")
+    record = _record(tmp_path, "v9.9.9")
+    (record.root / "data" / "question_templates.json").write_text('{"items":[]}', encoding="utf-8")
+    _patch_rufus_http(monkeypatch, builtin_dir)
+
+    result = SkillsUpdater().upgrade_ops_amazon_rufus(record)
+
+    assert result.to_version == "v9.9.9"
+    assert result.updated is True
+    assert json.loads(record.version_file.read_text(encoding="utf-8"))["version"] == "v9.9.9"
+    saved_questions = json.loads((record.root / "data" / "question_templates.json").read_text(encoding="utf-8"))
+    assert saved_questions["items"][0]["questions"][0]["id"] == 3172
+
+
+def test_upgrade_ops_amazon_rufus_preserves_version_without_builtin_template(tmp_path: Path, monkeypatch):
+    """精简安装不含内置模板时保留本地版本，题库仍可更新。"""
+    record = _record(tmp_path, "v1.3.0")
+    _patch_rufus_http(monkeypatch, tmp_path / "missing_builtin")
+
+    result = SkillsUpdater().upgrade_ops_amazon_rufus(record)
+
+    assert result.to_version == "v1.3.0"
+    assert result.updated is True
+
+
 def test_upgrade_ops_amazon_rufus_uses_fixed_question_template_path(
     tmp_path: Path,
     monkeypatch,
 ):
-    skill_root = tmp_path / "ops-amazon-rufus"
+    skill_root = tmp_path / "ops-amazon-rufus-or-alexa"
     data_dir = skill_root / "data"
     data_dir.mkdir(parents=True)
     (data_dir / "VERSION.json").write_text(
-        '{"name":"ops-amazon-rufus","version":"v0.0.0"}',
+        '{"name":"ops-amazon-rufus-or-alexa","version":"v0.0.0"}',
         encoding="utf-8",
     )
     record = SkillRecord(
-        name="ops-amazon-rufus",
+        name="ops-amazon-rufus-or-alexa",
         version="v0.0.0",
         runtime="codex",
         root=skill_root,
@@ -145,12 +228,12 @@ def test_upgrade_ops_amazon_rufus_uses_fixed_question_template_path(
 
 
 def test_upgrade_ops_amazon_rufus_rejects_empty_question_templates(tmp_path: Path, monkeypatch):
-    skill_root = tmp_path / "ops-amazon-rufus"
+    skill_root = tmp_path / "ops-amazon-rufus-or-alexa"
     data_dir = skill_root / "data"
     data_dir.mkdir(parents=True)
 
     record = SkillRecord(
-        name="ops-amazon-rufus",
+        name="ops-amazon-rufus-or-alexa",
         version="v0.0.0",
         runtime="codex",
         root=skill_root,
@@ -181,11 +264,11 @@ def test_upgrade_ops_amazon_rufus_rejects_empty_question_templates(tmp_path: Pat
 def test_upgrade_dispatches_ops_amazon_rufus(tmp_path: Path, monkeypatch):
     manager = SkillsManager()
     record = SkillRecord(
-        name="ops-amazon-rufus",
+        name="ops-amazon-rufus-or-alexa",
         version="v0.0.0",
         runtime="codex",
-        root=tmp_path / "ops-amazon-rufus",
-        version_file=tmp_path / "ops-amazon-rufus" / "data" / "VERSION.json",
+        root=tmp_path / "ops-amazon-rufus-or-alexa",
+        version_file=tmp_path / "ops-amazon-rufus-or-alexa" / "data" / "VERSION.json",
     )
     monkeypatch.setattr(manager, "list_skills", lambda **kwargs: [record])
     monkeypatch.setattr(
@@ -202,22 +285,22 @@ def test_upgrade_dispatches_ops_amazon_rufus(tmp_path: Path, monkeypatch):
         ),
     )
 
-    result = manager.upgrade(name="ops-amazon-rufus", cwd=tmp_path)
+    result = manager.upgrade(name="ops-amazon-rufus-or-alexa", cwd=tmp_path)
 
     payload = result.to_dict()
-    assert payload["updated"][0]["name"] == "ops-amazon-rufus"
+    assert payload["updated"][0]["name"] == "ops-amazon-rufus-or-alexa"
     assert payload["updated"][0]["field_count"] == 1
 
 
 def test_ops_amazon_rufus_template_json_files_do_not_have_bom():
-    template_dir = Path("opscli/skills/templates/ops-amazon-rufus/data")
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus-or-alexa/data")
 
     for path in [template_dir / "VERSION.json", template_dir / "question_templates.json"]:
         assert path.read_bytes()[:3] != b"\xef\xbb\xbf"
 
 
 def test_ops_amazon_rufus_template_uses_mcp_boundary():
-    template_dir = Path("opscli/skills/templates/ops-amazon-rufus")
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus-or-alexa")
 
     assert list(template_dir.rglob("*.py")) == []
     assert (template_dir / "references" / "rufus-mcp-workflow.md").exists()
@@ -322,8 +405,8 @@ def test_ops_amazon_rufus_template_uses_mcp_boundary():
 def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
     """约束 Agent 成对使用本次 Rufus 获取返回的报告路径和 URL。"""
     skill_dirs = [
-        Path("opscli/skills/templates/ops-amazon-rufus"),
-        Path(".agents/skills/ops-amazon-rufus"),
+        Path("opscli/skills/templates/ops-amazon-rufus-or-alexa"),
+        Path(".agents/skills/ops-amazon-rufus-or-alexa"),
     ]
 
     for skill_dir in skill_dirs:
@@ -351,8 +434,8 @@ def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
 
 def test_ops_amazon_rufus_template_matches_installed_copy():
     """模板契约和仓库安装副本必须完全一致。"""
-    template_dir = Path("opscli/skills/templates/ops-amazon-rufus")
-    installed_dir = Path(".agents/skills/ops-amazon-rufus")
+    template_dir = Path("opscli/skills/templates/ops-amazon-rufus-or-alexa")
+    installed_dir = Path(".agents/skills/ops-amazon-rufus-or-alexa")
 
     for relative_path in [
         Path("SKILL.md"),
@@ -387,8 +470,8 @@ def test_ops_amazon_rufus_template_matches_installed_copy():
 def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():
     """OPS 平台 Cookie 鉴权失败按新规则进入 MCP 登录采集。"""
     skill_dirs = [
-        Path("opscli/skills/templates/ops-amazon-rufus"),
-        Path(".agents/skills/ops-amazon-rufus"),
+        Path("opscli/skills/templates/ops-amazon-rufus-or-alexa"),
+        Path(".agents/skills/ops-amazon-rufus-or-alexa"),
     ]
 
     for skill_dir in skill_dirs:
@@ -413,8 +496,8 @@ def test_ops_amazon_rufus_docs_route_platform_cookie_auth_to_watch_login():
 def test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry():
     """Rufus 回答无效时必须按 Skill 规则改写问题并有限重试。"""
     skill_dirs = [
-        Path("opscli/skills/templates/ops-amazon-rufus"),
-        Path(".agents/skills/ops-amazon-rufus"),
+        Path("opscli/skills/templates/ops-amazon-rufus-or-alexa"),
+        Path(".agents/skills/ops-amazon-rufus-or-alexa"),
     ]
 
     for skill_dir in skill_dirs:
@@ -445,8 +528,8 @@ def test_ops_amazon_rufus_docs_require_answer_quality_rewrite_retry():
 def test_ops_amazon_rufus_docs_limit_watch_login_once_per_skill_call():
     """同一次 Skill 调用内所有登录采集入口共享 watch_login 单次触发状态。"""
     skill_dirs = [
-        Path("opscli/skills/templates/ops-amazon-rufus"),
-        Path(".agents/skills/ops-amazon-rufus"),
+        Path("opscli/skills/templates/ops-amazon-rufus-or-alexa"),
+        Path(".agents/skills/ops-amazon-rufus-or-alexa"),
     ]
 
     for skill_dir in skill_dirs:

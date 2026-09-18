@@ -2,7 +2,7 @@
 
 ## 研究目标
 
-本轮研究聚焦 `ops-amazon-rufus` Skill 的回答质量兜底能力：当 Rufus 获取完成但答案为空、拒答、答非所问，或复杂问题只得到商品详情类回答时，Agent 需要改写问题并重新请求 Rufus；多问题仍在同一个 Rufus 对话中处理，每个问题最多 5 次。
+本轮研究聚焦 `ops-amazon-rufus-or-alexa` Skill 的回答质量兜底能力：当 Rufus 获取完成但答案为空、拒答、答非所问，或复杂问题只得到商品详情类回答时，Agent 需要改写问题并重新请求 Rufus；多问题仍在同一个 Rufus 对话中处理，每个问题最多 5 次。
 
 本轮补充排查亚马逊 Rufus 登录态失效时的页面反复打开问题：`watch_login` 本身会打开登录页，检测到登录后再打开目标商品页捕获 `/rufus/cl/streaming`。商品页打开一次是预期行为；问题在于 Skill 多个错误分支都可再次调用 `amazon_rufus_watch_login`，原流程只记录 `login_recovery_attempted`，无法限制 OPS 401、登录态缺失、旧 content、headless 恢复等分支的总登录采集次数。同时浏览器启动参数包含 `--auto-open-devtools-for-tabs`，会额外打开 DevTools 页签。
 
@@ -12,8 +12,8 @@
 
 | 文件 | 发现 |
 |---|---|
-| `.agents/skills/ops-amazon-rufus/SKILL.md` | 原流程把 `answer_count=0` 当正常 0 答案报告处理。 |
-| `opscli/skills/templates/ops-amazon-rufus/SKILL.md` | 模板版同样缺少回答质量判断和问题改写重试。 |
+| `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md` | 原流程把 `answer_count=0` 当正常 0 答案报告处理。 |
+| `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md` | 模板版同样缺少回答质量判断和问题改写重试。 |
 | `references/rufus-mcp-workflow.md` | 已有 MCP-first、登录恢复、CLI fallback 和报告新鲜度规则，但没有语义级回答质量判断。 |
 | `opscli/amazon_rufus/services/manager.py` | 后端只负责按问题请求 Rufus 和组装结果，不适合承载子 agent 语义改写。 |
 | `opscli/amazon_rufus/services/mcp_manager.py` | MCP 响应只返回 `report_path`、问题数和答案数等脱敏摘要。 |

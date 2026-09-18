@@ -4,19 +4,19 @@
 
 ## 需求背景
 
-用户要求在 `ops-amazon-rufus` Skill 流程中增加远程授权判断：
+用户要求在 `ops-amazon-rufus-or-alexa` Skill 流程中增加远程授权判断：
 
 - 当 Rufus 需要 Amazon 登录，或当前国家站点尚未询问过用户是否允许远程保存登录态时，先询问用户。
 - 用户同意后，保存同意结果到 `remote-consent`，后续优先读取该配置，并走 MCP/headless 方式；完成登录态采集后关闭浏览器。
 - 用户拒绝后，也保存拒绝结果到 `remote-consent`；登录采集和关闭浏览器流程仍复用当前通用能力，但 Rufus 获取阶段改为调用本机 Rufus CLI，不走 MCP。
 - Skill 文案需要优化，不能直接照搬用户原始提示。
-- 完成实现后需要安装 Skill 到 `.agents/skills`，并用 `$ops-amazon-rufus 帮我分析美国站，B0B1MLVMY5...` 做全面测试。
+- 完成实现后需要安装 Skill 到 `.agents/skills`，并用 `$ops-amazon-rufus-or-alexa 帮我分析美国站，B0B1MLVMY5...` 做全面测试。
 
 ## 本地现状
 
 ### 当前 Skill 主线
 
-当前 `opscli/skills/templates/ops-amazon-rufus/SKILL.md` 的主流程是：
+当前 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md` 的主流程是：
 
 1. 解析 ASIN、国家站点和问题来源。
 2. 默认调用 `amazon_rufus_get` MCP 工具。

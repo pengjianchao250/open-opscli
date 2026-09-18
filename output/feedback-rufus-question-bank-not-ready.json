@@ -2,14 +2,14 @@
   "source": "cli",
   "feedback_type": "bug",
   "severity": "medium",
-  "title": "amazon-rufus get-backend failed because ops-amazon-rufus question bank is empty",
+  "title": "amazon-rufus get-backend failed because ops-amazon-rufus-or-alexa question bank is empty",
   "content": "Running amazon-rufus get-backend with --skills-dir .agents/skills failed because the local default question bank is empty. The user had already captured Rufus streaming state successfully, so the failure is isolated to default question bank readiness rather than Amazon/Rufus login state.",
   "payload": {
-    "expected": "get-backend should load default questions from .agents/skills/ops-amazon-rufus or provide a clear recovery path.",
+    "expected": "get-backend should load default questions from .agents/skills/ops-amazon-rufus-or-alexa or provide a clear recovery path.",
     "actual": "QUESTION_BANK_NOT_READY: question bank is empty",
-    "safe_follow_up": "Use -q to pass explicit questions, or fix opscli skills upgrade ops-amazon-rufus so the default question templates can be synchronized."
+    "safe_follow_up": "Use -q to pass explicit questions, or fix opscli skills upgrade ops-amazon-rufus-or-alexa so the default question templates can be synchronized."
   },
-  "skill_name": "ops-amazon-rufus",
+  "skill_name": "ops-amazon-rufus-or-alexa",
   "skill_version": "v0.0.1",
   "command_name": "uv run opscli amazon-rufus get-backend",
   "context": {
@@ -28,9 +28,9 @@
           "skills_dir": ".agents/skills",
           "question_source": "default question bank"
         },
-        "error_message": "QUESTION_BANK_NOT_READY: 题库为空，请执行 `opscli skills upgrade ops-amazon-rufus` 同步默认题库",
-        "reason": "The local ops-amazon-rufus default question_templates.json appears to be empty or not synchronized. Based on prior context, opscli skills upgrade ops-amazon-rufus may currently return a 404 for the remote default-question-templates endpoint.",
-        "fix_suggestion": "Use explicit -q questions to bypass the default bank for this run; separately fix or deploy the remote ops-amazon-rufus question template upgrade endpoint so skills upgrade can populate the local data file."
+        "error_message": "QUESTION_BANK_NOT_READY: 题库为空，请执行 `opscli skills upgrade ops-amazon-rufus-or-alexa` 同步默认题库",
+        "reason": "The local ops-amazon-rufus-or-alexa default question_templates.json appears to be empty or not synchronized. Based on prior context, opscli skills upgrade ops-amazon-rufus-or-alexa may currently return a 404 for the remote default-question-templates endpoint.",
+        "fix_suggestion": "Use explicit -q questions to bypass the default bank for this run; separately fix or deploy the remote ops-amazon-rufus-or-alexa question template upgrade endpoint so skills upgrade can populate the local data file."
       }
     ],
     "successful_calls": [

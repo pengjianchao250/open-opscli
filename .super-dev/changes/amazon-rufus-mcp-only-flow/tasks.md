@@ -13,16 +13,16 @@
 
 ## 2. Skill 文档改写
 
-- [x] 更新 `opscli/skills/templates/ops-amazon-rufus/SKILL.md`。
-- [x] 更新 `opscli/skills/templates/ops-amazon-rufus/README.md`。
-- [x] 更新 `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`。
-- [x] 同步 `.agents/skills/ops-amazon-rufus/` 对应文件。
+- [x] 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`。
+- [x] 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`。
+- [x] 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`。
+- [x] 同步 `.agents/skills/ops-amazon-rufus-or-alexa/` 对应文件。
 - [x] 删除拒绝远程授权后的 CLI fallback。
 - [x] 删除 MCP 工具不可见时改用 CLI 的提示。
 
 ## 3. 安装引导调整
 
-- [x] 更新 `opscli/skills/commands/cli.py` 中 `ops-amazon-rufus` 安装后 next_steps。
+- [x] 更新 `opscli/skills/commands/cli.py` 中 `ops-amazon-rufus-or-alexa` 安装后 next_steps。
 - [x] 引导内容只出现 MCP 工具链。
 
 ## 4. 测试更新

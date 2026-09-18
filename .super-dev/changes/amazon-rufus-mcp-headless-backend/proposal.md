@@ -10,7 +10,7 @@
 2. 新增 Rufus 后端请求凭证模型与 provider，内部结构对齐 `url/headers/cookies/payload_template`。
 3. 新增或扩展 `RufusManager` 后端入口，复用现有题库解析、多问题解析、headless 捕获、SSE 请求与报告写入能力。
 4. 默认 MCP 获取不再调用 `BrowserAttachService` 或 Chrome CDP。
-5. 更新 `ops-amazon-rufus` Skill/README/reference 默认流程，避免继续推荐 `launch_if_needed=True` 作为默认获取方式。
+5. 更新 `ops-amazon-rufus-or-alexa` Skill/README/reference 默认流程，避免继续推荐 `launch_if_needed=True` 作为默认获取方式。
 6. 保留旧 CDP 路径作为兼容能力，不在本轮删除。
 
 ## 非目标

@@ -118,7 +118,7 @@ amazon_reviews_get({"asin":"<NORMALIZED_ASIN>"})
 
 本 Skill 只覆盖当前宿主公开搜索或 AI Chat/browser-extension 的单 ASIN 评论读取。完整导出、批量 ASIN、历史趋势、跨站点对比、星级或日期筛选需要另行提供支持；遇到这些请求时说明当前公开合同，不擅自扩展参数。
 
-参考 `ops-amazon-rufus` 的模板组织、结果只信任本次调用和敏感信息脱敏原则，但不复制 Rufus 专属的 remote-consent、登录监听、题库、报告路径或 CLI fallback 流程。
+参考 `ops-amazon-rufus-or-alexa` 的模板组织、结果只信任本次调用和敏感信息脱敏原则，但不复制 Rufus 专属的 remote-consent、登录监听、题库、报告路径或 CLI fallback 流程。
 
 ## 文件边界
 

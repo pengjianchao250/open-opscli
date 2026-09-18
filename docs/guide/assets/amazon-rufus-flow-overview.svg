@@ -35,7 +35,7 @@
   <text class="small" x="124" y="278">提出 ASIN、国家、问题</text>
 
   <rect class="box-yellow" x="405" y="205" width="260" height="112"/>
-  <text class="label" x="448" y="238">ops-amazon-rufus Skill</text>
+  <text class="label" x="448" y="238">ops-amazon-rufus-or-alexa Skill</text>
   <text class="small" x="430" y="265">保存默认题库和编排规则</text>
   <text class="small" x="430" y="290">本身不执行 Rufus 抓取</text>
 

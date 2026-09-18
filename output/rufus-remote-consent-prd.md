@@ -4,7 +4,7 @@
 
 ## 目标
 
-为 `ops-amazon-rufus` 增加远程授权同意流程，让 Agent 在保存或复用可供 MCP/headless 服务端链路运行的 Amazon 登录态前，先取得用户明确同意，并把选择持久化到 `remote-consent.json`。
+为 `ops-amazon-rufus-or-alexa` 增加远程授权同意流程，让 Agent 在保存或复用可供 MCP/headless 服务端链路运行的 Amazon 登录态前，先取得用户明确同意，并把选择持久化到 `remote-consent.json`。
 
 ## 非目标
 
@@ -87,7 +87,7 @@ Skill 中应使用优化后的中文文案，而不是照搬原始需求。建�
 - Skill 文档能清晰区分同意、拒绝和未知三种状态。
 - 代码测试覆盖 consent 读写、country 匹配、同意路径、拒绝路径、敏感字段隐藏。
 - 代码测试覆盖 Rufus CLI 新命令复用 `RufusManager.get_backend()`，并验证 CLI 输出不会包含 seed、cookie、headers、payload 或 `storage_state`。
-- 安装到 `.agents/skills` 后，子代理使用指定 `$ops-amazon-rufus` 提示词能按 consent 配置选择正确路径。
+- 安装到 `.agents/skills` 后，子代理使用指定 `$ops-amazon-rufus-or-alexa` 提示词能按 consent 配置选择正确路径。
 
 ## 边界场景
 

@@ -1,6 +1,6 @@
 # Amazon Rufus 功能流程图
 
-本文用流程图梳理 `opscli amazon-rufus`、`amazon_rufus_*` MCP Tool、`ops-amazon-rufus` Skill、登录态保存、题库读取、报告生成和常见错误恢复之间的关系。
+本文用流程图梳理 `opscli amazon-rufus`、`amazon_rufus_*` MCP Tool、`ops-amazon-rufus-or-alexa` Skill、登录态保存、题库读取、报告生成和常见错误恢复之间的关系。
 
 > 说明：当前 IDE 的 Mermaid 预览已接管代码块但没有渲染内容，所以本文改为嵌入普通 SVG 图片。SVG 不依赖 Mermaid 插件，Markdown 预览应该可以直接显示。
 

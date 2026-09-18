@@ -76,12 +76,12 @@ def test_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
     class DummyInstallResult:
         def to_dict(self):
             return {
-                "name": "ops-amazon-rufus",
+                "name": "ops-amazon-rufus-or-alexa",
                 "version": "v0.0.0",
                 "installed_paths": [
                     {
                         "tool": "codex",
-                        "path": "/tmp/.agents/skills/ops-amazon-rufus",
+                        "path": "/tmp/.agents/skills/ops-amazon-rufus-or-alexa",
                     }
                 ],
             }
@@ -92,7 +92,7 @@ def test_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch):
 
     monkeypatch.setattr("opscli.skills.commands.cli.SkillsManager", lambda: DummyManager())
 
-    result = runner.invoke(app, ["install", "ops-amazon-rufus"])
+    result = runner.invoke(app, ["install", "ops-amazon-rufus-or-alexa"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -125,12 +125,12 @@ def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch
 
         def to_dict(self):
             return {
-                "name": "ops-amazon-rufus",
+                "name": "ops-amazon-rufus-or-alexa",
                 "version": "v0.0.0",
                 "installed_paths": [
                     {
                         "tool": "codex",
-                        "path": "/tmp/.agents/skills/ops-amazon-rufus",
+                        "path": "/tmp/.agents/skills/ops-amazon-rufus-or-alexa",
                     }
                 ],
             }
@@ -142,10 +142,11 @@ def test_interactive_install_ops_amazon_rufus_outputs_login_guidance(monkeypatch
             return DummyInstallResult()
 
     monkeypatch.setattr("opscli.skills.commands.cli.SkillsManager", lambda: DummyManager())
-    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_skills", lambda manager, yes=False: ["ops-amazon-rufus"])
+    monkeypatch.setattr("opscli.skills.commands.cli._tui_select_skills", lambda manager, yes=False: ["ops-amazon-rufus-or-alexa"])
     monkeypatch.setattr("opscli.skills.commands.cli._tui_select_targets", lambda manager, yes=False: None)
 
-    result = runner.invoke(app, ["install"])
+    # 交互安装默认只输出汇总，显式开启完整结果才能校验登录引导。
+    result = runner.invoke(app, ["install", "--verbose"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout.splitlines()[-1])

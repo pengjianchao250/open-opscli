@@ -18,6 +18,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -237,3 +238,172 @@ def test_cli_hint_when_skills_dir_and_runtime_both_given(monkeypatch, tmp_path: 
     # stdout 仍是可解析的纯 JSON，提示不能混进去
     assert json.loads(result.stdout)["success"] is True
     assert "--runtime" in result.output and "被忽略" in result.output
+
+
+def _write_existing_skill(root: Path, version: str, remote_identifier: str | None = _IDENTIFIER) -> Path:
+    """创建带自定义内容的旧副本，供断言跳过后内容仍保留。"""
+    skill_dir = root / _SKILL_NAME
+    (skill_dir / "data").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("保留用户修改", encoding="utf-8")
+    metadata = {"name": _SKILL_NAME, "version": version}
+    if remote_identifier is not None:
+        metadata["remote_identifier"] = remote_identifier
+    (skill_dir / "data" / "VERSION.json").write_text(json.dumps(metadata), encoding="utf-8")
+    return skill_dir
+
+
+@pytest.mark.parametrize("existing_version", [_VERSION, "9.9.9"])
+@pytest.mark.parametrize("central_exists", [False, True])
+def test_existing_target_skips_before_network(
+    remote_env, tmp_path: Path, monkeypatch, existing_version: str, central_exists: bool
+):
+    """默认跳过已有目标，不创建中央副本、不比较远端版本、不增加安装次数。"""
+    fake_home, central = remote_env
+    isolated = tmp_path / "isolated" / "skills"
+    target = _write_existing_skill(isolated, existing_version)
+    if central_exists:
+        _write_existing_skill(central, "0.0.1", remote_identifier=f"another@{_SKILL_NAME}")
+    client_factory = Mock(side_effect=AssertionError("跳过时不应创建广场客户端"))
+    download = Mock(side_effect=AssertionError("跳过时不应下载"))
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", client_factory)
+    monkeypatch.setattr(remote_installer.httpx, "get", download)
+
+    payload = remote_installer.install_remote_skill(
+        identifier=_IDENTIFIER, skills_dir=str(isolated), version="10.0.0"
+    )
+
+    assert payload["success"] is True, payload.get("error")
+    assert payload["data"]["skipped"] is True
+    assert payload["data"]["replaced"] is False
+    assert payload["data"]["version"] == existing_version
+    assert payload["data"]["installs"][0]["skipped"] is True
+    assert (target / "SKILL.md").read_text(encoding="utf-8") == "保留用户修改"
+    assert central.exists() is central_exists
+    if central_exists:
+        assert json.loads((central / _SKILL_NAME / "data" / "VERSION.json").read_text())["version"] == "0.0.1"
+    assert not (tmp_path / "registry.json").exists()
+    client_factory.assert_not_called()
+    download.assert_not_called()
+    _assert_no_runtime_dir_touched(fake_home)
+
+
+def test_existing_central_reuses_local_version_for_missing_target(remote_env, tmp_path: Path, monkeypatch):
+    """中央已有副本时只补隔离目录链接，不下载或上报安装次数。"""
+    fake_home, central = remote_env
+    central_skill = _write_existing_skill(central, "0.0.7")
+    isolated = tmp_path / "isolated" / "skills"
+    client_factory = Mock(side_effect=AssertionError("复用本地副本不应联网"))
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", client_factory)
+
+    payload = remote_installer.install_remote_skill(identifier=_IDENTIFIER, skills_dir=str(isolated))
+
+    assert payload["success"] is True, payload.get("error")
+    assert payload["data"]["version"] == "0.0.7"
+    assert payload["data"]["skipped"] is False
+    assert payload["data"]["replaced"] is False
+    assert (isolated / _SKILL_NAME / "SKILL.md").read_text(encoding="utf-8") == "保留用户修改"
+    assert (central_skill / "SKILL.md").read_text(encoding="utf-8") == "保留用户修改"
+    client_factory.assert_not_called()
+    _assert_no_runtime_dir_touched(fake_home)
+
+
+@pytest.mark.parametrize("source", ["other-publisher", "unmarked", "builtin", "invalid-json", "missing-version"])
+def test_existing_central_requires_matching_source_before_linking(
+    remote_env, tmp_path: Path, monkeypatch, source: str
+):
+    """不同发布者或无法确认来源的中央副本不能分发到新目标。"""
+    fake_home, central = remote_env
+    central_skill = _write_existing_skill(central, "0.0.7", remote_identifier=None)
+    version_file = central_skill / "data" / "VERSION.json"
+    metadata = json.loads(version_file.read_text(encoding="utf-8"))
+    if source == "other-publisher":
+        metadata["remote_identifier"] = f"another@{_SKILL_NAME}"
+    elif source == "builtin":
+        metadata["source"] = "builtin"
+    version_file.write_text(json.dumps(metadata), encoding="utf-8")
+    if source == "invalid-json":
+        version_file.write_text("invalid-json", encoding="utf-8")
+    elif source == "missing-version":
+        version_file.unlink()
+    isolated = tmp_path / "isolated" / "skills"
+    client_factory = Mock(side_effect=AssertionError("拒绝复用时不应联网"))
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", client_factory)
+
+    payload = remote_installer.install_remote_skill(identifier=_IDENTIFIER, skills_dir=str(isolated))
+
+    assert payload["success"] is False
+    assert "--force" in payload["error"]["message"]
+    assert "来源" in payload["error"]["message"]
+    assert not isolated.exists()
+    assert not (tmp_path / "registry.json").exists()
+    assert (central_skill / "SKILL.md").read_text(encoding="utf-8") == "保留用户修改"
+    client_factory.assert_not_called()
+    _assert_no_runtime_dir_touched(fake_home)
+
+
+def test_existing_runtime_targets_skip_without_central(remote_env, monkeypatch):
+    """默认探测出的运行时都已安装时跳过，不凭空创建中央存储。"""
+    fake_home, central = remote_env
+    for runtime in (".claude", ".codex"):
+        _write_existing_skill(fake_home / runtime / "skills", "0.0.8")
+    client_factory = Mock(side_effect=AssertionError("已有目标不应联网"))
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", client_factory)
+
+    payload = remote_installer.install_remote_skill(identifier=_IDENTIFIER, runtime="claude,codex")
+
+    assert payload["success"] is True, payload.get("error")
+    assert payload["data"]["skipped"] is True
+    assert payload["data"]["version"] == "0.0.8"
+    assert len(payload["data"]["installs"]) == 2
+    assert not central.exists()
+    client_factory.assert_not_called()
+
+
+def test_partial_runtime_install_reports_new_version(remote_env, monkeypatch):
+    """部分目标跳过时，新安装和回调使用新目标的版本，不冒充旧目标已更新。"""
+    fake_home, _central = remote_env
+    old_target = _write_existing_skill(fake_home / ".claude" / "skills", "0.0.8")
+    client = Mock(wraps=_FakeMarketplaceClient())
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", lambda: client)
+
+    payload = remote_installer.install_remote_skill(identifier=_IDENTIFIER, runtime="claude,codex")
+
+    assert payload["success"] is True, payload.get("error")
+    assert payload["data"]["skipped"] is False
+    assert payload["data"]["version"] == _VERSION
+    installs = {item["runtime"]: item for item in payload["data"]["installs"]}
+    assert installs["claude-code"]["version"] == "0.0.8"
+    assert installs["claude-code"]["skipped"] is True
+    assert installs["codex"]["version"] == _VERSION
+    assert installs["codex"]["skipped"] is False
+    assert (old_target / "SKILL.md").read_text(encoding="utf-8") == "保留用户修改"
+    assert client.record_install.call_args.args[1]["version"] == _VERSION
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_fresh_or_forced_install_downloads_and_reports(remote_env, tmp_path: Path, monkeypatch, existing: bool):
+    """首次默认安装与显式覆盖仍下载并上报，覆盖时移除旧内容。"""
+    fake_home, central = remote_env
+    isolated = tmp_path / "isolated" / "skills"
+    if existing:
+        _write_existing_skill(central, "0.0.7", remote_identifier=f"another@{_SKILL_NAME}")
+        _write_existing_skill(isolated, "0.0.7")
+    client = Mock(wraps=_FakeMarketplaceClient())
+    monkeypatch.setattr(remote_installer, "MarketplaceClient", lambda: client)
+
+    payload = remote_installer.install_remote_skill(
+        identifier=_IDENTIFIER, skills_dir=str(isolated), force=existing, share_code="test-share"
+    )
+
+    assert payload["success"] is True, payload.get("error")
+    assert payload["data"]["skipped"] is False
+    assert payload["data"]["version"] == _VERSION
+    assert payload["data"]["replaced"] is existing
+    metadata = json.loads((central / _SKILL_NAME / "data" / "VERSION.json").read_text(encoding="utf-8"))
+    assert metadata["remote_identifier"] == _IDENTIFIER
+    assert "测试用技能" in (isolated / _SKILL_NAME / "SKILL.md").read_text(encoding="utf-8")
+    client.get_download_url.assert_called_once_with(1, None, share_code="test-share")
+    client.record_install.assert_called_once()
+    assert client.record_install.call_args.args[1]["version"] == _VERSION
+    assert client.record_install.call_args.args[1]["share_code"] == "test-share"
+    _assert_no_runtime_dir_touched(fake_home)

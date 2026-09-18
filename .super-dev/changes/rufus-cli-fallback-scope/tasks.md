@@ -9,7 +9,7 @@
 ## 2. Skill 文档
 
 - [x] 更新模板 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`。
-- [x] 同步更新 `.agents/skills/ops-amazon-rufus/` 安装副本。
+- [x] 同步更新 `.agents/skills/ops-amazon-rufus-or-alexa/` 安装副本。
 - [x] 保持敏感字段禁止输出规则。
 
 ## 3. 安装引导

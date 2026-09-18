@@ -25,8 +25,8 @@ Rufus 当前把 Amazon `storage_state`、cookies、localStorage、`curl_data` �
 2. `opscli/amazon_rufus/services/backend_secret.py`
 3. `opscli/amazon_rufus/services/manager.py`
 4. `opscli/amazon_rufus/commands/cli.py`
-5. `opscli/skills/templates/ops-amazon-rufus/*`
-6. `.agents/skills/ops-amazon-rufus/*`
+5. `opscli/skills/templates/ops-amazon-rufus-or-alexa/*`
+6. `.agents/skills/ops-amazon-rufus-or-alexa/*`
 7. `tests/amazon_rufus/test_core.py`
 8. `tests/skills/test_ops_amazon_rufus_updater.py`
 9. `docs/change-log-pending.md`

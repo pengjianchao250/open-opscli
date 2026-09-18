@@ -8,7 +8,7 @@
 - [x] 实现 Manager `questions` 参数与统一问题解析。
 - [x] 实现 CLI `-q` 和可重复 `--question`。
 - [x] 实现 MCP `questions` 参数透传。
-- [x] 同步 `ops-amazon-rufus` Skill/README 问题来源说明。
+- [x] 同步 `ops-amazon-rufus-or-alexa` Skill/README 问题来源说明。
 - [x] 追加 `docs/change-log-pending.md` 变更记录。
 - [x] 运行定向测试验证。
 

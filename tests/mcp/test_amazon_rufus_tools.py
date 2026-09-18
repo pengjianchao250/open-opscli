@@ -2,6 +2,7 @@ import asyncio
 import json
 import threading
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from fastmcp import Client
@@ -113,7 +114,12 @@ def _rufus_data_with_questions(questions: list[str]) -> dict:
     }
 
 
-def test_mcp_exposes_amazon_rufus_tools():
+def test_mcp_exposes_amazon_rufus_tools(monkeypatch):
+    """给注册检查提供固定权限，避免读取真实登录态或请求权限接口。"""
+    monkeypatch.setattr(
+        "opscli.mcp.permissions._stdio_allowed_tools",
+        AsyncMock(return_value=frozenset(fn.__name__ for fn in amazon_rufus_tools._ALL_TOOLS)),
+    )
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
@@ -666,13 +672,19 @@ def test_amazon_rufus_get_rejects_removed_cdp_options(monkeypatch, tmp_path: Pat
     assert captured == {}
 
 
-def test_amazon_rufus_tool_schema_excludes_cdp_options():
+def test_amazon_rufus_tool_schema_excludes_cdp_options(monkeypatch):
+    """Schema 检查固定获取工具权限，不依赖本地账号。"""
+    monkeypatch.setattr(
+        "opscli.mcp.permissions._stdio_allowed_tools",
+        AsyncMock(return_value=frozenset({"amazon_rufus_get"})),
+    )
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
             return next(tool for tool in tools if tool.name == "amazon_rufus_get")
 
     tool = _run(scenario())
+    assert "ops-amazon-rufus-or-alexa Skill" in tool.description
     properties = (tool.inputSchema or {}).get("properties", {})
 
     for name in [

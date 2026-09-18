@@ -153,12 +153,12 @@ RUFUS_PLATFORM_COOKIE_AUTH_ERROR 时不得 watch_login
 
 ### Skill 模板和安装副本
 
-- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- `opscli/skills/templates/ops-amazon-rufus/README.md`
-- `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`
-- `.agents/skills/ops-amazon-rufus/SKILL.md`
-- `.agents/skills/ops-amazon-rufus/README.md`
-- `.agents/skills/ops-amazon-rufus/references/rufus-mcp-workflow.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/README.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
 
 ### 安装后引导
 

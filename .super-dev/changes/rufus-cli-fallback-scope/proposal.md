@@ -2,7 +2,7 @@
 
 ## 背景
 
-`ops-amazon-rufus` 当前文档约束为 MCP-only：缺少必需 MCP Tool 时停止，用户拒绝 remote-consent 时停止，平台 Cookie 401 时不进入 `watch_login`。用户新需求要求恢复两个明确 CLI fallback 场景，并调整平台 Cookie 鉴权错误的恢复路径。
+`ops-amazon-rufus-or-alexa` 当前文档约束为 MCP-only：缺少必需 MCP Tool 时停止，用户拒绝 remote-consent 时停止，平台 Cookie 401 时不进入 `watch_login`。用户新需求要求恢复两个明确 CLI fallback 场景，并调整平台 Cookie 鉴权错误的恢复路径。
 
 ## 目标
 
@@ -23,8 +23,8 @@
 
 ## 影响范围
 
-- `opscli/skills/templates/ops-amazon-rufus/`
-- `.agents/skills/ops-amazon-rufus/`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
+- `.agents/skills/ops-amazon-rufus-or-alexa/`
 - `opscli/skills/commands/cli.py`
 - `tests/skills/test_ops_amazon_rufus_updater.py`
 - `tests/skills/test_cli.py`

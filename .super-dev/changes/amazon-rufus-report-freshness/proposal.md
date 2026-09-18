@@ -2,7 +2,7 @@
 
 ## Problem
 
-`ops-amazon-rufus` can generate multiple Markdown reports for the same ASIN under `output/amazon-rufus/`. The current flow says to return `report_path`, but it does not explicitly forbid Agent-side fallback that scans `output/amazon-rufus/<ASIN>-*.md` and reads an older report.
+`ops-amazon-rufus-or-alexa` can generate multiple Markdown reports for the same ASIN under `output/amazon-rufus/`. The current flow says to return `report_path`, but it does not explicitly forbid Agent-side fallback that scans `output/amazon-rufus/<ASIN>-*.md` and reads an older report.
 
 This can cause a user to receive stale Rufus answers even after a fresh `amazon_rufus_get` call or after a login recovery retry.
 
@@ -26,12 +26,12 @@ This can cause a user to receive stale Rufus answers even after a fresh `amazon_
 
 Update:
 
-- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- `.agents/skills/ops-amazon-rufus/SKILL.md`
-- `opscli/skills/templates/ops-amazon-rufus/README.md`
-- `.agents/skills/ops-amazon-rufus/README.md`
-- `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`
-- `.agents/skills/ops-amazon-rufus/references/rufus-mcp-workflow.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/README.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
 - Relevant Skill documentation tests
 
 ## Acceptance Criteria

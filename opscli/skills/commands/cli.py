@@ -69,8 +69,8 @@ _TOOL_LABELS = {
     "central":   "中央存储",
 }
 
-# ops-amazon-rufus 安装后引导信息
-_AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
+# ops-amazon-rufus-or-alexa 安装后引导信息
+_AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus-or-alexa"
 _AMAZON_RUFUS_NEXT_STEPS = [
     "进入 Skill 后先调用 auth_is_authenticated；未登录时调用 auth_mcp_login，Token 失效时调用 auth_token_refresh(system=\"ops\")。",
     "调用 amazon_rufus_remote_consent_status(country) 读取该站点远程授权偏好。",
@@ -556,6 +556,9 @@ def _print_install_line(install: object) -> None:
     runtime = getattr(install, "runtime", "")
     target_dir = getattr(install, "target_dir", "")
     tool_label = _TOOL_LABELS.get(runtime, runtime)
+    if getattr(install, "skipped", False):
+        _console.print(f"  [dim]已存在，跳过：{name} {version} → {tool_label} ({target_dir})[/dim]")
+        return
     _console.print(
         f"  [green]{status_icon}[/green] [bold]{name}[/bold] "
         f"[dim]{version}[/dim] → [cyan]{tool_label}[/cyan] "
@@ -576,6 +579,9 @@ def _inject_rules_for_installs(installs: Sequence[object], *, verbose: bool = Fa
     injector = RuleInjector()
     seen: set[tuple[str, str]] = set()
     for install in installs:
+        # 跳过的安装不应触发配置写入。
+        if getattr(install, "skipped", False):
+            continue
         runtime = getattr(install, "runtime", "")
         target_dir = getattr(install, "target_dir", None)
         if not runtime or not target_dir:
@@ -772,12 +778,10 @@ def _install_interactive(
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
-    交互模式默认 force=True（覆盖已有安装），无需手动传 --force。
+    交互模式默认跳过已有安装，显式 --force 才覆盖。
     yes=True 时跳过所有 prompt，直接全选 Skills 和全部检测到的工具。
     verbose=True 时输出每个安装目标的逐条日志（默认仅输出最终汇总）。
     """
-    force = True  # TUI 模式始终覆盖，避免因已安装而中断
-
     # Step 1：选择要安装的 Skills
     try:
         skill_names = _tui_select_skills(manager, yes=yes)
@@ -857,8 +861,13 @@ def _install_interactive(
             _console.print(f"[yellow]下架 Skill 清理检查失败（不影响安装结果）: {exc}[/yellow]")
 
     _console.print()
+    # 汇总明确区分全部目标跳过的 Skill，避免把重复调用当作新安装。
+    skipped_count = sum(
+        bool(item.get("installed_paths")) and all(path.get("skipped", False) for path in item["installed_paths"])
+        for item in all_results
+    )
     if errors:
-        _console.print(f"[yellow]完成：{len(all_results)} 个成功，{len(errors)} 个失败[/yellow]")
+        _console.print(f"[yellow]完成：{len(all_results) - skipped_count} 个成功，{skipped_count} 个跳过，{len(errors)} 个失败[/yellow]")
         payload = {
             "success": False,
             "command": "skills install",
@@ -873,7 +882,7 @@ def _install_interactive(
             _emit(payload, pretty)
         raise typer.Exit(1)
     else:
-        _console.print(f"[green]全部安装完成：{len(all_results)} 个成功，0 个失败[/green]")
+        _console.print(f"[green]全部安装完成：{len(all_results) - skipped_count} 个成功，{skipped_count} 个跳过，0 个失败[/green]")
         payload = {
             "success": True,
             "command": "skills install",
@@ -1802,7 +1811,7 @@ def install_skill(
         "--runtime",
         help="只安装到指定运行时：claude、openclaw、codex、auwork、all，或逗号分隔多个值；与 --skills-dir 同传时被忽略",
     ),
-    force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
+    force: bool = typer.Option(False, "--force", help="覆盖已存在目录（默认跳过）"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
     sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
@@ -1817,6 +1826,7 @@ def install_skill(
     - 不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
     - NAME 不含 @ 时从内置模板安装（如 ops-auth）。
     - NAME 含 @ 时从技能广场远程安装（如 pengjianchao@ops-auth）。
+    - 已安装时默认跳过，--force 显式覆盖；缺失的运行时链接仍会补齐。
     - --sync-market 从市场安装记录同步，补装缺失 + 升级旧版（不能与 NAME 同时使用）。
     - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
@@ -1881,14 +1891,14 @@ def install_skill(
             )
             return
 
-        # 远程广场安装（标识符含 @）；远程安装默认直接覆盖，无需 --force
+        # 远程广场安装也遵循显式覆盖规则。
         if "@" in name:
             payload = install_remote_skill(
                 identifier=name,
                 version=version,
                 skills_dir=skills_dir,
                 runtime=runtime,
-                force=True,
+                force=force,
                 share_code=share_code,
             )
             _emit(payload, pretty)

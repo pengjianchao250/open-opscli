@@ -10,7 +10,7 @@
 - 保留未传 `--question` 时的题库模式。
 - 设计并实现拒答检测、180 字内问题改写、最多 3 次改写重试。
 - 约束拒答后的改写重试问题必须使用中文。
-- 更新项目级 `.agents/skills/ops-amazon-rufus/SKILL.md`，让 Agent 按用户意图选择单题模式或题库模式。
+- 更新项目级 `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`，让 Agent 按用户意图选择单题模式或题库模式。
 
 ## 非目标
 
@@ -23,7 +23,7 @@
 
 1. `--question` 为空白时仍作为输入错误处理。
 2. 有效 `--question` 跳过题库读取，直接执行单题。
-3. 题库模式继续读取 `.agents/skills/ops-amazon-rufus/data/question_templates.json`。
+3. 题库模式继续读取 `.agents/skills/ops-amazon-rufus-or-alexa/data/question_templates.json`。
 4. 每题答案解析后执行拒答检测。
 5. 命中拒答时，生成不超过 180 字的中文保语义问题并重试，最多重试 3 次。
 6. 最终报告展示最终答案；发生改写时展示简短改写说明和改写后问题。

@@ -16,7 +16,7 @@
 1. 不处理默认题库为空。
 2. 不处理 `answer_count=0` 或空报告。
 3. 不处理 Rufus 题库升级接口环境切换。
-4. 不处理发布配置中 `ops-amazon-rufus` 是否进入公开产物。
+4. 不处理发布配置中 `ops-amazon-rufus-or-alexa` 是否进入公开产物。
 5. 不在 MCP schema 暴露 cookie、localStorage、`storage_state` 或 CDP 参数。
 
 ## 方案

@@ -28,7 +28,7 @@ operationId: platformCookieShow
 Rufus Skill 不直接读取登录态原文，而是通过 MCP 工具获取脱敏摘要：
 
 ```text
-ops-amazon-rufus Skill
+ops-amazon-rufus-or-alexa Skill
   -> amazon_rufus_login_status(country)
   -> RufusMcpManager.login_status(country)
   -> RufusManager.login_status(country)

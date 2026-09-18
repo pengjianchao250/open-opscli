@@ -32,6 +32,20 @@ venv/
 *.swp
 *.swo
 
+# Amazon Rufus/Alexa Skill 安装副本改名后继续纳入版本管理
+!.agents/
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/ops-amazon-rufus-or-alexa/
+!.agents/skills/ops-amazon-rufus-or-alexa/**
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/ops-amazon-rufus-or-alexa/
+!.claude/skills/ops-amazon-rufus-or-alexa/**
+
 # 系统文件
 .DS_Store
 Thumbs.db

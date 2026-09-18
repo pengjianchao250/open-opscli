@@ -7,7 +7,7 @@
 - [x] 新增 `opscli/mcp/tools/amazon_rufus.py`，暴露 `amazon_rufus_init`、`amazon_rufus_get`、`amazon_rufus_get_remote`。
 - [x] 在 `opscli/mcp/server.py` 注册 Rufus MCP 工具。
 - [x] 复用现有 Rufus 获取和报告生成逻辑，避免复制 CLI 私有实现。
-- [x] 更新 `ops-amazon-rufus` Skill 文档为“题库数据 + MCP 编排规则”。
+- [x] 更新 `ops-amazon-rufus-or-alexa` Skill 文档为“题库数据 + MCP 编排规则”。
 - [x] 确认 Skill 目录不包含获取 Rufus 的 Python 脚本文件。
 - [x] 运行定向测试和相关回归。
 

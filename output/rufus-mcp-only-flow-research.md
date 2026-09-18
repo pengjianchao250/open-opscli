@@ -6,7 +6,7 @@
 
 用户明确取消上一版“Skill 使用 MCP 获取，但恢复和 Amazon 登录态采集仍走 opscli CLI”的方案。新的目标是：
 
-1. Agent 使用 `ops-amazon-rufus` Skill 后，运行期不再调用 `opscli amazon-rufus *`。
+1. Agent 使用 `ops-amazon-rufus-or-alexa` Skill 后，运行期不再调用 `opscli amazon-rufus *`。
 2. OPS/MCP 鉴权、远程授权偏好、登录态检查、Amazon 登录采集、登出恢复和 Rufus 获取全部通过 MCP Tool 编排。
 3. CLI 命令可以继续保留给直接 CLI 用户和兼容场景，但不能再作为 Skill 的 fallback 或主流程节点。
 
@@ -112,16 +112,16 @@ MCP-only 后需要新增：
    - 现有类可复用。
    - MCP wrapper 调用时传入隔离目录；无需改业务模型。
 
-3. `opscli/skills/templates/ops-amazon-rufus/`
+3. `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
    - `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md` 去掉运行期 CLI 命令。
    - 删除 “MCP 不可见或拒绝远程授权时改用 CLI” 的分支。
    - 明确 MCP 工具缺失时停止并要求启用/升级 MCP Tool，不 fallback CLI。
 
-4. `.agents/skills/ops-amazon-rufus/`
+4. `.agents/skills/ops-amazon-rufus-or-alexa/`
    - 同步模板副本，保证 Codex 当前可用 Skill 与内置模板一致。
 
 5. `opscli/skills/commands/cli.py`
-   - 安装 `ops-amazon-rufus` 后的 `next_steps` 仍在提示旧 CLI 命令，需要改成 MCP 工具链。
+   - 安装 `ops-amazon-rufus-or-alexa` 后的 `next_steps` 仍在提示旧 CLI 命令，需要改成 MCP 工具链。
 
 6. 测试
    - `tests/mcp/test_amazon_rufus_tools.py`：新增工具暴露、schema、脱敏响应、manager 调用和凭证隔离测试。

@@ -7,7 +7,7 @@
 - [x] 新增 Rufus secret 模型/provider 与稳定错误。
 - [x] 实现 `RufusManager.get_backend()` 或等价入口。
 - [x] 将 `amazon_rufus_get` 默认切换到后端/headless 入口。
-- [x] 更新 `ops-amazon-rufus` Skill/README/reference 默认流程。
+- [x] 更新 `ops-amazon-rufus-or-alexa` Skill/README/reference 默认流程。
 - [x] 运行定向测试并更新 `docs/change-log-pending.md`。
 
 ## 验证命令

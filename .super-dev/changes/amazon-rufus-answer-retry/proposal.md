@@ -2,7 +2,7 @@
 
 ## 背景
 
-当前 `ops-amazon-rufus` 在 `amazon_rufus_get` 成功后只返回本次 `report_path`。如果 Rufus 未回答、拒答，或回答内容明显偏离问题意图，例如用户询问风险/评价/适配性但回答退化为商品详情，现有 Skill 没有要求 Agent 改写问题并重试。
+当前 `ops-amazon-rufus-or-alexa` 在 `amazon_rufus_get` 成功后只返回本次 `report_path`。如果 Rufus 未回答、拒答，或回答内容明显偏离问题意图，例如用户询问风险/评价/适配性但回答退化为商品详情，现有 Skill 没有要求 Agent 改写问题并重试。
 
 ## 目标
 
@@ -24,7 +24,7 @@
 
 ## 影响范围
 
-- `.agents/skills/ops-amazon-rufus/`
-- `opscli/skills/templates/ops-amazon-rufus/`
+- `.agents/skills/ops-amazon-rufus-or-alexa/`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
 - `output/amazon-rufus-skill-*`
 - `tests/skills/test_ops_amazon_rufus_updater.py`

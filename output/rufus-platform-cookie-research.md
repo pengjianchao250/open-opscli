@@ -45,7 +45,7 @@
   - 现有本地 Cookie 输入只允许 `--from-stdin`，避免进入 shell history。
   - `remote-consent` 和 `login-status` 输出均为脱敏摘要。
 
-- `opscli/skills/templates/ops-amazon-rufus/`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
   - Skill 明确禁止输出 cookie、localStorage、`storage_state`、headers、payload、seed request。
   - Skill 不承载 Python 获取脚本，所有实现必须放在 `opscli/amazon_rufus/` 或 MCP 工具中。
 

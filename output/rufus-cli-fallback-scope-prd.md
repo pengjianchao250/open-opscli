@@ -4,7 +4,7 @@
 
 ## 背景
 
-当前 `ops-amazon-rufus` Skill 已完成 MCP-only 改造，但实际使用中存在两类可恢复场景：
+当前 `ops-amazon-rufus-or-alexa` Skill 已完成 MCP-only 改造，但实际使用中存在两类可恢复场景：
 
 1. 宿主没有暴露必需 Rufus MCP Tool，但本机 `opscli amazon-rufus` 能力可用。
 2. 用户拒绝允许 MCP/headless 链路保存并复用 Amazon 登录态，但仍希望通过本机 CLI 完成一次 Rufus 爬取。

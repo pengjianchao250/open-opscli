@@ -15,7 +15,7 @@
 
 - 调整 `amazon-rufus get` 成功输出路径。
 - 新增 CLI 文件落地回归测试。
-- 更新 `ops-amazon-rufus` Skill 使用说明。
+- 更新 `ops-amazon-rufus-or-alexa` Skill 使用说明。
 
 ## 非目标
 

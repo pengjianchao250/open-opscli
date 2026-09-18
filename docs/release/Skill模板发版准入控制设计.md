@@ -123,7 +123,7 @@ opscli/skills/templates/manifest.json
 | `ops-mcp` | 是 | 是 | MCP 接入说明，与 CLI 能力强相关 |
 | `ops-dataset-query` | 是 | 是 | query 模块依赖本地模板数据兜底 |
 | `ops-amazon` | 是 | 是 | 已有正式 CLI/MCP 工作流 |
-| `ops-amazon-rufus` | 是 | 是 | 已有远端升级逻辑与测试覆盖 |
+| `ops-amazon-rufus-or-alexa` | 是 | 是 | 已有远端升级逻辑与测试覆盖 |
 
 ### 5.2 直接发版暂缓纳入
 
@@ -408,7 +408,7 @@ excluded by profile:
 
 1. 先新增 `opscli/skills/templates/manifest.json`，作为单一准入来源。
 2. 第一版 profile 只启用 `python-release` 和 `binary-minimal`。
-3. 直接发版首批保留 `ops-auth`、`ops-skills`、`ops-mcp`、`ops-dataset-query`、`ops-amazon`、`ops-amazon-rufus`。
+3. 直接发版首批保留 `ops-auth`、`ops-skills`、`ops-mcp`、`ops-dataset-query`、`ops-amazon`、`ops-amazon-rufus-or-alexa`。
 4. 二进制发版首批只保留 `ops-auth`、`ops-skills`、`ops-mcp`；如业务需要，再新增 `binary-full` 纳入 `ops-dataset-query`。
 5. 先在 preflight 中做 manifest 检查和产物检查，再切换为真实裁剪，降低发版风险。
 

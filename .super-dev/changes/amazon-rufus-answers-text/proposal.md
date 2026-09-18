@@ -2,7 +2,7 @@
 
 ## 背景
 
-`ops-amazon-rufus` 在 Agent 使用场景中只需要 Rufus 回答文本。用户明确要求去掉额外参数，命令执行完成后不输出完整 JSON，只输出 `answers[].text`。
+`ops-amazon-rufus-or-alexa` 在 Agent 使用场景中只需要 Rufus 回答文本。用户明确要求去掉额外参数，命令执行完成后不输出完整 JSON，只输出 `answers[].text`。
 
 ## 目标
 

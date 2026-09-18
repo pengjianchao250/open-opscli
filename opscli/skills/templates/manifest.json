@@ -23,7 +23,7 @@
       "tier": "experimental",
       "reason": "Listing 分析口径仍处于内部验证阶段，暂不进入公开发版产物"
     },
-    "ops-amazon-rufus": {
+    "ops-amazon-rufus-or-alexa": {
       "source": false,
       "wheel": false,
       "binary": false,

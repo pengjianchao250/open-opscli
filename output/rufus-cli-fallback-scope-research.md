@@ -4,7 +4,7 @@
 
 ## 需求摘要
 
-用户要求调整 `ops-amazon-rufus` Skill 的执行策略：
+用户要求调整 `ops-amazon-rufus-or-alexa` Skill 的执行策略：
 
 1. 先检测必需 MCP Tool 是否可用；如果不可用，可以回退使用 CLI。
 2. 询问用户是否允许保存并复用该站点 Amazon 登录态；用户拒绝后使用 CLI 爬取。
@@ -15,10 +15,10 @@
 
 当前模板位于：
 
-- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- `opscli/skills/templates/ops-amazon-rufus/README.md`
-- `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`
-- `.agents/skills/ops-amazon-rufus/` 安装副本
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/` 安装副本
 
 当前规则是 MCP-only：
 
@@ -111,10 +111,10 @@ Playwright 官方文档说明 BrowserContext 可操作独立浏览器会话，�
 
 文档与安装副本：
 
-- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- `opscli/skills/templates/ops-amazon-rufus/README.md`
-- `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`
-- `.agents/skills/ops-amazon-rufus/` 对应文件
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/` 对应文件
 
 安装引导：
 

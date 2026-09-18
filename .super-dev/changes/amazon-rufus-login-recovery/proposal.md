@@ -37,8 +37,8 @@ MCP failure recovery also needs to clear old Rufus state before opening a fresh 
 ## References
 
 ```text
-output/ops-amazon-rufus-clear-login-research.md
-output/ops-amazon-rufus-clear-login-prd.md
-output/ops-amazon-rufus-clear-login-architecture.md
-output/ops-amazon-rufus-clear-login-uiux.md
+output/ops-amazon-rufus-or-alexa-clear-login-research.md
+output/ops-amazon-rufus-or-alexa-clear-login-prd.md
+output/ops-amazon-rufus-or-alexa-clear-login-architecture.md
+output/ops-amazon-rufus-or-alexa-clear-login-uiux.md
 ```
