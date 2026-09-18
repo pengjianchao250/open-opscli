@@ -1015,28 +1015,6 @@ async def _seller_sprite_run_impl(
         )
 
     try:
-        binding = await ensure_ops_credentials(
-            provided_session=session_id,
-            provided_jwt=jwt,
-        )
-    except Exception as exc:
-        return _err(
-            exc,
-            tool="MCP → seller_sprite_run(...)",
-            call_params={
-                "scenario": scenario,
-                "site": site,
-                "period": period,
-                "page_size": page_size,
-                "export_format": export_format,
-                "page_prepare": page_prepare,
-                "task_interval_seconds": task_interval_seconds,
-                "cooldown_seconds": cooldown_seconds,
-                "job_id": job_id,
-            },
-        )
-
-    try:
         raw_request = _build_request(
             scenario=scenario,
             params=params,
@@ -1052,22 +1030,20 @@ async def _seller_sprite_run_impl(
         )
         request = _prepare_request_for_enqueue(raw_request)
         scheduler = _get_task_scheduler()
-        route_kwargs = _seller_sprite_route_kwargs(binding)
         from opscli.seller_sprite.collection_storage_integration import (
             build_seller_sprite_cache_identity,
         )
         from opscli.seller_sprite.mcp_bundle import get_result_cache_context
 
-        account_route = route_kwargs.get("account_route")
-        requested_account_key = route_kwargs.get("requested_account_key")
         cache_key, cache_scope = build_seller_sprite_cache_identity(
             request,
-            account_route=account_route,
-            requested_account_key=requested_account_key,
+            account_route=None,
+            requested_account_key=None,
         )
         cache_repository, cache_environment = get_result_cache_context()
         cached = None
-        if cache_repository is not None and cache_environment:
+        current_user_email = str(_get_current_mcp_user_email() or "").strip().lower()
+        if cache_repository is not None and cache_environment and current_user_email:
             cached = await find_cached_result(
                 cache_repository,
                 source_system="seller_sprite",
@@ -1083,7 +1059,7 @@ async def _seller_sprite_run_impl(
             metadata = dict(cached.result_metadata)
             cached_status = await scheduler.enqueue_cached_owned_mcp_run(
                 request,
-                mcp_user_email=binding.user_email,
+                mcp_user_email=current_user_email,
                 source_job_id=cached.source_job_id,
                 row_count=int(metadata.get("row_count") or cached.row_count),
                 export_payload=(
@@ -1091,11 +1067,16 @@ async def _seller_sprite_run_impl(
                     if isinstance(metadata.get("export"), dict)
                     else None
                 ),
-                **route_kwargs,
             )
             response = _ok(_sanitize_status(cached_status))
             mark_cache_hit()
             return response
+
+        # 只有缓存未命中时才建立 SellerSprite 执行所需的 OPS 凭证和账号路由。
+        binding = await ensure_ops_credentials(
+            provided_session=session_id,
+            provided_jwt=jwt,
+        )
         queued_status = await _enqueue_task_with_auth(
             scheduler,
             request,

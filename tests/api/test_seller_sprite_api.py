@@ -52,7 +52,6 @@ def test_seller_sprite_submit_proxies_to_collector_and_returns_202(monkeypatch):
             "site": "US",
             "period": "30d",
             "page_size": 100,
-            "export_format": "json",
             "job_id": "job-1",
         },
     )

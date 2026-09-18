@@ -61,6 +61,7 @@ def test_seller_sprite_submitter_adds_collector_environment(tmp_path):
     assert submission.data_environment == "production"
     assert submission.ingestion_mode == "live"
     assert submission.result_path == Path(result.result_path).resolve()
+    assert submission.cache_scope == "shared_pool"
 
 
 def test_seller_sprite_reconciler_pages_live_successes_by_completion_cursor(tmp_path):

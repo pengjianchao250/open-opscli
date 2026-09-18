@@ -15,6 +15,8 @@ def test_v1_to_v3_migration_contains_required_schema_changes():
     assert "ADD COLUMN cache_scope VARCHAR(128) NULL" in sql
     assert "JSON_EXTRACT(request_params, '$._cache.cache_key')" in sql
     assert "JSON_EXTRACT(request_params, '$._cache.cache_scope')" in sql
+    assert "cache_scope = 'shared_pool'" in sql
+    assert "source_system = 'seller_sprite'" in sql
     assert "CREATE INDEX ix_collection_runs_cache_lookup" in sql
     assert "CREATE TABLE IF NOT EXISTS collection_prefetch_schedules" in sql
     assert "CREATE TABLE IF NOT EXISTS collection_prefetch_runs" in sql

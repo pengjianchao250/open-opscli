@@ -1608,6 +1608,13 @@ def test_seller_sprite_run_cache_hit_creates_current_user_task(monkeypatch):
         "get_result_cache_context",
         lambda: (CacheRepository(), "production"),
     )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "ensure_ops_credentials",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("缓存命中不得触发 OPS 认证")
+        ),
+    )
 
     result = _run(
         seller_sprite_tools.seller_sprite_run(

@@ -11664,6 +11664,14 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅 `KeepaAccountManager.get_default()` 一行语句，运行时行为不变（`del` 与 `_ =` 都只是标记参数未使用）。解除全平台 wheel/sdist 构建与 PyPI 发布的阻塞。
 **回滚方式**：`git checkout opscli/keepa/accounts.py`（回滚后 Cython 构建会重新失败）。
 ---
+## 2026-09-18 SellerSprite - 结果缓存改为跨账号共享
+
+**变更原因**：SellerSprite 返回平台公共数据，结果不会因执行账号或用户身份改变；此前结果缓存按专属账号生成 `cache_scope`，导致相同请求在不同账号间无法命中，部分请求错误进入浏览器流程并产生混合成功/失败。
+**改动点**：SellerSprite 结果缓存统一使用 `shared_pool`；缓存查询提前到执行账号认证和路由之前；`xls/xlsx`、站点、周期、场景使用规范化值生成缓存键；启动时及 v1→v3 SQL 迁移中将历史 `dedicated:*` SellerSprite 缓存回填为共享作用域；缓存读取异常增加降级日志；补充跨账号作用域、格式归一化和缓存命中免认证回归测试。
+**影响范围**：仅改变 SellerSprite 结果缓存复用范围和缓存查询顺序；任务所有权、额度、OPS 凭证、专属账号绑定及浏览器执行隔离保持不变。并发相同请求的 single-flight 去重和导出链接续期未纳入本次修改。
+**验证结果**：缓存合同、SellerSprite 存储、MCP 工具、共享 MySQL 和迁移专项测试均通过；目标模块 `compileall` 与 `git diff --check` 通过。
+
+---
 ## 2026-09-17 App - 新增看板迁移重构状态机与阶段门禁
 
 **变更原因**：旧看板迁移主要依赖文字步骤，缺少 UI 结构基线、机器可读覆盖矩阵和阶段门禁，导致页面模块布局还原不足且容易遗漏功能。

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from typing import Any, Protocol, cast
 
 from opscli.shared.collection_storage.models import (
@@ -20,7 +19,6 @@ from opscli.shared.collection_storage.result_cache import (
 )
 from opscli.seller_sprite.services.task_queue_store import (
     ACCOUNT_ROUTE_SHARED_POOL,
-    ACCOUNT_ROUTE_USER_BINDING,
 )
 
 
@@ -28,14 +26,18 @@ def seller_sprite_cache_scope(
     account_route: str | None,
     requested_account_key: str | None,
 ) -> str:
-    """共享池结果跨用户复用，专属账号结果仅在同账号内复用。"""
-    if account_route != ACCOUNT_ROUTE_USER_BINDING:
-        return ACCOUNT_ROUTE_SHARED_POOL
-    account_key = str(requested_account_key or "").strip()
-    if not account_key:
-        raise ValueError("专属账号缓存缺少 requested_account_key")
-    digest = hashlib.sha256(account_key.encode("utf-8")).hexdigest()
-    return f"dedicated:{digest}"
+    """SellerSprite 结果属于平台公共数据，统一跨账号复用。"""
+    # 保留参数以兼容已有调用方；账号路由只影响执行，不影响结果身份。
+    del account_route, requested_account_key
+    return ACCOUNT_ROUTE_SHARED_POOL
+
+
+def _canonical_export_format(value: str | None) -> str:
+    """将等价的表格导出请求归一到同一缓存键。"""
+    normalized = str(value or "").strip().lower()
+    if normalized in {"xls", "xlsx"}:
+        return "xlsx"
+    return normalized
 
 
 def build_seller_sprite_cache_identity(
@@ -44,17 +46,17 @@ def build_seller_sprite_cache_identity(
     account_route: str | None,
     requested_account_key: str | None,
 ) -> tuple[str, str]:
-    """返回 SellerSprite 规范请求缓存键和账号隔离作用域。"""
+    """返回 SellerSprite 规范请求缓存键和公共结果作用域。"""
     cache_key = build_cache_key(
         "seller_sprite",
         {
-            "scenario": request.scenario,
-            "site": request.site,
-            "period": request.period,
+            "scenario": str(request.scenario or "").strip().lower(),
+            "site": str(request.site or "").strip().upper(),
+            "period": str(request.period or "").strip().lower(),
             "params": request.params,
-            "page_size": request.page_size,
-            "export_format": request.export_format,
-            "mode": request.mode,
+            "page_size": int(request.page_size or 100),
+            "export_format": _canonical_export_format(request.export_format),
+            "mode": str(request.mode or "browser-route").strip().lower(),
             "page_prepare": request.page_prepare,
         },
     )
