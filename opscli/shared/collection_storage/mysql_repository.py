@@ -589,6 +589,21 @@ class MySqlCollectionRepository:
               AND (request_fingerprint IS NULL OR cache_scope IS NULL)
             """
         )
+        # SellerSprite 结果是平台公共数据。历史版本曾按专属账号写入
+        # dedicated:*，升级后统一迁移到共享作用域，避免旧缓存永久失效。
+        cursor.execute(
+            """
+            UPDATE collection_runs
+            SET cache_scope = 'shared_pool',
+                request_params = JSON_SET(
+                    COALESCE(request_params, JSON_OBJECT()),
+                    '$._cache.cache_scope',
+                    'shared_pool'
+                )
+            WHERE source_system = 'seller_sprite'
+              AND cache_scope LIKE 'dedicated:%'
+            """
+        )
         if not _schema_index_exists(cursor, "ix_collection_runs_cache_lookup"):
             cursor.execute(
                 "CREATE INDEX ix_collection_runs_cache_lookup ON collection_runs ("
