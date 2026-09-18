@@ -11,6 +11,9 @@ import sys
 from pathlib import Path
 from typing import Callable, Sequence
 
+from opscli.app.domain.exceptions import AppError
+from opscli.app.services.git_environment import GitEnvironmentService
+
 
 DEFAULT_TEMPLATE_REPO = 'http://10.1.13.143:3000/aukeys-admin/template'
 DEFAULT_TEMPLATE_BRANCH = 'master'
@@ -83,10 +86,20 @@ def clone_template(
     '''直接 clone 模板到目标目录，成功后立即移除根目录 .git。'''
     target = _resolved_target(project_dir)
     _validate_empty_target(target)
+    try:
+        git_environment = GitEnvironmentService().ensure(install=True)
+    except AppError as exc:
+        raise TemplateCloneError(f'Git 环境准备失败 [{exc.code}]：{exc.message}') from exc
+    if not git_environment.get('ready'):
+        raise TemplateCloneError(
+            f"Git 环境未就绪 [{git_environment.get('status')}]: "
+            f"{git_environment.get('message')}"
+        )
+    git_executable = str(git_environment['git_path'])
 
     result = subprocess.run(
         [
-            'git',
+            git_executable,
             'clone',
             '--branch',
             branch,

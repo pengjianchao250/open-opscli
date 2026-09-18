@@ -1,7 +1,7 @@
 interface:
   display_name: "OPS 应用数据层构建"
   short_description: "为已初始化的 opscli app 站点构建真实业务数据层"
-  default_prompt: "使用 $ops-app-data-builder 为当前标准模板项目构建真实业务数据层，先校验 .opscli/app.json 与 app.yaml 的 app_id 身份一致性、binding slug、QueryGateway 和 app.yaml 数据集白名单，并确认 app.yaml 不含顶层 name，再判定单次查询、viewer-live、用户私有持久化或经过批准的系统同步；候选来源必须经在线元数据和少量真实查询验证，正式 OPS 查询只使用精确 dataset_alias、table_id 和 field_name，禁止关键词或相似字段回退，并生成后端业务 API、前端类型、SQLite 迁移、抗歧义测试和 data-spec。"
+  default_prompt: "使用 $ops-app-data-builder 为当前标准模板项目构建真实业务数据层，先校验 .opscli/app.json 与 app.yaml 的 app_id 身份一致性、binding slug、QueryGateway 和 app.yaml 数据集白名单，并确认 app.yaml 不含顶层 name，再判定单次查询、viewer-live、用户私有持久化或经过批准的系统同步；清晰真实数据需求必须实际调用对应查询 Skill 完成合同验证，零行仍标记 verified，临时服务异常标记 degraded 并继续其他模块；正式 OPS 查询只使用精确 dataset_alias、table_id 和 field_name，第三方合同必须记录 response_shape、shape_evidence 和精确字段映射，validate_before_snapshot 后才能保存快照，结构漂移使用 degraded_preserve_snapshot，禁止关键词、相似字段或历史项目回退；生成后端业务 API、前端类型、SQLite 迁移、抗歧义测试、data-spec 和 data-contracts.json，并运行交付校验器。"
 
 policy:
   allow_implicit_invocation: true

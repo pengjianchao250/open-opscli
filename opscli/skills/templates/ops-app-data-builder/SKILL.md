@@ -2,7 +2,7 @@
 name: ops-app-data-builder
 description: 用于 Codex 中为已绑定 AppHub 应用的标准模板项目构建真实业务数据层；复用模板 QueryGateway 验证 OPS、Keepa 或 SellerSprite 数据合同，并生成 FastAPI、前端 API、SQLite、测试和数据规范。未绑定项目、非标准模板、单次查询、纯静态页面和仅分析任务不使用本 Skill；只有会话提供 Dashboard 专用上下文与工具且目标是平台仪表盘对象时才转交 Dashboard Skill。
 metadata:
-  version: 0.1.14
+  version: 0.1.18
 ---
 
 # OPS 应用数据层构建
@@ -66,7 +66,11 @@ metadata:
 
 依赖 Skill 负责认证、元数据、字段校验和真实查询。本 Skill 不凭记忆选择数据集、字段、聚合、公式、筛选枚举或第三方场景参数，也不复制其内部查询实现。静态字段资料、历史授权目录和应用清单只能形成 `candidate`，不能替代当前在线元数据或把合同标记为 `verified`。
 
+对业务范围已经足以构造查询的真实数据产品，必须实际发起正式合同验证；不得在没有查询尝试的情况下直接生成最终 `blocked` 页面或固定返回 `blocked` 的业务 API。临时服务异常、超时和上游不可用应记录为 `degraded`，并继续完成不依赖该来源的其他模块。查询成功但零行仍是 `verified`，页面按“暂无数据”处理。
+
 只获取足以验证合同的少量样本。真实结果、导出文件和凭证不得提交到站点源码。
+
+Keepa 和 SellerSprite 的在线验证必须额外固化精确 `response_shape`、业务角色字段映射和脱敏 `shape_evidence`。包含已验证第三方产品时，`docs/ops-app/data-contracts.json` 使用 `schema_version: "1.1"`；OPS-only 合同继续兼容 1.0。验证处于 `degraded` 时只允许生成传输、任务、缓存和错误恢复基础设施，不得根据旧项目、历史样本或相似字段生成猜测的生产投影器。
 
 ## 工作流
 
@@ -83,6 +87,20 @@ metadata:
 
 仅缺少 `origin/master` 不是阻塞条件。项目已完成 `opscli app create/init`、模板和身份检查通过，且本地处于尚无首次提交的 `master` 时，继续实现和验证业务代码。首次提交与推送属于源码交付阶段；未经项目规则要求的用户授权不得执行，也不得要求用户先提交或推送后才开始数据层开发。
 
+#### 迁移覆盖矩阵协作
+
+如果项目存在 `.opscli/migration/current.json`，说明当前数据工作属于迁移重构，必须读取当前任务的 `coverage-matrix.json`：
+
+1. 只处理覆盖矩阵中 `dynamic=true` 的模块；一个动态模块对应一个明确的数据产品合同，不把多个语义不同的模块合并成模糊合同。
+2. 开始取数前确认 `opscli app migrate verify-ui --target "<project-directory>" --json` 已通过，当前迁移阶段至少是 `data_integration`；UI 门禁未通过时停止数据代码生成并交回 `$ops-app-build-spec`。
+3. 正式验证后把 `product_key`、合同状态、`implementation_status` 和证据回写到对应项的 `data_contract`。合同状态允许 `candidate`、`verified`、`degraded`、`blocked`、`deferred_attachment`；实现状态至少区分 `not_started`、`in_progress`、`implemented`、`verified`、`contract_verified_only`、`layout_only`、`blocked`。
+4. 合同样例、FakeGateway 测试和线上真实查询必须分别记录；只有正式合同验证成功或成功零行可以写为 `verified`，本地测试成功不能替代真实数据证据。
+5. `degraded`、`blocked` 和 `deferred_attachment` 必须写入证据与 `unblock_conditions` 数组，对应模块不能标记为 `已完成`。
+6. 合同 `verified` 只表示上游技术合同已经确认；后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI 证据全部完成后，`implementation_status` 才能写为 `verified`。仅完成合同验证时必须写为 `contract_verified_only`，只有布局时写为 `layout_only`。
+7. 一个产品验证成功后继续处理覆盖矩阵中全部未阻塞动态项，不得提前结束；每批数据合同更新后执行 `opscli app migrate export --target "<project-directory>" --json`，完成全部动态模块后执行 `opscli app migrate verify-data --target "<project-directory>" --json`。
+
+普通非迁移开发不存在 `.opscli/migration/current.json` 时，继续使用本 Skill 的常规 assessment、data-spec 和 `data-contracts.json` 工作流，不得为了使用迁移命令伪造迁移任务。
+
 ### 1. 读取项目证据
 
 读取项目规范、标准模板前后端入口、API 调用、环境变量、数据库、迁移和测试，确认 QueryGateway 基线完整且未被破坏。
@@ -98,6 +116,7 @@ metadata:
 - 用户私有数据是否统一使用可信 `owner_user_id`，第三方原始数据、异步任务、用户查询历史、输入和加工结果是否都限定当前用户。
 - SellerSprite 是否按当前 `owner_user_id` 保存并复用 pending `job_id`，是否存在跨用户复用任务或结果。
 - 生产配置是否关闭本机登录态回退，测试是否使用 FakeGateway 和 dependency override。
+- 需要本地运行验收时是否交回 `$ops-app-build-spec` 使用 `opscli app dev`，并以 `opscli app dev-status <project-root> --json` 的 `running=true`、`identity_verified=true` 和精确 `project_root` 证明服务属于当前项目；不得用旧浏览器标签页或单独 HTTP 200 代替项目身份校验。
 
 将发现写入 `docs/ops-app/assessment.md`；保留其他工具或人员维护的内容。
 
@@ -123,8 +142,10 @@ metadata:
 - 自然键、可重复执行语义和数据新鲜度。
 - 候选来源的 `candidate/verified/blocked` 状态、验证时间和在线证据。
 - OPS 合同的精确 `dataset_alias`、`table_id`，以及每个业务角色对应的精确 `field_name`、维度或指标角色、聚合方式和稳定结果别名。
+- Keepa 和 SellerSprite 合同的精确 `response_shape.records_path`、`record_type`，SellerSprite `columns + rows` 的 `columns_path`，以及每个业务角色的 `source_field`、`source_path`、`result_field` 和 `data_type`。
+- 第三方 `verification.shape_evidence` 只记录记录路径、容器类型和已观察字段名，并与技术合同逐项一致。
 
-无法验证的字段不得写成已确认合同。部分来源阻塞时保留已验证部分，并在 data-spec 中逐项标记 `blocked`。
+无法验证的字段不得写成已确认合同。清晰需求必须先进入 `verifying` 并实际调用对应 Skill；只有正式能力不支持、权限缺失、业务口径无法确认或运行时硬前置缺失，才可标记 `blocked`。服务异常和超时标记 `degraded`，不得用 `not_attempted`、`not_validated`、`service_error` 或 `timeout` 充当结构性阻塞。部分来源阻塞时保留已验证部分，并在 data-spec 中逐项标记状态。
 
 查询构造只使用在线元数据验证后的精确 `field_name`。`global_alias`、`verbose_name`、描述和中文业务名称只能帮助发现候选，不能进入正式字段选择；禁止使用 `includes`、关键词打分、子串搜索或“最相近字段”回退。精确字段缺失、重复或角色不符时必须快速失败，不能静默换字段。`validate_fields=true` 只证明字段引用可被查询服务接受，不证明字段符合业务语义，不能替代数据合同验证。
 
@@ -149,6 +170,7 @@ metadata:
 - 取数模式、来源候选、`candidate/verified/blocked` 状态和在线验证证据。
 - 字段、粒度、时间、筛选与口径。
 - 精确 `dataset_alias`、`table_id`、业务角色到 `field_name` 的映射、字段角色、聚合方式、结果别名，以及字段漂移时的失败策略。
+- 第三方 `response_shape`、`shape_evidence`、业务角色字段映射和 `projection_policy`；`validate_before_snapshot` 必须为 `true`，结构漂移策略必须为 `degraded_preserve_snapshot`。
 - 执行模式、身份边界和数据流。
 - FastAPI API、Pydantic 合同和前端类型。
 - 二次加工、`owner_user_id`、`request_hash`、异步任务、SQLite 表、迁移和清理策略。
@@ -156,6 +178,8 @@ metadata:
 - 环境变量、Mock、测试、阻塞项和待接入边界。
 
 同时更新 `project-spec.md` 的数据层摘要；初始化或迁移任务还要同步更新 migration-plan、development 和 deployment。第一阶段不创建第二个运行时 YAML 权威源。
+
+有真实数据需求时，同时生成 `docs/ops-app/data-contracts.json` 作为开发期验证凭证。开发中使用 `--mode draft`，完成上游合同验证后使用 `--mode contract`，最终交付前运行 `scripts/validate_data_contracts.py <path> --mode delivery --project-root <project-directory>`。`delivery` 要求每个真实数据产品同时满足 `contract_status=verified` 和 `implementation_status=verified`，并检查后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI 工件真实存在；前端工件不得保留“等待真实数据合同”“仅用于布局验证”等占位文本。该凭证不得保存真实结果行、原始响应、凭证、完整 Header 或下载 URL。校验器不属于运行时查询路径，也不替代在线元数据验证。
 
 ### 6. 生成或改造项目代码
 
@@ -198,6 +222,7 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - `app.yaml.opscli.datasets` 已包含所有正式 OPS 数据集。
 - OPS 查询只使用已验证的精确 `dataset_alias`、`table_id` 和 `field_name`；不存在关键词打分、`includes`、子串搜索、`global_alias` 查询回退或最相近字段替换。
 - 精确字段缺失、重复、维度/指标角色不符或 metadata 漂移时快速失败，并返回稳定业务错误。
+- OPS 内层失败复用模板 `extract_inner_error()`；前端优先展示 `data.inner_error.message` 等安全详细原因，不把 `LIMIT_TOO_LARGE`、字段缺失等错误降级成“请求验证失败”。
 - 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
 - OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
@@ -207,11 +232,13 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - `third_party_source_snapshot` 和 `third_party_async_job` 的读写、UPSERT、索引与 pending 复用都包含 `owner_user_id`。
 - Keepa 同时检查 HTTP 状态和响应 `success`，失败不清空最后有效快照。
 - SellerSprite pending 任务复用 `job_id`，`failed/cancelled` 停止轮询，HTTP 202 不被当作完成。
+- Keepa 正式商品记录按 `$.data.data[*]` 对象结构投影；SellerSprite `columns + rows` 按已验证列名投影，不按旧路径、列序或相似字段回退。
+- 第三方响应先完成字段投影和必填业务角色校验，再保存快照；结构不匹配时返回 `degraded` 并保留最后有效快照。
 - JSON 原始业务数据与用户加工结果分表；XLS/XLSX、二进制和临时下载 URL 未写入 SQLite。
 - 网络调用发生在 SQLite 事务外，写入使用短事务和批量操作。
 - Pydantic Schema、OpenAPI 和前端类型一致。
 - OPS 测试使用接近真实 metadata 的字段结构，并加入 `asin/parent_asin`、`order_qty/orders`、`price/ads_sales_cny` 等相似字段干扰，证明正式字段不会被误选。
-- 测试覆盖成功、空数据、零行、字段缺失、字段漂移、上游失败、分页/截断、Keepa 并发写入、SellerSprite pending 复用和用户权限边界。
+- 测试覆盖成功、空数据、零行、字段缺失、字段漂移、上游失败、泛化消息下的结构化详细原因、分页/截断、Keepa 并发写入、SellerSprite pending 复用和用户权限边界。
 - 项目中没有真实业务数据文件、凭证或完整鉴权头。
 
 未运行的验证不得写成已通过。
@@ -244,9 +271,10 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - Keepa 需求依赖 `/api/v1/keepa/run` 未声明的运行时端点或返回字段：不得猜测路径，标记待平台补齐。
 - SellerSprite 场景或参数未通过正式场景合同验证：停止该数据产品，不凭 SDK、CLI 或旧项目实现猜测 REST 合同。
 - SellerSprite 仅支持 XLS/XLSX 导出而页面需要 SQLite JSON 数据产品：标记阻塞或改为明确的导出型任务，不把文件伪装成 JSON 快照。
-- 依赖 Skill 或真实合同不可用：停止对应数据产品，不影响已验证数据产品继续交付。
+- 依赖 Skill 返回正式能力不支持、权限缺失或运行硬前置缺失：将对应数据产品标记为 `blocked`，不影响其他数据产品继续交付。
+- 依赖 Skill 已实际调用但遇到认证外的临时错误、超时或上游不可用：按反馈规则处理并标记 `degraded`，继续完成其他模块，不得改写成“尚未完成在线验证”。
 - 需要多写实例、跨服务共享数据库或高频持续写入：停止 SQLite 方案并提示联系 IT。
 
 ## 完成交付
 
-最终回复只报告：数据产品、已验证来源、生成或修改的代码与文档、执行模式、验证结果、阻塞项和用户下一步。不得把 Mock 写成真实接入，不得把合同验证样本写成线上数据。
+最终回复只报告：数据产品、合同状态、实现状态、已验证来源、生成或修改的代码与文档、执行模式、验证结果、降级项、阻塞项和用户下一步。不得把 Mock 写成真实接入，不得把合同验证样本写成线上数据，不得把 `contract_verified_only`、`layout_only` 或固定 `blocked` API 描述成业务取数完成。迁移任务还必须以 `opscli app migrate status` 的 `delivery_ready` 为准；为 `false` 时明确写“阶段性预览，尚未交付”。

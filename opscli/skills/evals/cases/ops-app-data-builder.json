@@ -9,7 +9,8 @@
     "agents/openai.yaml",
     "references/data-layer-contract.md",
     "references/runtime-source-routing.md",
-    "references/ops-dataset-application-guide.md"
+    "references/ops-dataset-application-guide.md",
+    "scripts/validate_data_contracts.py"
   ],
   "required_skill_terms": [
     "当前工作对象来自标准模板，并已通过 `opscli app create/init` 完成 AppHub 应用和 Git 仓库绑定",
@@ -24,7 +25,9 @@
     "approved-system-sync",
     "reference-only",
     "candidate",
+    "verifying",
     "verified",
+    "degraded",
     "blocked",
     "当前在线元数据",
     "查询组件只用于",
@@ -33,6 +36,18 @@
     "sync-request",
     "async-job",
     "docs/ops-app/data-spec.md",
+    "docs/ops-app/data-contracts.json",
+    "scripts/validate_data_contracts.py",
+    "response_shape",
+    "shape_evidence",
+    "validate_before_snapshot",
+    "degraded_preserve_snapshot",
+    "$.data.data[*]",
+    "columns + rows",
+    "implementation_status",
+    "implementation_artifacts",
+    "contract_verified_only",
+    "layout_only",
     "backend/clients/ops_query_client.py",
     "Depends(get_query_gateway)",
     "ViewerQueryGateway",
@@ -67,6 +82,14 @@
     {
       "id": "ops-sales-site-data-layer",
       "prompt": "当前 opscli app 站点要做销售经营页面，请验证 OPS 销售数据合同并生成 FastAPI 和前端取数层。"
+    },
+    {
+      "id": "clear-requirement-must-attempt-query",
+      "prompt": "为当前 AppHub 站点查询宁波部门 ASIN B0GJCWDDBB 在 2026-04-01 至 2026-06-30 的月订单量和美元销售额；不要用待接入占位替代真实取数。"
+    },
+    {
+      "id": "temporary-upstream-failure-is-degraded",
+      "prompt": "当前站点有 OPS、Keepa 和卖家精灵三个模块；如果 OPS 临时超时，继续完成另外两个模块和页面业务代码，并保留真实失败证据。"
     },
     {
       "id": "ambiguous-inventory-site-requirement",
@@ -129,6 +152,17 @@
     "SellerSprite 使用正式异步 REST，按 owner_user_id 保存并复用 pending job_id，成功 JSON 结果写当前用户私有快照",
     "OPS 原始和加工结果、用户查询历史及二次加工结果按 owner_user_id 隔离",
     "静态资料只形成 candidate，只有当前在线元数据和少量真实查询可以标记 verified",
+    "清晰真实数据需求必须实际进入 verifying 并调用正式查询，不能未尝试就生成 blocked 页面",
+    "零行查询结果仍可标记 verified，页面显示暂无数据",
+    "临时服务错误和超时标记 degraded，且不阻塞其他数据产品继续交付",
+    "已验证 Keepa 或 SellerSprite 合同使用 schema_version 1.1，记录精确 response_shape、shape_evidence 和业务字段映射",
+    "Keepa 使用 $.data.data[*] 对象记录，SellerSprite columns + rows 使用正式列名映射，不按旧路径、列序或相似字段猜测",
+    "第三方响应必须 validate_before_snapshot，结构漂移按 degraded_preserve_snapshot 降级并保留最后有效快照",
+    "第三方在线验证为 degraded 时不生成猜测的生产字段投影器",
+    "生成 docs/ops-app/data-contracts.json 并通过交付校验器",
+    "合同 verified 只代表上游合同已确认，最终交付还要求 implementation_status=verified",
+    "delivery 校验检查后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI 工件",
+    "迁移任务必须继续处理全部未阻塞动态项，不能在首个合同成功后提前结束",
     "缺少批准的 OPS 系统运行时适配器时，固定同步标记 blocked，不生成系统账号、定时任务或伪适配器",
     "查询组件只用于权限枚举和筛选，不能作为经营业务结果",
     "固定过程数据必须定义确定性分页、断点续传、批次、自然键、幂等和快照语义",

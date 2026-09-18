@@ -87,8 +87,7 @@ opscli app push [PATH] --message MESSAGE
 - AppHub 地址纳入 `opscli/auth/config.py` 的 `[systems].apphub_url` 统一环境配置；
 - AppHub 环境变量统一且仅使用 `OPSCLI_APPHUB_URL`；
 - 预发布 AppHub 当前配置为 `apphub_url=https://apphub.qa.aukeyit.com`；
-- 生产 AppHub 正式域名，
-  `apphub_url=https://apphub.api.xenkee.com`，正式域名确定后只替换生产环境配置；
+- 生产 AppHub 正式域名为 `apphub_url=https://apphub.xenkee.com`；
 - `apphub_url` 配置值不包含 `/api/apphub/v1`；
 - `opscli app` 不根据 OPS 域名猜测 AppHub 地址，预发布和生产部署应成组配置
   `ops_url/ops_system_url/apphub_url/app_template_repo/app_template_branch/polaris_system_url`；

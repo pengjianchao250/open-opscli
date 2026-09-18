@@ -13,6 +13,55 @@
   "consumers": ["competitor-page"],
   "source": "seller_sprite",
   "contract_status": "verified",
+  "requires_real_data": true,
+  "verification": {
+    "attempted": true,
+    "attempted_at": "2026-09-17T10:00:00+08:00",
+    "method": "ops-seller-sprite",
+    "outcome": "success",
+    "row_count": 20,
+    "shape_evidence": {
+      "records_path": "$.data.result.rows[*]",
+      "record_type": "array",
+      "observed_fields": ["商品标题", "价格", "月销量"]
+    }
+  },
+  "technical_contract": {
+    "scenario": "verified_scenario",
+    "site": "US",
+    "period": "30d",
+    "result_format": "json",
+    "response_shape": {
+      "records_path": "$.data.result.rows[*]",
+      "record_type": "array",
+      "columns_path": "$.data.result.columns"
+    },
+    "required_business_roles": ["title", "price", "estimated_sales_30d"],
+    "fields": {
+      "title": {
+        "source_field": "商品标题",
+        "source_path": "$.data.result.rows[*][0]",
+        "result_field": "title",
+        "data_type": "string"
+      },
+      "price": {
+        "source_field": "价格",
+        "source_path": "$.data.result.rows[*][1]",
+        "result_field": "price",
+        "data_type": "number"
+      },
+      "estimated_sales_30d": {
+        "source_field": "月销量",
+        "source_path": "$.data.result.rows[*][2]",
+        "result_field": "estimated_sales_30d",
+        "data_type": "integer"
+      }
+    },
+    "projection_policy": {
+      "validate_before_snapshot": true,
+      "on_schema_mismatch": "degraded_preserve_snapshot"
+    }
+  },
   "execution_mode": "async-job",
   "grain": ["site", "asin"],
   "natural_key": ["site", "asin"],
@@ -60,20 +109,90 @@
 }
 ```
 
-示例字段只表达合同形状，不代表真实 SellerSprite 场景或参数。实际场景、字段和口径必须由对应数据 Skill 验证后写入项目 data-spec。
+示例字段只表达合同形状，不代表真实 SellerSprite 场景或参数；`verified_scenario` 只能在项目中替换为对应 Skill 实际验证的正式场景。实际场景、字段和口径必须由对应数据 Skill 验证后写入项目 data-spec。
 
 ## 2. 合同状态
 
 | 状态 | 含义 |
 | --- | --- |
-| `candidate` | 业务目标或候选来源已识别，尚未由当前在线元数据验证 |
-| `verified` | 来源、字段或场景、参数和少量样本已验证 |
-| `blocked` | 正式端点、权限、返回格式或运行前置缺失 |
+| `candidate` | 业务目标或候选来源已识别，尚未发起当前在线验证 |
+| `verifying` | 正在调用正式数据源或执行合同给出的恢复流程 |
+| `verified` | 来源、字段或场景、参数和少量样本已验证；零行结果也可属于本状态 |
+| `degraded` | 已实际调用，但临时服务错误、超时或上游异常导致本轮未完成 |
+| `blocked` | 正式能力不支持、权限缺失、业务口径无法确认或运行硬前置缺失 |
 | `mock-only` | 只允许前端联调和测试，不代表线上可取数 |
 
-不得用一个总状态覆盖所有数据产品。多来源产品要分别记录每个来源的状态、验证时间和证据。静态字段目录、历史授权目录和应用清单不能把 `candidate` 提升为 `verified`。
+不得用一个总状态覆盖所有数据产品。多来源产品要分别记录每个来源的状态、验证时间和证据。静态字段目录、历史授权目录和应用清单不能把 `candidate` 提升为 `verified`。没有真实查询尝试时不得从 `candidate` 直接变为最终 `blocked`；临时服务异常不得伪装成正式能力不支持。
 
-### 2.1 OPS 取数模式
+### 2.1 开发期验证凭证
+
+有真实数据需求的项目生成 `docs/ops-app/data-contracts.json`。该文件是开发期验证凭证，不是运行时配置权威源，使用固定结构：
+
+- OPS-only 合同可以继续使用 `schema_version: "1.0"`。
+- 只要包含 `contract_status: "verified"` 的 Keepa 或 SellerSprite 产品，就必须升级为 `schema_version: "1.1"`。
+- 第三方验证凭证只保存 `shape_evidence.records_path`、`record_type` 和 `observed_fields`，不得保存真实商品行、导出结果或完整响应。
+
+```json
+{
+  "schema_version": "1.0",
+  "products": [
+    {
+      "product_key": "monthly_sales_trend",
+      "source": "ops",
+      "contract_status": "verified",
+      "requires_real_data": true,
+      "verification": {
+        "attempted": true,
+        "attempted_at": "2026-09-17T10:00:00+08:00",
+        "method": "opscli query flow",
+        "outcome": "zero_rows",
+        "row_count": 0
+      },
+      "technical_contract": {
+        "dataset_alias": "verified_dataset_alias",
+        "table_id": "verified_table_id",
+        "required_business_roles": ["month", "orders"],
+        "fields": {
+          "month": {
+            "field_name": "verified_month_field",
+            "role": "dimension",
+            "result_alias": "month"
+          },
+          "orders": {
+            "field_name": "verified_orders_field",
+            "role": "metric",
+            "aggregation": "sum",
+            "result_alias": "orders"
+          }
+        }
+      },
+      "implementation_status": "verified",
+      "implementation_artifacts": {
+        "backend_api": ["backend/api/v1/sales.py"],
+        "backend_service": ["backend/services/sales_service.py"],
+        "backend_schema": ["backend/schemas/sales.py"],
+        "frontend_consumer": ["frontend/src/api/sales.ts", "frontend/src/views/SalesView.vue"],
+        "tests": ["tests/api/test_sales.py"],
+        "openapi": ["docs/openapi.json"]
+      }
+    }
+  ]
+}
+```
+
+开发期按阶段运行：
+
+```text
+python <skill-dir>/scripts/validate_data_contracts.py docs/ops-app/data-contracts.json --mode draft
+python <skill-dir>/scripts/validate_data_contracts.py docs/ops-app/data-contracts.json --mode contract
+python <skill-dir>/scripts/validate_data_contracts.py docs/ops-app/data-contracts.json --mode delivery --project-root <project-directory>
+```
+
+凭证不得包含真实结果行、原始响应、Token、Cookie、JWT、Session ID、密码、Secret、API Key 或临时下载地址。OPS 技术合同必须用 `required_business_roles` 声明用户点名的全部维度、指标和必要筛选角色，且 `fields` 必须逐项覆盖。`verified` 必须记录真实调用尝试和技术合同；`degraded` 必须记录失败码、是否可重试和按规则产生的反馈 UUID；`blocked` 必须记录结构化 `blockers`，不得使用 `not_attempted`、`not_validated`、`service_error` 或 `timeout`。
+
+`contract_status` 与 `implementation_status` 是两个独立维度。合同 `verified` 后，数据层仍可处于 `contract_verified_only`、`not_started`、`in_progress` 或 `implemented`；只有后端 API、service、Pydantic Schema、前端消费、测试和 OpenAPI 证据全部完成并通过验证后，才能写为 `implementation_status=verified`。`delivery` 模式会检查上述工件真实存在，并拒绝前端中的“等待真实数据合同”“仅用于布局验证”等占位文本。
+
+### 2.2 OPS 取数模式
 
 涉及 OPS 时先按 `references/ops-dataset-application-guide.md` 判定：
 
@@ -86,7 +205,7 @@
 
 OPS 数据产品在 data-spec 中记录 `acquisition_mode`。Keepa 和 SellerSprite 继续使用各自的 `execution_mode`，但上游鉴权必须复用模板相同的 `viewer/session/local` 请求身份模式。
 
-### 2.2 OPS 精确字段合同
+### 2.3 OPS 精确字段合同
 
 每个 `verified` 的 OPS 数据产品必须记录并在后端业务代码中固化：
 
@@ -209,17 +328,26 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 
 - 页面运行时只调用 `POST /api/v1/keepa/run`。
 - 场景列表只用于开发期验证或新增场景确认。
+- 正式商品结果按 `$.data.data[*]` 对象记录验证；标题、当前价、BSR 等页面字段必须绑定已观察到的精确字段名，例如 `title`、`currentAmazonPrice`、`currentSalesRank`。
 - 同时检查 HTTP 状态和响应 `success`；HTTP 200 且 `success=false` 仍是失败。
-- 网络请求在 SQLite 写事务外完成，成功解析后短事务写入。
+- HTTP 和业务状态成功后，先按 `response_shape` 提取并投影记录，再校验 `required_business_roles`；只有投影校验通过才允许短事务写入快照。
+- 路径或字段漂移时使用 `degraded_preserve_snapshot`，不得清空或覆盖最后有效快照。
 
 ### 8.2 SellerSprite
 
 - 普通任务使用正式 jobs 提交、状态、批量状态、result 或 export 接口。
 - Listing Analysis 使用独立三段式接口，不提交到普通 jobs。
+- JSON 场景必须记录精确 `response_shape`。对于 `columns + rows` 结构，声明 `columns_path`、`records_path` 和 `record_type: "array"`，并用在线返回的正式列名建立字段映射。
 - 保存每次提交返回的 `job_id`；pending 任务不得重新提交。
 - `queued/running` 继续查询，`succeeded` 读取结果，`failed/cancelled` 停止轮询。
-- 只有 JSON `data.result` 可以进入当前用户私有快照；文件导出保持导出型任务。
+- 只有完成字段投影与必填角色校验的 JSON 结果可以进入当前用户私有快照；文件导出保持导出型任务。
 - 不调用 quota 接口参与业务流程，不处理额度检查、扣减、归属或账号调度。
+
+### 8.3 第三方投影与降级
+
+- `technical_contract.response_shape`、`fields` 和 `projection_policy` 必须与在线验证得到的 `verification.shape_evidence` 一致。
+- `projection_policy.validate_before_snapshot` 固定为 `true`，`on_schema_mismatch` 固定为 `degraded_preserve_snapshot`。
+- 在线验证为 `degraded` 时可以生成请求、任务、缓存和错误处理基础设施，但不得依据旧项目、相似字段或历史样本猜测正式生产字段投影。
 
 ## 9. 错误与日志合同
 
@@ -228,6 +356,8 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 - HTTP 404 的 SellerSprite 任务不得继续假装 pending。
 - HTTP 409 改走正确的 result/export 合同。
 - HTTP 422 不原样重试；HTTP 502 仅有限重试；HTTP 503 遵循 `Retry-After`。
+- OPS viewer 单次查询 `limit` 按已验证 REST 合同不超过 `50000`；需要更多数据时使用确定性分页并检查 `truncated`、`total_count`，不得把 SDK 或旧文档中的更大上限直接用于 viewer。
+- OPS HTTP 200 内层失败必须保留 `error.code` 和 `details.errors`。业务 service 复用模板 `extract_inner_error()` 或等价结构化解析；前端错误归一化优先展示安全的 `data.inner_error.message`。当顶层仅为“请求验证失败”时，不得丢失 `LIMIT_TOO_LARGE`、字段名、实际值和允许上限等可行动原因。
 - 日志只记录时间、耗时、`scenario`、`site`、`job_id`、HTTP 状态、`success`、`state`、`error.code` 和 `row_count` 等必要元数据。
 
 ## 10. 测试合同
@@ -236,6 +366,7 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 
 - OPS FakeGateway、dependency override 和 `owner_user_id` 隔离。
 - OPS 精确数据集与字段合同，包含字段缺失、重复、角色变化和 metadata 漂移的快速失败。
+- OPS 泛化顶层消息与结构化详细原因并存时，断言 `LIMIT_TOO_LARGE` 等具体原因能够到达站点 API 和前端提示。
 - 使用接近真实 metadata 的相似字段干扰，例如 `asin/parent_asin`、`order_qty/orders`、`price/ads_sales_cny`，证明代码不会按关键词或相似度误选字段。
 - Keepa 同步成功、HTTP 200 业务失败、并发 `UPSERT` 和旧响应不覆盖新快照。
 - SellerSprite 提交、HTTP 202、pending `job_id` 复用、终态、JSON result 和 XLS/XLSX 边界。
@@ -248,7 +379,7 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 ```text
 1. 页面与数据产品
 2. OPS acquisition_mode 与选择原因
-3. 候选来源、candidate/verified/blocked 状态和在线验证证据
+3. 候选来源、candidate/verifying/verified/degraded/blocked 状态和在线验证证据
 4. 精确 dataset_alias、table_id、field_name、字段角色、聚合、结果别名、粒度、自然键、快照与业务口径
 5. 执行模式与身份边界
 6. source_execution 与 request_hash
@@ -258,7 +389,8 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 10. SQLite 模型、迁移与清理
 11. 新鲜度、分页、截断、超时与重试
 12. 环境变量与 Secret
-13. Mock、测试和阻塞项
+13. Mock、测试、降级和阻塞项
+14. `data-contracts.json` 与交付校验结果
 ```
 
 第一阶段只生成 Markdown 规范，不新增运行时 YAML；数据规范不得形成第二套配置权威源。
