@@ -356,6 +356,54 @@ def test_verified_seller_sprite_columns_rows_contract_passes_schema_1_1() -> Non
     ) == []
 
 
+def test_apphub_seller_sprite_request_is_validated_when_present() -> None:
+    """AppHub SellerSprite 扩展请求存在时必须通过机器合同校验。"""
+    validator = _load_validator()
+    product = _verified_third_party_product("seller_sprite")
+    product["technical_contract"]["apphub_request"] = {
+        "scope": "apphub",
+        "contract_schema_version": "1.0",
+        "scenario": "keyword-miner",
+        "tool": "seller_sprite_run",
+        "endpoint_family": "ordinary_jobs",
+        "site": "US",
+        "period": "30d",
+        "page_size": 100,
+        "params": {"keyword": "wireless charger"},
+        "export_format": "json",
+    }
+
+    assert validator.validate_document(
+        _document(product, schema_version="1.1"),
+        mode="contract",
+    ) == []
+
+
+def test_apphub_seller_sprite_request_rejects_non_json_page_format() -> None:
+    """页面数据请求不能通过文件导出格式冒充 JSON 合同。"""
+    validator = _load_validator()
+    product = _verified_third_party_product("seller_sprite")
+    product["technical_contract"]["apphub_request"] = {
+        "scope": "apphub",
+        "contract_schema_version": "1.0",
+        "scenario": "keyword-miner",
+        "tool": "seller_sprite_run",
+        "endpoint_family": "ordinary_jobs",
+        "site": "US",
+        "period": "30d",
+        "page_size": 100,
+        "params": {"keyword": "wireless charger"},
+        "export_format": "xls",
+    }
+
+    errors = validator.validate_document(
+        _document(product, schema_version="1.1"),
+        mode="contract",
+    )
+
+    assert any("export_format=json" in error for error in errors)
+
+
 def test_third_party_field_must_exist_in_shape_evidence() -> None:
     """正式投影字段必须出现在脱敏结构证据中。"""
     validator = _load_validator()

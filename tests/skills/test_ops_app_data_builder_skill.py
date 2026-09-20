@@ -352,8 +352,30 @@ def test_ops_app_data_builder_requires_exact_third_party_projection_contracts():
         "currentSalesRank",
         "columns + rows",
         "不生成猜测的生产字段投影器",
+        "APPHUB_SCENARIO_CONTRACTS.json",
+        "seller_sprite_scenarios",
+        "export_format=json",
+        "technical_contract.apphub_request",
     ):
         assert required in content
+
+
+def test_ops_app_data_builder_apphub_seller_sprite_contract_is_bundled():
+    """AppHub SellerSprite 机器合同必须随模板交付。"""
+    contract_path = (
+        ROOT
+        / "opscli"
+        / "skills"
+        / "templates"
+        / "ops-seller-sprite"
+        / "APPHUB_SCENARIO_CONTRACTS.json"
+    )
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+
+    assert contract["scope"] == "apphub"
+    assert contract["provider"] == "seller_sprite"
+    assert contract["discovery_tool"] == "seller_sprite_scenarios"
+    assert "listing-analysis" in contract["scenarios"]
 
 
 def test_ops_app_data_builder_contract_example_is_valid_json():

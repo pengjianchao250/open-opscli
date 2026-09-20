@@ -1,0 +1,431 @@
+{
+  "contract_schema_version": "1.0",
+  "scope": "apphub",
+  "provider": "seller_sprite",
+  "catalog_version": "2026-09-18",
+  "discovery_tool": "seller_sprite_scenarios",
+  "default_site": "US",
+  "default_period": "30d",
+  "default_page_size": 100,
+  "supported_sites": ["US", "JP", "DE", "UK", "CA", "FR", "IT", "ES", "IN", "MX"],
+  "scenarios": {
+    "competitor-lookup": {
+      "title": "竞品查找",
+      "description": "按关键词、品牌、卖家或 ASIN 查找竞品商品。",
+      "business_boundary": "仅用于竞品发现与列表分析，不替代 Listing Analysis。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_any_of": ["keyword", "brand", "sellerName", "asins"],
+      "params": {
+        "keyword": {"type": "string", "min_length": 1},
+        "brand": {"type": "string", "min_length": 1},
+        "sellerName": {"type": "string", "min_length": 1},
+        "asins": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "node": {"type": "string", "min_length": 1},
+        "category": {"type": "string", "min_length": 1},
+        "nodeIdPath": {"type": "string", "min_length": 1},
+        "nodeIdPaths": {"type": "string_list", "min_items": 1, "max_items": 20}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "asin", "source_field": "ASIN", "source_path": "$.data.result.rows[*][0]", "result_field": "asin", "data_type": "string"},
+          {"role": "title", "source_field": "商品标题", "source_path": "$.data.result.rows[*][1]", "result_field": "title", "data_type": "string"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "product-research": {
+      "title": "选产品",
+      "description": "按类目、关键词、价格、销量和评分条件筛选候选产品。",
+      "business_boundary": "仅用于候选产品筛选，不生成定价或利润结论。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "params": {
+        "recommendationMode": {"type": "string", "min_length": 1},
+        "nodeIdPaths": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "keyword": {"type": "string", "min_length": 1},
+        "lowPrice": {"type": "number", "minimum": 0},
+        "highPrice": {"type": "number", "minimum": 0},
+        "minUnits": {"type": "integer", "minimum": 0},
+        "maxUnits": {"type": "integer", "minimum": 0},
+        "minRating": {"type": "number", "minimum": 0, "maximum": 5},
+        "maxRating": {"type": "number", "minimum": 0, "maximum": 5}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "asin", "source_field": "ASIN", "source_path": "$.data.result.rows[*][0]", "result_field": "asin", "data_type": "string"},
+          {"role": "title", "source_field": "商品标题", "source_path": "$.data.result.rows[*][1]", "result_field": "title", "data_type": "string"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "keyword-miner": {
+      "title": "关键词挖掘",
+      "description": "基于关键词和筛选条件获取关键词搜索与热度数据。",
+      "business_boundary": "仅用于关键词发现，不替代关键词转化率分析。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["keyword"],
+      "params": {
+        "keyword": {"type": "string", "min_length": 1},
+        "filterRootWord": {"type": "string", "min_length": 1},
+        "amazonChoice": {"type": "boolean"},
+        "includeHighFrequency": {"type": "boolean"}
+      },
+      "period": {"kind": "duration_or_month", "allowed": ["7d", "30d", "90d", "YYYY-MM"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "monthly_searches", "source_field": "月搜索量", "source_path": "$.data.result.rows[*][1]", "result_field": "monthly_searches", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "keyword-research": {
+      "title": "关键词选品",
+      "description": "按关键词、类目和流量销量条件筛选关键词相关商品。",
+      "business_boundary": "仅用于关键词关联选品，不生成广告投放建议。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "params": {
+        "keyword": {"type": "string", "min_length": 1},
+        "nodeIdPaths": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "minSearches": {"type": "number", "minimum": 0},
+        "maxSearches": {"type": "number", "minimum": 0},
+        "minProducts": {"type": "integer", "minimum": 0},
+        "maxProducts": {"type": "integer", "minimum": 0},
+        "marketPeriod": {"type": "string", "min_length": 1}
+      },
+      "period": {"kind": "month", "allowed": ["YYYY-MM"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "monthly_searches", "source_field": "月搜索量", "source_path": "$.data.result.rows[*][1]", "result_field": "monthly_searches", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "aba-research": {
+      "title": "ABA 数据选品",
+      "description": "基于 ABA 搜索词或 ASIN 条件获取选品数据。",
+      "business_boundary": "仅用于 ABA 数据选品，不替代站内销售归因。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_any_of": ["q", "keywordOrAsin", "keyword", "asin"],
+      "params": {
+        "q": {"type": "string", "min_length": 1},
+        "keywordOrAsin": {"type": "string", "min_length": 1},
+        "keyword": {"type": "string", "min_length": 1},
+        "asin": {"type": "string", "min_length": 1},
+        "departments": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "rankGrowthType": {"type": "string", "min_length": 1}
+      },
+      "period": {"kind": "aba_week_or_month", "allowed": ["W", "M", "YYYY-MM-DD", "YYYY-MM"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "search_rank", "source_field": "现排名", "source_path": "$.data.result.rows[*][1]", "result_field": "search_rank", "data_type": "integer"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "branddb": {
+      "title": "全球商标库",
+      "description": "按文本、品牌、申请人或分类查询全球商标库导出结果。",
+      "business_boundary": "仅支持文件导出，不作为 JSON 页面数据源。",
+      "endpoint_family": "browser_route_export",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "export-only",
+      "required_params": ["text"],
+      "params": {
+        "text": {"type": "string", "min_length": 1},
+        "feature": {"type": "string", "min_length": 1},
+        "office": {"type": "string", "min_length": 1},
+        "brandName": {"type": "string", "min_length": 1},
+        "status": {"type": "string", "min_length": 1},
+        "applicant": {"type": "string", "min_length": 1},
+        "niceClass": {"type": "string", "min_length": 1}
+      },
+      "period": {"kind": "not_applicable", "allowed": ["30d"]},
+      "export_formats": ["xls", "xlsx"],
+      "response": {"file_type": "xlsx", "business_fields": []},
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": false, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 0}
+    },
+    "association-traffic": {
+      "title": "关联流量",
+      "description": "基于 ASIN 查询关联商品和关联流量信息。",
+      "business_boundary": "仅用于关联流量发现，不替代商品详情或销量数据。",
+      "endpoint_family": "browser_route_json",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["asins"],
+      "params": {
+        "asins": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "relations": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "orderField": {"type": "string", "min_length": 1},
+        "desc": {"type": "boolean"}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "asin", "source_field": "ASIN", "source_path": "$.data.result.rows[*][0]", "result_field": "asin", "data_type": "string"},
+          {"role": "related_asin", "source_field": "关联ASIN", "source_path": "$.data.result.rows[*][1]", "result_field": "related_asin", "data_type": "string"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "traffic-extend": {
+      "title": "拓展流量词",
+      "description": "基于 ASIN 拓展相关流量词和变体范围。",
+      "business_boundary": "仅用于流量词拓展，不替代关键词转化率查询。",
+      "endpoint_family": "browser_route_json",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["asins"],
+      "params": {
+        "asins": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "variantSelection": {"type": "enum", "allowed": ["all", "sell_well", "current"]}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "asin", "source_field": "相关ASIN", "source_path": "$.data.result.rows[*][1]", "result_field": "asin", "data_type": "string"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "keyword-comparison": {
+      "title": "流量词对比",
+      "description": "对比自有 ASIN 与竞品 ASIN 的流量词表现。",
+      "business_boundary": "仅用于 ASIN 间关键词对比，不生成竞品结论。",
+      "endpoint_family": "browser_route_json",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["ownAsin", "competitorAsins"],
+      "params": {
+        "ownAsin": {"type": "asin", "min_items": 1, "max_items": 1},
+        "competitorAsins": {"type": "string_list", "min_items": 1, "max_items": 10},
+        "variantSelection": {"type": "enum", "allowed": ["sell_well", "current"]}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "own_asin_share", "source_field": "流量占比", "source_path": "$.data.result.rows[*][1]", "result_field": "own_asin_share", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "keyword-conversion-rate": {
+      "title": "关键词转化率",
+      "description": "查询指定关键词的转化率和相关表现指标。",
+      "business_boundary": "仅用于关键词转化率数据，不替代广告归因。",
+      "endpoint_family": "browser_route_json",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["keywords"],
+      "params": {"keywords": {"type": "string_list", "min_items": 1, "max_items": 1000}},
+      "period": {"kind": "conversion_period", "allowed": ["W", "90D"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "conversion_rate", "source_field": "搜索转化率", "source_path": "$.data.result.rows[*][1]", "result_field": "conversion_rate", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "real-time-bidding": {
+      "title": "实时查竞价",
+      "description": "按 ASIN 查询实时竞价相关信息。",
+      "business_boundary": "仅用于竞价查询，不保存或执行广告调价。",
+      "endpoint_family": "browser_route_json",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["asin"],
+      "params": {"asin": {"type": "asin", "min_items": 1, "max_items": 1}},
+      "period": {"kind": "not_applicable", "allowed": ["30d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "bid", "source_field": "提高和降低（精准）—推荐竞价", "source_path": "$.data.result.rows[*][1]", "result_field": "bid", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "aba-reverse": {
+      "title": "ABA 出单词反查",
+      "description": "按 ASIN 反查 ABA 出单词并导出结果。",
+      "business_boundary": "仅支持文件导出，不作为 JSON 页面数据源。",
+      "endpoint_family": "export_only",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "export-only",
+      "required_any_of": ["asin", "asins"],
+      "params": {
+        "asin": {"type": "asin", "min_items": 1, "max_items": 1},
+        "asins": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "reverseType": {"type": "enum", "allowed": ["W", "M"]},
+        "orderField": {"type": "string", "min_length": 1},
+        "orderDesc": {"type": "boolean"},
+        "conversionType": {"type": "string", "min_length": 1},
+        "loadVariations": {"type": "boolean"}
+      },
+      "period": {"kind": "aba_week_or_month", "allowed": ["W", "M", "YYYY-MM-DD", "YYYY-MM"]},
+      "export_formats": ["xls", "xlsx"],
+      "response": {"file_type": "xlsx", "business_fields": []},
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": false, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 0}
+    },
+    "keyword-reverse": {
+      "title": "关键词反查",
+      "description": "按 ASIN 反查商品相关关键词。",
+      "business_boundary": "仅用于关键词反查，不替代商品流量来源分析。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_params": ["asin"],
+      "params": {
+        "asin": {"type": "asin", "min_items": 1, "max_items": 1},
+        "badges": {"type": "string_list", "min_items": 1, "max_items": 20}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "search_rank", "source_field": "ABA月排名", "source_path": "$.data.result.rows[*][1]", "result_field": "search_rank", "data_type": "integer"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "traffic-source": {
+      "title": "查流量来源",
+      "description": "按关键词或 ASIN 查询流量来源及排序信息。",
+      "business_boundary": "仅用于流量来源分析，不替代销售或广告数据。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "required_any_of": ["keyword", "asin", "asins"],
+      "params": {
+        "keyword": {"type": "string", "min_length": 1},
+        "asin": {"type": "asin", "min_items": 1, "max_items": 1},
+        "asins": {"type": "string_list", "min_items": 1, "max_items": 20},
+        "order": {"type": "integer", "minimum": 0},
+        "desc": {"type": "boolean"}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "keyword", "source_field": "关键词", "source_path": "$.data.result.rows[*][0]", "result_field": "keyword", "data_type": "string"},
+          {"role": "traffic_share", "source_field": "流量占比", "source_path": "$.data.result.rows[*][1]", "result_field": "traffic_share", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "market-research": {
+      "title": "选市场",
+      "description": "按市场研究条件查询类目或市场机会数据。",
+      "business_boundary": "仅用于市场研究，不生成新品利润试算。",
+      "endpoint_family": "ordinary_jobs",
+      "tool": "seller_sprite_run",
+      "delivery_mode": "json",
+      "params": {
+        "departmentKeyword": {"type": "string", "min_length": 1},
+        "category": {"type": "string", "min_length": 1},
+        "nodeIdPath": {"type": "string", "min_length": 1},
+        "newReleaseNum": {"type": "integer", "minimum": 0},
+        "topn": {"type": "integer", "minimum": 1, "maximum": 100}
+      },
+      "period": {"kind": "duration", "allowed": ["7d", "30d", "90d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "category", "source_field": "细分市场", "source_path": "$.data.result.rows[*][0]", "result_field": "category", "data_type": "string"},
+          {"role": "total_sales", "source_field": "月总销量", "source_path": "$.data.result.rows[*][1]", "result_field": "total_sales", "data_type": "number"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_job_status", "result_tool": "seller_sprite_job_result", "max_retries": 1}
+    },
+    "listing-analysis": {
+      "title": "Listing Analysis",
+      "description": "按 ASIN 查询 Listing Analysis 专用异步分析结果。",
+      "business_boundary": "必须走 Listing Analysis 独立接口，不得提交普通 jobs。",
+      "endpoint_family": "listing_analysis",
+      "tool": "seller_sprite_listing_analysis_submit",
+      "delivery_mode": "json",
+      "required_params": ["asin"],
+      "params": {
+        "asin": {"type": "asin", "min_items": 1, "max_items": 1},
+        "station": {"type": "string", "min_length": 1}
+      },
+      "period": {"kind": "not_applicable", "allowed": ["30d"]},
+      "export_formats": ["json", "xls", "xlsx"],
+      "response": {
+        "records_path": "$.data.result.rows[*]",
+        "columns_path": "$.data.result.columns",
+        "record_type": "array",
+        "business_fields": [
+          {"role": "asin", "source_field": "ASIN", "source_path": "$.data.result.rows[*][0]", "result_field": "asin", "data_type": "string"},
+          {"role": "title", "source_field": "商品标题", "source_path": "$.data.result.rows[*][1]", "result_field": "title", "data_type": "string"}
+        ]
+      },
+      "async": {"states": ["queued", "running", "succeeded", "failed", "cancelled"], "reuse_pending_job": true, "status_tool": "seller_sprite_listing_analysis_status", "result_tool": "seller_sprite_listing_analysis_result", "max_retries": 0, "explicit_user_intent_required": true}
+    }
+  }
+}

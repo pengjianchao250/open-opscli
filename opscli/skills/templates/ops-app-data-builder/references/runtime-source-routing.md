@@ -121,6 +121,8 @@ Keepa 可以实时调用，也可以按新鲜度写入 `third_party_source_snaps
 
 使用 `$ops-seller-sprite` 验证正式场景、参数、返回结构和少量样本。新增场景先确认正式场景列表和参数手册，不凭 SDK、CLI、MCP 或旧项目实现猜测 REST 合同。
 
+新建 AppHub 数据产品时，先加载 `ops-seller-sprite/APPHUB_SCENARIO_CONTRACTS.json`，再调用 `seller_sprite_scenarios` 做线上场景发现。请求必须逐项匹配合同中的 `scenario`、`endpoint_family`、`site`、`period`、`page_size`、`params` 和 `export_format`；页面需要 JSON 数据时必须显式传递 `export_format=json`。合同校验失败时停止数据产品生成，不回退到相似场景或旧站点实现。
+
 对于 `columns + rows` JSON 结果，合同必须记录 `columns_path`、`records_path`、`record_type: "array"`，并把在线响应中的正式列名写入 `shape_evidence.observed_fields`。每个业务字段都要声明精确 `source_field`、`source_path`、`result_field` 和 `data_type`；不得按列序猜测或用相似列名回退。
 
 ### 5.2 普通异步任务
@@ -144,6 +146,8 @@ POST /api/v1/seller-sprite/jobs
 任务提交成功的 HTTP 202 只表示已受理。站点 API 将 pending 映射为本站稳定的处理中响应，前端只轮询当前站点 `/api`。
 
 普通任务的 `request_hash` 由 `scenario + site + period + page_size + params` 生成。`third_party_async_job` 使用 `UNIQUE(owner_user_id, provider, request_hash)` 保存当前用户当前或最近任务；存在 `queued/running` 任务时只复用该用户原 `job_id`。
+
+AppHub 的 `technical_contract.apphub_request` 保存规范化请求证据；`export_format` 必须进入请求合同校验，但不进入普通任务的业务去重哈希，避免仅切换文件与 JSON 读取方式时重复创建同一业务任务。
 
 ### 5.3 Listing Analysis
 

@@ -64,6 +64,11 @@ metadata:
 - Keepa：使用 `$ops-keepa` 验证正式场景、参数、返回结构和少量样本。
 - SellerSprite：使用 `$ops-seller-sprite` 验证开发期场景、参数、返回结构和少量样本。
 
+当来源是 SellerSprite 且目标是新建或改造 AppHub 数据产品时，必须额外加载
+`$ops-seller-sprite` 模板目录下的 `APPHUB_SCENARIO_CONTRACTS.json`。先按机器合同识别
+`scenario`、`endpoint_family`、`site`、`period`、`params` 和 `export_format`，再调用
+`seller_sprite_scenarios` 确认线上场景仍然暴露；不得用模型记忆、相似字段、旧站点或旧看板实现替代合同。
+
 依赖 Skill 负责认证、元数据、字段校验和真实查询。本 Skill 不凭记忆选择数据集、字段、聚合、公式、筛选枚举或第三方场景参数，也不复制其内部查询实现。静态字段资料、历史授权目录和应用清单只能形成 `candidate`，不能替代当前在线元数据或把合同标记为 `verified`。
 
 对业务范围已经足以构造查询的真实数据产品，必须实际发起正式合同验证；不得在没有查询尝试的情况下直接生成最终 `blocked` 页面或固定返回 `blocked` 的业务 API。临时服务异常、超时和上游不可用应记录为 `degraded`，并继续完成不依赖该来源的其他模块。查询成功但零行仍是 `verified`，页面按“暂无数据”处理。
@@ -71,6 +76,8 @@ metadata:
 只获取足以验证合同的少量样本。真实结果、导出文件和凭证不得提交到站点源码。
 
 Keepa 和 SellerSprite 的在线验证必须额外固化精确 `response_shape`、业务角色字段映射和脱敏 `shape_evidence`。包含已验证第三方产品时，`docs/ops-app/data-contracts.json` 使用 `schema_version: "1.1"`；OPS-only 合同继续兼容 1.0。验证处于 `degraded` 时只允许生成传输、任务、缓存和错误恢复基础设施，不得根据旧项目、历史样本或相似字段生成猜测的生产投影器。
+
+AppHub SellerSprite 数据产品还必须在 `technical_contract.apphub_request` 中保留经过机器合同校验的实际请求。页面需要结构化数据时，实际请求必须显式传递 `export_format=json`；缺少场景、线上场景未暴露、参数缺失或类型/数量错误、endpoint family 混用、结果路径缺失时，停止该数据产品的正式数据层生成。
 
 ## 工作流
 
@@ -270,6 +277,8 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - 项目缺少标准模板 QueryGateway 文件或签名不完整：停止数据层生成并提示重新执行标准模板初始化，不兼容旧适配器或旧数据层项目。
 - Keepa 需求依赖 `/api/v1/keepa/run` 未声明的运行时端点或返回字段：不得猜测路径，标记待平台补齐。
 - SellerSprite 场景或参数未通过正式场景合同验证：停止该数据产品，不凭 SDK、CLI 或旧项目实现猜测 REST 合同。
+- AppHub SellerSprite 场景未通过 `APPHUB_SCENARIO_CONTRACTS.json` 和 `seller_sprite_scenarios` 双重校验：停止正式数据层生成，并把原因记录在 data-spec 与合同凭证中。
+- AppHub 页面需要 JSON 结果但请求未显式包含 `export_format=json`：阻止生成，不以 XLS/XLSX 或相似格式回退。
 - SellerSprite 仅支持 XLS/XLSX 导出而页面需要 SQLite JSON 数据产品：标记阻塞或改为明确的导出型任务，不把文件伪装成 JSON 快照。
 - 依赖 Skill 返回正式能力不支持、权限缺失或运行硬前置缺失：将对应数据产品标记为 `blocked`，不影响其他数据产品继续交付。
 - 依赖 Skill 已实际调用但遇到认证外的临时错误、超时或上游不可用：按反馈规则处理并标记 `degraded`，继续完成其他模块，不得改写成“尚未完成在线验证”。

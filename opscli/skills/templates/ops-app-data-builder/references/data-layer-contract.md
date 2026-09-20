@@ -335,6 +335,9 @@ OPS 路由必须通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway
 
 ### 8.2 SellerSprite
 
+- 新建 AppHub SellerSprite 数据产品必须在 `technical_contract.apphub_request` 中记录机器合同验证后的请求合同。该对象至少包含 `scope`、`contract_schema_version`、`scenario`、`tool`、`endpoint_family`、`site`、`period`、`page_size`、`params` 和 `export_format`。
+- AppHub 请求合同的来源是 `ops-seller-sprite/APPHUB_SCENARIO_CONTRACTS.json`，线上可用性必须通过 `seller_sprite_scenarios` 再确认。合同校验至少覆盖场景登记、线上暴露、endpoint family、站点、周期、参数类型与数量、JSON 结果路径以及文件导出边界。
+- 页面需要结构化数据时必须显式传递 `export_format=json`；缺少合同、线上场景未暴露或请求校验失败时，不得生成该数据产品的正式数据层。
 - 普通任务使用正式 jobs 提交、状态、批量状态、result 或 export 接口。
 - Listing Analysis 使用独立三段式接口，不提交到普通 jobs。
 - JSON 场景必须记录精确 `response_shape`。对于 `columns + rows` 结构，声明 `columns_path`、`records_path` 和 `record_type: "array"`，并用在线返回的正式列名建立字段映射。

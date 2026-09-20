@@ -10,6 +10,13 @@
 
 **回滚方式**：恢复原成功文案和相关测试、Skill、指南及设计说明，将 Skill 版本恢复为 `v0.0.21`，并删除本次需求文档和变更记录。
 
+## 2026-09-20 AppHub SellerSprite - 落地一期结构化机器合同
+
+**变更原因**：AppHub 新建 SellerSprite 数据产品需要独立机器合同和严格请求校验，避免依赖模型记忆、相似字段或旧站点实现生成猜测性数据层。
+**改动点**：新增 AppHub SellerSprite 合同加载、目录校验和请求校验；将可选 `technical_contract.apphub_request` 接入通用数据合同；补充 AppHub Skill、Agent 提示、数据层合同、运行时路由和回归测试；保持原有 SellerSprite CLI/MCP 运行时不变。
+**验证结果**：AppHub 合同与数据合同相关测试 `11 passed`；Skill 静态契约测试 `16 passed, 1 deselected`；`data_contracts.py` 通过 `py_compile`；机器合同 JSON 解析通过。完整三组测试中 6 项依赖 pytest `tmp_path` 的既有临时目录 ACL 被 Windows 拒绝，非断言失败；使用无临时目录的专项筛选完成核心逻辑验证。
+**影响范围**：影响新建 AppHub SellerSprite 数据产品的合同验证和生成门禁；不影响普通 `opscli seller-sprite` 查询、认证、额度、任务状态和旧 AppHub 站点。
+**回滚方式**：回滚 `data_contracts.py`、AppHub Skill 文档、相关回归测试和本条记录；保留原有 SellerSprite 运行时与通用数据合同校验。
 ---
 
 ## 2026-09-16 Skill - 简化 Ops App Build 展示名称
