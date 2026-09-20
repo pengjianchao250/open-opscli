@@ -52,7 +52,6 @@ def test_seller_sprite_submit_proxies_to_collector_and_returns_202(monkeypatch):
             "site": "US",
             "period": "30d",
             "page_size": 100,
-            "export_format": "json",
             "job_id": "job-1",
         },
     )
@@ -71,6 +70,42 @@ def test_seller_sprite_submit_proxies_to_collector_and_returns_202(monkeypatch):
             "job_id": "job-1",
         },
     }
+
+
+def test_seller_sprite_submit_hides_json_export_metadata(monkeypatch):
+    from opscli.api import create_api_app
+    from opscli.api import seller_sprite as api_module
+
+    _authenticate(monkeypatch)
+
+    async def fake_proxy(_fn, **_kwargs):
+        return {
+            "success": True,
+            "data": {
+                "job_id": "cached-job",
+                "state": "succeeded",
+                "export": {
+                    "format": "json",
+                    "filename": "source-job.json",
+                    "url": "https://files.example.com/source-job.json",
+                },
+            },
+            "error": None,
+        }
+
+    monkeypatch.setattr(api_module, "_call_gateway_proxy", fake_proxy)
+    response = TestClient(create_api_app()).post(
+        "/api/v1/seller-sprite/jobs",
+        json={
+            "scenario": "competitor-lookup",
+            "params": {"asin": "B012345678"},
+            "export_format": "json",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["data"]["state"] == "succeeded"
+    assert "export" not in response.json()["data"]
 
 
 def test_seller_sprite_submit_rejects_internal_runtime_fields(monkeypatch):

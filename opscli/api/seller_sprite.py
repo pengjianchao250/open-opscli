@@ -47,7 +47,7 @@ class SellerSpriteRunRequest(BaseModel):
     site: str = Field(default="US", min_length=2, max_length=8)
     period: str = Field(default="30d", min_length=1, max_length=32)
     page_size: int = Field(default=100, ge=1, le=100)
-    export_format: SellerSpriteExportFormat = "xls"
+    export_format: SellerSpriteExportFormat = "json"
     job_id: SellerSpriteJobId | None = None
 
 
@@ -376,7 +376,7 @@ async def seller_sprite_submit_api(payload: SellerSpriteRunRequest) -> JSONRespo
         seller_sprite_proxy.seller_sprite_run,
         **payload.model_dump(exclude_none=True),
     )
-    return _result_response(result, success_status_code=202)
+    return _result_response(_strip_json_exports(result), success_status_code=202)
 
 
 @router.get("/jobs/{job_id}")
