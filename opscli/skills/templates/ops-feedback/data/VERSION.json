@@ -1,5 +1,5 @@
 {
-  "version": "v1.0.18",
-  "updated_at": "2026-08-06",
-  "notes": "反馈提交自动生成 Observation Schema V2，并规范链路、耗时、重试、环境和指纹字段。"
+  "version": "v1.0.19",
+  "updated_at": "2026-09-20",
+  "notes": "失败反馈触发规则改为同一报错指纹在同一会话内第 3 次出现才提交；同步更新 AGENTS.md/CLAUDE.md 铁律注入（install 时自动刷新旧注入内容）。"
 }

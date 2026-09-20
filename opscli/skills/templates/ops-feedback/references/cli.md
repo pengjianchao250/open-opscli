@@ -8,16 +8,16 @@ description: 通过 opscli feedback 提交和查询结构化用户反馈
 
 ## 分级反馈策略
 
-- 失败即时反馈：`opscli` CLI 非 0、MCP `success=false`、异常和远端错误码必须立即提交 `bug`。
+- 失败阈值反馈：`opscli` CLI 非 0、MCP `success=false`、异常和远端错误码按报错指纹计数，同一报错在同一会话内第 3 次出现时才提交 `bug`；第 1、2 次失败只做正常错误处理，不进入反馈流程。
 - 成功默认本地任务摘要：成功查询、成功引导和批量评估正常样本只写入本地执行总结或项目结果文件。
 - 远端成功反馈默认关闭：只有用户明确要求、发布/审计门禁或 L2 可疑结果需要 owner 处理时，才提交 `query_result`。
 - 抽样：无异常成功样本默认只进入本地评估集或回归候选；用户要求完整审计时才远端提交。
 - 去重：同一失败指纹 30 分钟内只提交 1 次，复用已有 `feedback_uuid`。去重是滑动窗口：窗口内重复失败只刷新本地 occurrence_count，不会自动再次远端提交。
-- 批量失败聚合：批量烟测、回归和多数据集扫描中的同根因 L3 失败在事件 JSON 中传 `feedback_group_key`，首条失败远端提交，后续同组失败复用已有 `feedback_uuid`；显式 group key 会覆盖变化的完整命令字符串和参数。
+- 批量失败聚合：批量烟测、回归和多数据集扫描中的同根因 L3 失败在事件 JSON 中传 `feedback_group_key`，同组失败按指纹累计至第 3 次时远端提交一次，后续同组失败复用已有 `feedback_uuid`；显式 group key 会覆盖变化的完整命令字符串和参数。
 - guard 状态恢复：本地状态损坏时按空状态继续；重复失败记录缺少 `feedback_uuid` 时重新提交，不复用空 UUID。
 - 事件瘦身与敏感字段脱敏：guard 生成 fingerprint 的副本会脱敏 token/cookie/authorization/password/secret，并把大日志、大数组和大字典压到 4096 bytes 以内。
 - fail-open：`opscli feedback submit` 自身失败时只报告该失败，不递归提交，不阻塞原任务。
-- L3 新失败的 guard 决策为 `submit_remote=true`、`non_blocking=true`：仍要立即提交或复用反馈 UUID，但提交动作完成后继续原任务恢复或降级处理。
+- L3 新失败的 guard 决策为 `submit_remote=true`、`non_blocking=true`：仍要提交或复用反馈 UUID（调用 guard 前提是报错指纹已达 3 次阈值），但提交动作完成后继续原任务恢复或降级处理。
 
 ## 提交前守门
 
