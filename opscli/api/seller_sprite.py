@@ -376,7 +376,7 @@ async def seller_sprite_submit_api(payload: SellerSpriteRunRequest) -> JSONRespo
         seller_sprite_proxy.seller_sprite_run,
         **payload.model_dump(exclude_none=True),
     )
-    return _result_response(result, success_status_code=202)
+    return _result_response(_strip_json_exports(result), success_status_code=202)
 
 
 @router.get("/jobs/{job_id}")

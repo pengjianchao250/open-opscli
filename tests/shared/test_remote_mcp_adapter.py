@@ -1,5 +1,7 @@
 """远端 MCP 共享适配基座测试。"""
 
+import asyncio
+
 import httpx
 
 from opscli.mcp_client.config_client import RemoteMcpServerConfig
@@ -76,6 +78,34 @@ def test_call_tool_selects_bi_http_server_and_filters_none_values():
         ("fetch_remote_config",),
         ("select_server", {"data": {}}, "http", "BI运营系统"),
     ]
+
+
+def test_call_tool_inside_running_event_loop_uses_compatibility_thread():
+    adapter = RemoteMcpAdapter(
+        config_client=FakeConfigClient(),
+        remote_client_factory=FakeRemoteClient,
+    )
+
+    async def scenario():
+        return adapter.call_tool("demo_tool", {"job_id": "job-1"})
+
+    result = asyncio.run(scenario())
+
+    assert result == {"success": True, "data": {"ok": True}, "error": None}
+
+
+def test_call_tool_async_is_available_for_async_hosts():
+    adapter = RemoteMcpAdapter(
+        config_client=FakeConfigClient(),
+        remote_client_factory=FakeRemoteClient,
+    )
+
+    async def scenario():
+        return await adapter.call_tool_async("demo_tool", {"job_id": "job-1"})
+
+    result = asyncio.run(scenario())
+
+    assert result == {"success": True, "data": {"ok": True}, "error": None}
 
 
 def test_call_tool_retries_once_when_permission_error_contains_401():

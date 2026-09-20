@@ -1630,6 +1630,99 @@ def test_seller_sprite_run_cache_hit_creates_current_user_task(monkeypatch):
     assert result["data"]["row_count"] == 2
 
 
+def test_seller_sprite_json_cache_hit_rebuilds_inline_export(monkeypatch):
+    from opscli.seller_sprite import mcp_bundle
+
+    class CacheRepository:
+        def find_cached_result(self, **kwargs):
+            assert kwargs["include_datasets"] is True
+            return CachedCollectionResult(
+                source_job_id="seller-source-job",
+                scenario="competitor-lookup",
+                site="US",
+                row_count=1,
+                completed_at=None,
+                persistence_completed_at="2026-09-01T01:00:00Z",
+                result_metadata={
+                    "row_count": 1,
+                    "export": {
+                        "filename": "seller-source-job.json",
+                        "format": "json",
+                        "url": "https://files.example.com/seller-source-job.json",
+                    },
+                },
+                datasets=(
+                    {
+                        "dataset_code": "main",
+                        "dataset_name": "Competitor-US-Last-30-days",
+                        "columns": [
+                            {"name": "ASIN", "key": "ASIN"},
+                            {"name": "品牌", "key": "品牌"},
+                        ],
+                        "records": [
+                            {
+                                "payload": {"ASIN": "B0TEST1234", "品牌": "Demo"}
+                            }
+                        ],
+                    },
+                ),
+            )
+
+    captured = {}
+
+    class CacheScheduler:
+        async def enqueue_cached_owned_mcp_run(self, request, **kwargs):
+            captured["request"] = request
+            captured["export_payload"] = kwargs["export_payload"]
+            return {
+                "job_id": request.job_id,
+                "state": "succeeded",
+                "stage": "finished",
+                "row_count": kwargs["row_count"],
+                "export": kwargs["export_payload"],
+            }
+
+    monkeypatch.setattr(
+        seller_sprite_tools, "_get_task_scheduler", lambda: CacheScheduler()
+    )
+    monkeypatch.setattr(
+        seller_sprite_tools,
+        "_build_mcp_job_id",
+        lambda request, site, period: "current-user-cache-job",
+    )
+    monkeypatch.setattr(
+        mcp_bundle,
+        "get_result_cache_context",
+        lambda: (CacheRepository(), "production"),
+    )
+
+    result = _run(
+        seller_sprite_tools.seller_sprite_run(
+            scenario="competitor-lookup",
+            site="US",
+            period="30d",
+            params={"asin": "B0TEST1234"},
+            export_format="json",
+        )
+    )
+
+    assert result["success"] is True
+    assert captured["export_payload"]["json_data"] == {
+        "schema_version": "2.0",
+        "job_id": "current-user-cache-job",
+        "scenario": "competitor-lookup",
+        "site": "US",
+        "period": "30d",
+        "sheet_name": "Competitor-US-Last-30-days",
+        "row_count": 1,
+        "columns": ["ASIN", "品牌"],
+        "number_formats": [None, None],
+        "rows": [["B0TEST1234", "Demo"]],
+        "additional_sheets": [],
+        "warnings": [],
+    }
+
+
 def test_seller_sprite_cache_task_failure_is_not_settled_as_cache_hit(monkeypatch):
     from opscli.seller_sprite import mcp_bundle
 
