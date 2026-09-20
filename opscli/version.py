@@ -8,7 +8,7 @@ from __future__ import annotations
 from importlib.metadata import PackageNotFoundError, version
 
 PACKAGE_NAME = "aukeys-opscli"
-FALLBACK_VERSION = "0.0.138-dev"
+FALLBACK_VERSION = "0.0.139-dev"
 
 
 def get_version() -> str:
