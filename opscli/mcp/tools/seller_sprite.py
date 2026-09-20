@@ -202,6 +202,14 @@ def _load_formatted_json_export(status: dict[str, Any]) -> dict[str, Any] | None
     if export_format != "json" and not filename.endswith(".json"):
         return None
 
+    inline = export.get("json_data")
+    if (
+        isinstance(inline, dict)
+        and isinstance(inline.get("columns"), list)
+        and isinstance(inline.get("rows"), list)
+    ):
+        return inline
+
     path_value = export.get("path")
     if not isinstance(path_value, str) or not path_value.strip():
         raise ValueError("卖家精灵 JSON 导出缺少格式化结果文件")
@@ -253,6 +261,64 @@ def _build_request(
         task_interval_seconds=task_interval_seconds,
         cooldown_seconds=cooldown_seconds,
     )
+
+
+def _build_cached_json_export(cached: Any, request: Any) -> dict[str, Any]:
+    """从已持久化 Dataset 重建 JSON v2 工作簿。"""
+    sheets: list[dict[str, Any]] = []
+    for index, dataset in enumerate(cached.datasets):
+        if not isinstance(dataset, dict):
+            continue
+        raw_columns = dataset.get("columns")
+        if not isinstance(raw_columns, list):
+            continue
+        column_names: list[str] = []
+        column_keys: list[str] = []
+        for column_index, column in enumerate(raw_columns, start=1):
+            if isinstance(column, dict):
+                name = str(column.get("name") or column.get("key") or f"column_{column_index}")
+                key = str(column.get("key") or name)
+            else:
+                name = str(column or f"column_{column_index}")
+                key = name
+            column_names.append(name)
+            column_keys.append(key)
+
+        rows: list[list[Any]] = []
+        for record in dataset.get("records") or []:
+            if not isinstance(record, dict) or not isinstance(record.get("payload"), dict):
+                continue
+            payload = record["payload"]
+            rows.append([payload.get(key) for key in column_keys])
+
+        sheets.append(
+            {
+                "name": str(dataset.get("dataset_name") or dataset.get("source_sheet") or f"sheet_{index + 1}"),
+                "columns": column_names,
+                "number_formats": [None] * len(column_names),
+                "row_count": len(rows),
+                "rows": rows,
+            }
+        )
+
+    if not sheets:
+        raise ValueError("缓存结果缺少可重建的 Dataset")
+
+    main = sheets[0]
+    return {
+        "schema_version": "2.0",
+        "job_id": request.job_id,
+        "scenario": request.scenario,
+        "site": request.site,
+        "period": request.period,
+        "sheet_name": main["name"],
+        "row_count": main["row_count"],
+        "columns": main["columns"],
+        "number_formats": main["number_formats"],
+        "rows": main["rows"],
+        "additional_sheets": sheets[1:],
+        "warnings": [],
+    }
 
 
 def _build_mcp_job_id(request, site: str, period: str) -> str:
@@ -1053,20 +1119,25 @@ async def _seller_sprite_run_impl(
                 cache_key=cache_key,
                 cache_scope=cache_scope,
                 cache_mode=cache_mode,
-                include_datasets=False,
+                include_datasets=str(request.export_format).strip().lower() == "json",
             )
         if cached is not None:
             metadata = dict(cached.result_metadata)
+            export_payload = (
+                dict(metadata["export"])
+                if isinstance(metadata.get("export"), dict)
+                else None
+            )
+            if str(request.export_format).strip().lower() == "json":
+                if export_payload is None:
+                    export_payload = {"format": "json", "mime_type": "application/json"}
+                export_payload["json_data"] = _build_cached_json_export(cached, request)
             cached_status = await scheduler.enqueue_cached_owned_mcp_run(
                 request,
                 mcp_user_email=current_user_email,
                 source_job_id=cached.source_job_id,
                 row_count=int(metadata.get("row_count") or cached.row_count),
-                export_payload=(
-                    dict(metadata["export"])
-                    if isinstance(metadata.get("export"), dict)
-                    else None
-                ),
+                export_payload=export_payload,
             )
             response = _ok(_sanitize_status(cached_status))
             mark_cache_hit()
