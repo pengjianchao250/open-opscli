@@ -10,9 +10,10 @@ from opscli.cli import app
 
 def test_app_exposes_expected_commands() -> None:
     root_command = get_command(app)
-    app_command = root_command.commands["app"]
+    # 懒加载：顶级 commands 不再急切持有子命令组，经 get_command 按需物化
+    app_command = root_command.get_command(None, "app")
 
-    assert set(app_command.commands) == {
+    assert set(app_command.list_commands(None)) == {
         "create",
         "ensure-git",
         "clone-template",
@@ -22,7 +23,8 @@ def test_app_exposes_expected_commands() -> None:
         "push",
         "migrate",
     }
-    assert set(app_command.commands["migrate"].commands) == {
+    migrate_command = app_command.get_command(None, "migrate")
+    assert set(migrate_command.commands) == {
         "init",
         "audit",
         "plan",

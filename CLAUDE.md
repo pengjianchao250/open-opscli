@@ -139,11 +139,11 @@ opscli skills
 新增模块（如 deploy、notify）的接入方式：
 
 1. **目录结构**：`opscli/{module_name}/`，必须包含 `__init__.py` 和 `cli.py`
-2. **CLI 注册**：在 `opscli/cli.py` 追加一行，**不能修改其他地方**：
+2. **CLI 注册**：在 `opscli/cli.py` 的 `_SUBCOMMANDS` 注册表追加一行（子命令懒加载，**禁止急切 import / add_typer**），**不能修改其他地方**：
    ```python
-   from opscli.{module_name}.cli import app as {module_name}_app
-   app.add_typer({module_name}_app, name="{module_name}")
+   ("{module_name}", "opscli.{module_name}.cli", "<help，须与子模块 typer.Typer(help=...) 逐字一致>"),
    ```
+   注册表 help 与子模块实际 help 的一致性由 `tests/test_cli_lazy_loading.py` 守护，两处需同步修改。
 3. **配置路径**：必须通过 `from opscli.config import CONFIG_DIR` 获取存储路径，**禁止硬编码** `~/.config/opscli/` 或其他路径
 4. **测试目录**：`tests/{module_name}/`，不能放到 `tests/` 根目录
 
