@@ -1,3 +1,17 @@
+## 2026-09-21 CLI - 子命令懒加载消除升级后首命令卡顿
+
+**变更原因**：正式 wheel 为 Cython 编译（355 个 `.so`），每次从 pypi 升级重写的 `.so` 均带系统写入的 `com.apple.provenance` 属性，macOS 对其首次 `dlopen` 逐文件做安全评估（本机实测均值约 202ms/文件、中位 317ms，syscall 阻塞、CPU 仅 2~7%）；而 `opscli/cli.py` 顶层急切导入 28 个子命令组，升级后首条任意命令（含 `opscli -V`）需触发约 434 个模块对应二进制的评估，实测 34.9s~88.6s，二次运行恢复 1.27s。历史修复 `c83bc0fb`（2026-07-24）消除的是启动/退出网络阻塞，属另一根因，对本问题无效。方案与排查数据见 `docs/plans/CLI子命令懒加载方案.md`。
+
+**改动点**：`opscli/cli.py` 改为注册表 + 懒加载：`_SUBCOMMANDS` 注册表（命令名/模块路径/help 三元组）替代 28 行急切 import 与 `add_typer`；新增 `LazyGroupProxy`（子命令组代理，构造零导入、只携带 name/help 供顶级 `--help` 渲染，首次分发时导入真实模块并经 `typer.main.get_group` 全量委托）与 `LazyTyperGroup`（顶级 Group 子类，构造时把代理直接放入 `self.commands`，命令列表、"Did you mean" 建议、补全全部复用 click/typer 原生实现——不覆写 `list_commands`/`get_command`/`resolve_command`，避免耦合不同 typer 版本的内部类层次：typer 0.25 用真实 click、0.27 用内置 `_click`，跨层 super 调用在后者不存在）；`asin-review` 可选性由 `importlib.util.find_spec` 判定（只查找不执行）。`opscli/__init__.py` 的 `AuthClient`/`__version__` re-export 改为 PEP 562 `__getattr__` 惰性实现（`import opscli` 零子模块开销，铁律3 两种导入方式语义不变）。`main` 回调、遥测、显式授权参数摘取、`self-update` 零改动。新增 `tests/test_cli_lazy_loading.py`（28 用例：`-V`/`--help` 零子模块导入、单命令只加载自身、`--help` 与现状快照逐字一致、注册表 help 与子模块 `typer.Typer(help=)` 一致、asin-review 缺失不注册、typo 建议保留）及快照 fixture；适配 `tests/app/test_cli.py`、`tests/baiyi/test_cli.py` 对顶级 `.commands` 的直接访问为懒加载等价调用；CLAUDE.md 铁律1 注册示例同步改为注册表行。
+
+**验证结果**：本地构建正式 Cython wheel（355 个 `.so`）装入干净 venv 实测（typer 0.27.2 后端）：升级后首次 `opscli -V` **4.89s**（改动前同场景 34.9s~88.6s），二次运行 **0.12s**（改动前 1.27s），达到方案"首次 <5s"验收线；`import opscli.cli` 的 opscli 模块数 406 → 3（方案验收线 ≤20）；`opscli --help` 输出与改动前快照逐字一致（命令、顺序、文案）；裸调用（exit 2 + Missing command）、`-V`、各子命令 `--help`、嵌套子组（skills/mcp）、typo 建议、`skills list` 真实执行在新旧两种 typer 后端下均与改动前行为一致；懒加载及受影响套件 98 passed；全量回归失败集合与改动前完全一致（38 收集错误 + 37 断言失败均为既有问题，含预存失败的 calculator 两例经旧代码对照确认），无新增失败；`compileall` 与 `git diff --check` 通过。
+
+**影响范围**：opscli 顶级 CLI 的子命令加载时机（急切 → 按需）与 `opscli/__init__.py` 顶层 re-export 的实现（急切 → PEP 562 惰性，铁律3 对外语义不变）；`--help`/命令列表/文案/顺序零变化；子命令模块导入失败的爆炸半径从"整个 CLI 起不来"缩小为"仅该子命令报错"；MCP 入口（独立进程，不经 `cli.py`）不受影响；新增子模块接入方式由 `add_typer` 两行改为注册表一行（铁律1 已同步，注册表 help 漂移由测试守护）。
+
+**回滚方式**：回退 `opscli/cli.py`、`opscli/__init__.py`、`tests/app/test_cli.py`、`tests/baiyi/test_cli.py`，删除 `tests/test_cli_lazy_loading.py` 与 `tests/test_cli_lazy_loading_help_snapshot.txt`，恢复 CLAUDE.md 铁律1 示例并移除本条记录。
+
+---
+
 ## 2026-09-16 opscli app - 统一 push 成功提示
 
 **变更原因**：`opscli app push` 成功后仅提示源码已到达远端，Codex 面向运营用户的后续说明不统一。需要明确运营系统将接手自动部署和发布，并引导用户查看发布状态或配置站点权限，同时避免把异步流程误报为已经完成。
@@ -11717,4 +11731,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **回滚方式**：恢复旧 Skill 目录名、manifest 键、安装/升级/题库路径和相关文档引用。
 
+---
+## 2026-09-20 Skills - 反馈铁律改为同报错三次触发并支持 install 原地更新
+
+**变更原因**：用户反馈工具调用每次失败都会触发 ops-feedback 提交，噪声过大；且旧的幂等标记导致已注入 AGENTS.md/CLAUDE.md 的铁律内容永远无法随模板演进而刷新。
+**改动点**：`rule_injector.py` 注入块改为 BEGIN/END 哨兵包裹，install 时对旧格式标记块整段替换、对新格式块原地更新、内容一致时幂等跳过；`_DEFAULT_RULE_CONTENT` 重写为"同一报错指纹在同一会话内连续出现 3 次才提交"；同步更新 `ops-feedback` 模板的 FEEDBACK_RULE.md、SKILL.md、references/cli.md、references/mcp.md 触发措辞，版本升至 v1.0.19；新增 `tests/skills/test_rule_injector.py`（7 个用例）。未改动 feedback_guard.py 决策逻辑（新规则下 Agent 达阈值后才调用 guard，流程自洽）。
+**验证结果**：`tests/skills/test_rule_injector.py` 与 `test_ops_feedback_template.py` 13 项全部通过；假 HOME 端到端验证 `opscli skills install ops-feedback --runtime codex` 可将旧格式 AGENTS.md 更新为新规则且保留用户自定义内容，重复 install 幂等（文件哈希不变）；`tests/skills/` 全量 339 passed / 10 failed，失败集合与改动前完全一致（存量问题，非本次引入）。
+**影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
+**回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---

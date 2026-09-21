@@ -2,13 +2,14 @@
 
 > 生效范围：所有在 opscli 项目中工作的 AI Agent 会话。
 
-**规则**：任何 `opscli` CLI 命令或 MCP Tool 调用失败后，AI Agent **必须在同一会话中立即调用 `ops-feedback` Skill 提交结构化反馈**，不得跳过、不得等待用户明确指示、不得在回复中仅描述错误而不提交。该规则只约束失败即时反馈；成功默认本地任务摘要，远端成功反馈默认关闭。
+**规则**：`opscli` CLI 命令或 MCP Tool 调用失败后，AI Agent **不得每次失败都提交反馈**；只有**同一报错指纹在同一会话内连续出现 3 次**时，才必须调用 `ops-feedback` Skill 提交一次结构化反馈，不得跳过、不得等待用户明确指示、不得在回复中仅描述错误而不提交。该规则只约束失败反馈；成功默认本地任务摘要，远端成功反馈默认关闭。
 
 **失败即时反馈**：
+- 触发阈值：同一报错指纹（工具/命令 + 错误码 + 错误信息）在同一会话内累计出现 3 次才远端提交；第 1、2 次失败只做正常的错误处理（重试、降级、告知用户），不进入反馈流程；各报错指纹独立计数，出现其他报错不重置当前计数
 - CLI 非 0、MCP `success=false`、抛出异常、远端错误码均视为失败
 - 同一失败在 30 分钟内已提交过反馈时复用已有 `feedback_uuid`，不重复提交
 - 去重窗口是滑动窗口：窗口内每次重复失败都会刷新 `last_seen` 并只累加本地 occurrence_count，持续复发的同一失败不会自动再次远端提交；需要让远端感知失败仍在持续时，由用户明确要求后重新提交
-- 批量失败聚合：批量烟测、回归和多数据集扫描中的同根因 L3 失败必须在事件 JSON 中提供稳定 `feedback_group_key`；首条失败远端提交，后续同组失败复用已有 `feedback_uuid`；显式 group key 会覆盖变化的完整命令字符串和参数，避免每个数据集或参数变体拆成独立反馈
+- 批量失败聚合：批量烟测、回归和多数据集扫描中的同根因 L3 失败必须在事件 JSON 中提供稳定 `feedback_group_key`；同组失败按指纹累计至第 3 次时远端提交一次，后续同组失败复用已有 `feedback_uuid`；显式 group key 会覆盖变化的完整命令字符串和参数，避免每个数据集或参数变体拆成独立反馈
 - 本地 guard 状态默认保留 24 小时；过期 failure 指纹和 L2 会话预算桶清理后，不再影响新任务判断
 - 本地 guard 状态损坏时按空状态继续决策；重复失败记录缺少 `feedback_uuid` 时不得复用空 UUID，必须重新提交本次失败反馈
 - 事件瘦身与敏感字段脱敏：`feedback_guard.py` 生成 fingerprint 前会脱敏 `token` / `cookie` / `authorization` / `password` / `secret` 等字段，截断大日志、大数组和大字典，并在 L3 决策中返回 `event_hygiene.fingerprint_payload_bytes`；默认 fingerprint payload 不超过 4096 bytes
@@ -21,27 +22,29 @@
 **成功与批量场景**：
 - 正常成功查询、成功引导、dry-run 和本地评估默认只写本地任务摘要或项目结果文件
 - 只有用户明确要求、发布/审计门禁或 0 行/全空/降级/疑似数据问题需要 owner 处理时，才提交非失败类远端反馈
-- 批量评估不为正常成功样本逐条提交反馈；失败按铁律即时提交，可疑结果合并后最多提交 1 条
+- 批量评估不为正常成功样本逐条提交反馈；失败按铁律达到 3 次阈值后提交，可疑结果合并后最多提交 1 条
 - 非失败类远端反馈预算按 `session_id` / `thread_id` / `task_id` 隔离，避免一次任务耗尽后误伤后续任务
 
 **行为回归门禁**：
-- 查询类 Skill 和 Agent trace 评估必须检查成功不远端刷屏、失败不漏反馈、批量失败使用 `feedback_group_key` 聚合、feedback_submit 自身失败 fail-open
+- 查询类 Skill 和 Agent trace 评估必须检查成功不远端刷屏、失败不漏反馈（同指纹第 3 次出现时必须提交）、未达阈值不提前提交、批量失败使用 `feedback_group_key` 聚合、feedback_submit 自身失败 fail-open
 - guard 决策逻辑由仓库内 `tests/skills/test_feedback_guard.py` 回归覆盖；trace 级评估脚本（`success_feedback_remote_spam`、`success_local_summary_after_query`、`feedback_after_failed_query` 等规则）当前尚未落地，属于待建设项
 - 新增查询 Skill 或批量扫描脚本时，应同步新增 trace 样例，证明不同大模型不会在成功路径提交大量低价值反馈，也不会在失败路径跳过铁律
 
 **执行顺序**：
 1. 工具调用返回 `success: false` 或抛出异常
-2. 立即读取并遵循 `ops-feedback` Skill
-3. 按 Skill 规范构造 `execution_summary`，重点提取：
+2. 累计该报错指纹在本会话内的出现次数：未达 3 次则继续处理原任务，不提交反馈
+3. 计数达到 3 次时读取并遵循 `ops-feedback` Skill
+4. 按 Skill 规范构造 `execution_summary`，重点提取：
    - `tool`：具体工具或命令
    - `call_params`：实际传入的关键参数
    - `error_message`：原始错误码和错误文本
    - `reason`：基于上下文推断的原因（不确定时标注"推测"）
    - `fix_suggestion`：已采用的修复方式或下一步建议
-4. 调用 `feedback_submit`（MCP 模式）或 `opscli feedback submit`（CLI 模式）
-5. 将 `feedback_uuid` 返回给用户，并继续处理原任务；若反馈提交自身失败，只报告该失败，不再递归提交反馈
+5. 调用 `feedback_submit`（MCP 模式）或 `opscli feedback submit`（CLI 模式）
+6. 将 `feedback_uuid` 返回给用户，并继续处理原任务；若反馈提交自身失败，只报告该失败，不再递归提交反馈
 
 **例外情况**（允许不提交反馈）：
+- 未达到 3 次阈值的报错（同一报错指纹在当前会话仅出现 1-2 次）
 - 认证类错误（`auth_login_start`、`auth_login_poll` 等预期内的未授权状态）
 - `feedback_submit`、`feedback_detail`、`opscli feedback submit/detail` 自身失败，避免递归反馈
 - 用户主动取消的操作（`KeyboardInterrupt`）
