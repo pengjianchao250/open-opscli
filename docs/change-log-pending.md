@@ -11731,4 +11731,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：同一 opscli-mcp HTTP 服务新增两个 REST 路由；旧网页/供应商 MCP 入口继续废弃。
 **回滚方式**：回滚本次路由、合同、错误映射和文档变更，无 MySQL 表结构变化。
 
+
+## 2026-09-20 Skills - 反馈铁律改为同报错三次触发并支持 install 原地更新
+
+**变更原因**：用户反馈工具调用每次失败都会触发 ops-feedback 提交，噪声过大；且旧的幂等标记导致已注入 AGENTS.md/CLAUDE.md 的铁律内容永远无法随模板演进而刷新。
+**改动点**：`rule_injector.py` 注入块改为 BEGIN/END 哨兵包裹，install 时对旧格式标记块整段替换、对新格式块原地更新、内容一致时幂等跳过；`_DEFAULT_RULE_CONTENT` 重写为"同一报错指纹在同一会话内连续出现 3 次才提交"；同步更新 `ops-feedback` 模板的 FEEDBACK_RULE.md、SKILL.md、references/cli.md、references/mcp.md 触发措辞，版本升至 v1.0.19；新增 `tests/skills/test_rule_injector.py`（7 个用例）。未改动 feedback_guard.py 决策逻辑（新规则下 Agent 达阈值后才调用 guard，流程自洽）。
+**验证结果**：`tests/skills/test_rule_injector.py` 与 `test_ops_feedback_template.py` 13 项全部通过；假 HOME 端到端验证 `opscli skills install ops-feedback --runtime codex` 可将旧格式 AGENTS.md 更新为新规则且保留用户自定义内容，重复 install 幂等（文件哈希不变）；`tests/skills/` 全量 339 passed / 10 failed，失败集合与改动前完全一致（存量问题，非本次引入）。
+**影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
+**回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---
