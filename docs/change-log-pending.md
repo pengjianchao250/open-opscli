@@ -1,3 +1,17 @@
+## 2026-09-22 SellerSprite - 修正流量词对比自身 ASIN 导出合同
+
+**变更原因**：官网流量词对比主请求使用独立 `asin` 传自己的 ASIN，页面生成的 `asinList` 可以只包含竞品或变体。原 browser-route 将 `asinList` 直接作为导出列顺序，导致请求成功后误报“流量词对比导出缺少自己的 ASIN”；Skill 也未明确该字段合同和错误归因。
+
+**改动点**：远端请求继续保留页面 `asinList` 原义，仅在本地导出元数据中按 `[asin] + asinList` 去重并固定自己的 ASIN 在首位；兼容旧页面列表已包含自己的 ASIN。`ops-seller-sprite` 参数手册和 MCP 规范补充主请求字段、导出合并与错误归因说明，Skill 版本升级至 `v0.0.22`。
+
+**验证结果**：真实请求形态的回归测试修复前稳定失败、修复后通过；SellerSprite 浏览器路由、payload 与导出相关回归 `235 passed`，完整 SellerSprite 回归 `465 passed, 1 failed`，唯一失败为既有 `keyword-reverse` 文件名断言；Skill Creator UTF-8 模式校验返回 `Skill is valid!`，MCP/Skill 契约测试 `2 passed`。
+
+**影响范围**：SellerSprite `keyword-comparison` browser-route 的本地动态 XLSX/JSON 导出列顺序及 Agent 错误归因；不改变官网请求字段、查询额度、页面交互、分页或其他场景。
+
+**回滚方式**：恢复 browser-route 直接记录页面 `asinList` 的行为，删除 Skill 补充说明并将版本恢复为 `v0.0.21`。
+
+---
+
 ## 2026-09-16 opscli app - 统一 push 成功提示
 
 **变更原因**：`opscli app push` 成功后仅提示源码已到达远端，Codex 面向运营用户的后续说明不统一。需要明确运营系统将接手自动部署和发布，并引导用户查看发布状态或配置站点权限，同时避免把异步流程误报为已经完成。

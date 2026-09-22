@@ -324,6 +324,10 @@ def test_seller_sprite_spec_must_read_includes_scenario_param_manual():
     assert "必填 1—10 个" in result["data"]["spec"]
     assert "固定 `page=1`、`size=100`" in result["data"]["spec"]
     assert "默认点击“用畅销变体拓词”" in result["data"]["spec"]
+    assert "主请求中的 `asin` 始终表示自己的 ASIN" in result["data"]["spec"]
+    assert "页面最终 `asinList` 只表示竞品或变体列表" in result["data"]["spec"]
+    assert "按 `[asin] + asinList` 合并并去重" in result["data"]["spec"]
+    assert "按运行时导出合同异常处理" in result["data"]["spec"]
     assert "`keyword-conversion-rate` 关键词转化率" in result["data"]["spec"]
     assert "`real-time-bidding` 实时查竞价" in result["data"]["spec"]
     assert "最多 1000 个关键词词组" in result["data"]["spec"]
@@ -469,7 +473,7 @@ def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
         assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
 
     version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
-    assert version["version"] == "v0.0.21"
+    assert version["version"] == "v0.0.22"
 
 
 def test_listing_analysis_tools_require_explicit_user_trigger():

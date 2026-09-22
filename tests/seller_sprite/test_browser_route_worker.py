@@ -1906,6 +1906,15 @@ def test_keyword_comparison_route_payload_accepts_sell_well_replacement():
     }
 
 
+def test_keyword_comparison_export_asin_list_deduplicates_own_asin():
+    assert worker_module._keyword_comparison_export_asin_list(
+        {
+            "asin": "b0949dwjcv",
+            "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+        }
+    ) == ["B0949DWJCV", "B0744DM3Y3"]
+
+
 def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_path):
     """主请求只接受页面生成的畅销变体列表，并同步记录最终顺序。"""
     endpoint = "/v3/api/keyword-comparison/asin"
@@ -1919,7 +1928,7 @@ def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_pat
                 headers={"content-type": "application/json"},
                 post_data=json.dumps(
                     {
-                        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+                        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
                         "page": 9,
                         "size": 5,
                         "station": "JP",
@@ -1995,11 +2004,13 @@ def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_pat
     assert result == {"code": "OK", "data": {"items": []}}
     assert sent_body == {
         **payload,
-        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
         "page": 1,
         "size": 100,
     }
-    assert route_metadata == {"asinList": ["B0949DWJCV", "B0744DM3Y3"]}
+    assert route_metadata == {
+        "asinList": ["B0949DWJCV", "B0744DM3Y3", "B0BRN58CXR"]
+    }
 
 
 def test_keyword_comparison_route_aborts_and_reports_invalid_body(monkeypatch, tmp_path):
