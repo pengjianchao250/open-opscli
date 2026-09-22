@@ -402,6 +402,7 @@ class SQLiteQuotaStore:
             """
         )
         self._apply_xydc_policy_migration(conn)
+        self._apply_xydc_openapi_policy_migration(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS mcp_quota_daily (
@@ -494,6 +495,25 @@ class SQLiteQuotaStore:
         conn.execute(
             "INSERT OR IGNORE INTO mcp_quota_migrations (migration_id, applied_at) VALUES (?, ?)",
             (XYDC_QUOTA_MIGRATION_ID, now),
+        )
+
+    def _apply_xydc_openapi_policy_migration(self, conn: sqlite3.Connection) -> None:
+        """为正式通用入口补同组限额，保留历史计数、加额和人工策略。"""
+        migration = "20260921_xydc_openapi_call"
+        if conn.execute(
+            "SELECT 1 FROM mcp_quota_migrations WHERE migration_id = ?", (migration,)
+        ).fetchone():
+            return
+        now = _updated_at_iso(datetime.now(UTC))
+        conn.execute(
+            "INSERT OR IGNORE INTO mcp_quota_policy "
+            "(tool_name, service, daily_limit, enabled, timezone, created_at, updated_at) "
+            "VALUES (?, ?, ?, 1, ?, ?, ?)",
+            ("ext_xydc_openapi_call", "xiyou", 10, "Asia/Shanghai", now, now),
+        )
+        conn.execute(
+            "INSERT INTO mcp_quota_migrations (migration_id, applied_at) VALUES (?, ?)",
+            (migration, now),
         )
 
     def _read_or_create_record(
@@ -801,9 +821,9 @@ def default_quota_policies() -> dict[str, QuotaPolicy]:
                 service="xiyou",
                 daily_limit=10,
             )
-            for tool_name in XYDC_QUOTA_TOOL_NAMES
+            for tool_name in (*XYDC_QUOTA_TOOL_NAMES, "ext_xydc_openapi_call")
         },
-        # 预留后续服务接入点：xiyou_run / sif_run 暂不启用。
+        # xiyou 仅保留为历史计费分组；旧网页工具已废弃。
     }
 
 

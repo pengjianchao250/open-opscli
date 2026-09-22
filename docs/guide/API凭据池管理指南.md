@@ -6,7 +6,8 @@
 
 凭据池采用 `Provider 1:N Account 1:N Credential`：
 
-- Provider：`serpapi`、`canopy`、`scrape_do`、`keepa`、`xydc_mcp`、`xydc_openapi`。
+- Provider：`serpapi`、`canopy`、`scrape_do`、`keepa`、`xydc_openapi`。
+- `xydc_mcp` 仅作为历史 Provider 值保留，允许查询和清理旧账号；命令不再允许新增，运行期没有对应 Provider。
 - Account：平台内的命名账号，包含启停状态、优先级和运行额度。
 - Credential：账号的 API Key 版本；轮换后旧版本保留为已撤销记录。
 - Runtime：剩余额度、重置时间、最近使用和最后错误。
@@ -63,6 +64,7 @@ D:\Gitlab\start-mcp.ps1 -InitializeSchema
 
 ```bash
 opscli api-credentials add --provider serpapi --name primary --priority 10 --remark "Google Trends 主账号"
+opscli api-credentials add --provider xydc_openapi --name primary --priority 10 --remark "西柚 OpenAPI 主账号"
 ```
 
 新增备用账号：

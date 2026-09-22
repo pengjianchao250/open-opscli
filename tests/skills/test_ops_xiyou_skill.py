@@ -15,8 +15,8 @@ def test_ops_xiyou_template_identity_is_consistent():
     version = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
 
     assert text.startswith("---\nname: ops-xiyou\n")
-    assert "mcp-version: v1.1.0" in text
-    assert version == {"name": "ops-xiyou", "version": "v1.1.0"}
+    assert "mcp-version: v1.3.0" in text
+    assert version == {"name": "ops-xiyou", "version": "v1.3.0"}
 
 
 def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
@@ -26,6 +26,8 @@ def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
     assert "普通 Amazon" in text
     assert "不得自动路由到西柚" in text
     assert "消耗西柚 Credit" in text
+    assert "xydc_openapi" in text
+    assert "旧 xydc MCP" in text
 
 
 def test_ops_xiyou_covers_only_registered_xydc_trial_tools():
@@ -38,19 +40,18 @@ def test_ops_xiyou_covers_only_registered_xydc_trial_tools():
     }
 
     assert expected_tools == {name for name in expected_tools if name in text}
-    assert "source=xydc_mcp" in text
+    assert "source=xydc_openapi" in text
     assert "cost_credits" in text
-    assert "xiyou_run" not in text
-    assert "xiyou_scenarios" not in text
-    assert "xiyou_export" not in text
+    assert "ext_xydc_openapi_call" in text
+    assert "ext_xydc_openapi_operations" in text
 
 
 def test_ops_xiyou_documents_provider_rotation_and_retry_boundary():
     text = SKILL_PATH.read_text(encoding="utf-8")
 
-    assert "周额度耗尽" in text
-    assert "Token 无效" in text
-    assert "自动切换下一个 MySQL 账号" in text
+    assert "额度账户不可用" in text
+    assert "API Key" in text
+    assert "切换下一个 `xydc_openapi` MySQL 账号" in text
     assert "禁止自动重放相同参数" in text
     assert "空数组、0 流量、0 排名结果" in text
 
@@ -64,7 +65,7 @@ def test_ops_xiyou_is_released_as_experimental():
         config[key] is True
         for key in ("source", "wheel", "binary", "binary_full")
     )
-    assert "xydc MCP 试用通道" in config["reason"]
+    assert "西柚 OpenAPI v2" in config["reason"]
 
 
 def test_ops_xiyou_can_be_installed_from_builtin_templates(tmp_path: Path):
@@ -78,8 +79,8 @@ def test_ops_xiyou_can_be_installed_from_builtin_templates(tmp_path: Path):
 
     installed_dir = tmp_path / "skills" / "ops-xiyou"
     assert result.name == "ops-xiyou"
-    assert result.to_dict()["version"] == "v1.1.0"
+    assert result.to_dict()["version"] == "v1.3.0"
     assert (installed_dir / "SKILL.md").exists()
     assert json.loads(
         (installed_dir / "data" / "VERSION.json").read_text(encoding="utf-8")
-    ) == {"name": "ops-xiyou", "version": "v1.1.0"}
+    ) == {"name": "ops-xiyou", "version": "v1.3.0"}

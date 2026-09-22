@@ -59,7 +59,7 @@ from opscli.auth import AuthClient     # 推荐：子模块直连
 其余模块的导入规则：
 
 1. **只导入包根 `__init__.py` 明确 re-export 的符号**。例如 `from opscli.shopify import ShopifyManager`、`from opscli.feedback import FeedbackClient`。
-2. 包根未导出的类（如 `opscli.seller_sprite.services.api_manager.SellerSpriteApiManager`、`opscli.xiyou.services.api_manager.XiyouApiManager`）属于**内部实现**，导入需写完整路径，并在调用方注释中注明"内部类，升级可能变动"。
+2. 包根未导出的类（如 `opscli.seller_sprite.services.api_manager.SellerSpriteApiManager`）属于**内部实现**，导入需写完整路径，并在调用方注释中注明"内部类，升级可能变动"。
 3. **禁止**导入 `_` 前缀私有成员、`opscli.*.transport.*` 的传输细节函数，以及 `opscli.mcp.session_store`（已废弃，见【铁律9】）。
 4. `opscli.config` 只能被用来读 `CONFIG_DIR` 与 `__version__`，禁止反向导入任何子模块（【铁律2】依赖方向）。
 

@@ -11,6 +11,15 @@
 **回滚方式**：恢复原成功文案和相关测试、Skill、指南及设计说明，将 Skill 版本恢复为 `v0.0.21`，并删除本次需求文档和变更记录。
 
 ---
+## 2026-09-21 Xiyou - 删除旧网页/爬虫与旧 MCP 运行入口
+
+**变更原因**：西柚已切换到正式 OpenAPI v2，旧网页/爬虫链路和 xydc MCP 链路继续保留会造成命令、MCP 工具和 Skill 路由歧义。
+**改动点**：删除 `opscli xiyou` 旧命令、旧网页 Client、场景编排、导出和旧 `xydc_mcp` Provider；移除旧 `xiyou_*` MCP 工具与对应测试；正式 OpenAPI 通过 `xydc_openapi` 凭据和 `ext_xydc_openapi_*` MCP 工具提供；保留 `xydc_mcp` 历史凭据值用于查询/清理，但禁止新增；为通用 OpenAPI 入口补入历史 xiyou 计费分组限额，保留历史计数；同步更新 Skill、SDK 文档和命令说明。
+**验证结果**：OpenAPI、MCP 注册、配额、凭据和 Skill 定向回归通过；定向回归 `47 passed`、OpenAPI/凭据/Skill 回归 `23 passed`；`compileall` 和 `git diff --check` 通过。
+**影响范围**：旧 `opscli xiyou` 命令、旧网页/爬虫 API、旧 xydc MCP Provider 和 `xiyou_*` MCP 工具不再可用；正式 OpenAPI 查询入口保持可用。
+**回滚方式**：恢复本条删除文件并重新启用对应命令/注册后，重新安装旧版本 Skill；不建议恢复旧路由与正式 OpenAPI 同时默认生效。
+
+---
 
 ## 2026-09-16 Skill - 简化 Ops App Build 展示名称
 

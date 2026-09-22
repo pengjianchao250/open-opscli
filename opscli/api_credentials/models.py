@@ -6,10 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
-# 只允许代码已识别或已预留迁移路径的 Provider，防止数据库出现无法消费的平台值。
+# 保留 xydc_mcp 仅用于读取和清理历史凭据；新账号和运行期调用只使用 xydc_openapi。
 SUPPORTED_PROVIDERS = frozenset(
     {"serpapi", "canopy", "scrape_do", "keepa", "xydc_mcp", "xydc_openapi"}
 )
+# 仅用于读取和清理历史账号；CLI 不再允许新增，运行期没有对应 Provider。
+DEPRECATED_PROVIDERS = frozenset({"xydc_mcp"})
 # 账号状态与领取条件一一对应，cooldown 由运行状态时间字段表达。
 ACCOUNT_STATUSES = frozenset({"active", "disabled", "exhausted", "invalid", "deleted"})
 
