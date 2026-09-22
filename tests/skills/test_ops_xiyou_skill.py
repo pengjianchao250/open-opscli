@@ -15,14 +15,14 @@ def test_ops_xiyou_template_identity_is_consistent():
     version = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
 
     assert text.startswith("---\nname: ops-xiyou\n")
-    assert "mcp-version: v1.3.0" in text
-    assert version == {"name": "ops-xiyou", "version": "v1.3.0"}
+    assert "mcp-version: v1.3.1" in text
+    assert version == {"name": "ops-xiyou", "version": "v1.3.1"}
 
 
 def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
     text = SKILL_PATH.read_text(encoding="utf-8")
 
-    assert "只有满足以下任一条件才使用本 Skill" in text
+    assert "只有满足以下任一条件才调用西柚查询工具" in text
     assert "普通 Amazon" in text
     assert "不得自动路由到西柚" in text
     assert "消耗西柚 Credit" in text
@@ -79,8 +79,8 @@ def test_ops_xiyou_can_be_installed_from_builtin_templates(tmp_path: Path):
 
     installed_dir = tmp_path / "skills" / "ops-xiyou"
     assert result.name == "ops-xiyou"
-    assert result.to_dict()["version"] == "v1.3.0"
+    assert result.to_dict()["version"] == "v1.3.1"
     assert (installed_dir / "SKILL.md").exists()
     assert json.loads(
         (installed_dir / "data" / "VERSION.json").read_text(encoding="utf-8")
-    ) == {"name": "ops-xiyou", "version": "v1.3.0"}
+    ) == {"name": "ops-xiyou", "version": "v1.3.1"}

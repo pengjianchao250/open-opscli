@@ -64,7 +64,7 @@ _OPENAPI_OPERATION_NAMES = Literal[
 
 @_xydc_tool
 async def ext_xydc_openapi_operations() -> dict[str, Any]:
-    """列出西柚 OpenAPI v2 的完整接口目录、路径和必填字段；该目录即 MCP 支持的正式 API 场景。"""
+    """列出西柚找词/西柚洞察（Xiyou、xydc、xydx）的 OpenAPI 目录与必填字段，涵盖关键词搜索量、ABA、CPC、反查词、排名趋势及商品数据；本工具仅查看目录。"""
     return {"success": True, "data": list_operations(), "error": None, "source": "xydc_openapi"}
 
 
@@ -73,7 +73,7 @@ async def ext_xydc_openapi_call(
     operation: _OPENAPI_OPERATION_NAMES,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
-    """调用西柚 OpenAPI v2 的任一接口；payload 按接口目录中的文档字段传入。"""
+    """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查询反查关键词、ABA周趋势、关键词月度竞争、ASIN词排名/流量趋势等；operation 和 payload 按接口目录传入。"""
     try:
         return await XydcOpenApiProvider().call(operation, payload)
     except XydcOpenApiError as exc:
@@ -94,19 +94,19 @@ async def ext_xydc_openapi_call(
 
 @_xydc_tool
 async def ext_xydc_get_asin_info(asins: list[str], country: str) -> dict[str, Any]:
-    """【OpenAPI｜消耗西柚 Credit】仅当用户明确要求使用西柚/xydc 数据时，查询 ASIN 当前商品信息。"""
+    """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查询 ASIN 当前标题、价格、评分、评分数和主图。"""
     return await _call_xydc("get_asin_info", locals())
 
 
 @_xydc_tool
 async def ext_xydc_get_asin_traffic(asins: list[str], country: str) -> dict[str, Any]:
-    """【OpenAPI｜消耗西柚 Credit】仅当用户明确要求使用西柚/xydc 数据时，查询 ASIN 近 7 天流量得分。"""
+    """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查询 ASIN 近7天自然、广告和总流量得分。"""
     return await _call_xydc("get_asin_traffic", locals())
 
 
 @_xydc_tool
 async def ext_xydc_get_keyword_info(keywords: list[str], country: str) -> dict[str, Any]:
-    """【OpenAPI｜消耗西柚 Credit】仅当用户明确要求使用西柚/xydc 数据时，查询关键词最近一周市场指标。"""
+    """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查词/搜词：查询 Amazon 关键词最近一周搜索量、ABA排名、竞争难度、点击转化率、CPC及建议竞价。"""
     return await _call_xydc("get_keyword_info", locals())
 
 
@@ -119,7 +119,7 @@ async def ext_xydc_get_keyword_asin_analysis(
     sort_field: str = "traffic",
     sort_order: Literal["asc", "desc"] = "desc",
 ) -> dict[str, Any]:
-    """【OpenAPI｜消耗西柚 Credit】仅当用户明确要求使用西柚/xydc 数据时，查询关键词近 7 天竞争 ASIN。"""
+    """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，分析关键词近7天竞争ASIN、自然/广告排名和流量，回答这个词有哪些竞品、哪些ASIN在抢流量。"""
     return await _call_xydc("get_keyword_asin_analysis", locals())
 
 
