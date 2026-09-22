@@ -1,3 +1,17 @@
+## 2026-09-22 SellerSprite - 修正流量词对比自身 ASIN 导出合同
+
+**变更原因**：官网流量词对比主请求使用独立 `asin` 传自己的 ASIN，页面生成的 `asinList` 可以只包含竞品或变体。原 browser-route 将 `asinList` 直接作为导出列顺序，导致请求成功后误报“流量词对比导出缺少自己的 ASIN”；Skill 也未明确该字段合同和错误归因。
+
+**改动点**：远端请求继续保留页面 `asinList` 原义，仅在本地导出元数据中按 `[asin] + asinList` 去重并固定自己的 ASIN 在首位；兼容旧页面列表已包含自己的 ASIN。`ops-seller-sprite` 参数手册和 MCP 规范补充主请求字段、导出合并与错误归因说明，Skill 版本升级至 `v0.0.22`。
+
+**验证结果**：真实请求形态的回归测试修复前稳定失败、修复后通过；SellerSprite 浏览器路由、payload 与导出相关回归 `235 passed`，完整 SellerSprite 回归 `465 passed, 1 failed`，唯一失败为既有 `keyword-reverse` 文件名断言；Skill Creator UTF-8 模式校验返回 `Skill is valid!`，MCP/Skill 契约测试 `2 passed`。
+
+**影响范围**：SellerSprite `keyword-comparison` browser-route 的本地动态 XLSX/JSON 导出列顺序及 Agent 错误归因；不改变官网请求字段、查询额度、页面交互、分页或其他场景。
+
+**回滚方式**：恢复 browser-route 直接记录页面 `asinList` 的行为，删除 Skill 补充说明并将版本恢复为 `v0.0.21`。
+
+---
+
 ## 2026-09-16 opscli app - 统一 push 成功提示
 
 **变更原因**：`opscli app push` 成功后仅提示源码已到达远端，Codex 面向运营用户的后续说明不统一。需要明确运营系统将接手自动部署和发布，并引导用户查看发布状态或配置站点权限，同时避免把异步流程误报为已经完成。
@@ -9,6 +23,15 @@
 **影响范围**：影响 `opscli app push` 实际发生推送后的普通输出、JSON `data.message` 和 Codex 最终交付提示；不改变 Git 推送、AppHub API、自动部署流程或发布状态。
 
 **回滚方式**：恢复原成功文案和相关测试、Skill、指南及设计说明，将 Skill 版本恢复为 `v0.0.21`，并删除本次需求文档和变更记录。
+
+---
+## 2026-09-21 Xiyou - 删除旧网页/爬虫与旧 MCP 运行入口
+
+**变更原因**：西柚已切换到正式 OpenAPI v2，旧网页/爬虫链路和 xydc MCP 链路继续保留会造成命令、MCP 工具和 Skill 路由歧义。
+**改动点**：删除 `opscli xiyou` 旧命令、旧网页 Client、场景编排、导出和旧 `xydc_mcp` Provider；移除旧 `xiyou_*` MCP 工具与对应测试；正式 OpenAPI 通过 `xydc_openapi` 凭据和 `ext_xydc_openapi_*` MCP 工具提供；保留 `xydc_mcp` 历史凭据值用于查询/清理，但禁止新增；为通用 OpenAPI 入口补入历史 xiyou 计费分组限额，保留历史计数；同步更新 Skill、SDK 文档和命令说明。
+**验证结果**：OpenAPI、MCP 注册、配额、凭据和 Skill 定向回归通过；定向回归 `47 passed`、OpenAPI/凭据/Skill 回归 `23 passed`；`compileall` 和 `git diff --check` 通过。
+**影响范围**：旧 `opscli xiyou` 命令、旧网页/爬虫 API、旧 xydc MCP Provider 和 `xiyou_*` MCP 工具不再可用；正式 OpenAPI 查询入口保持可用。
+**回滚方式**：恢复本条删除文件并重新启用对应命令/注册后，重新安装旧版本 Skill；不建议恢复旧路由与正式 OpenAPI 同时默认生效。
 
 ---
 
@@ -11689,6 +11712,25 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：影响迁移重构门禁及有真实数据需求的新建 AppHub 项目的最终交付校验；不改变 `app create/init/dev/push`、查询内核和认证流程。
 **回滚方式**：回滚迁移服务、共享合同校验模块、两个 Skill 版本及本条对应测试和文档。
 ---
+
+## 2026-09-22 Xiyou - 优化服务别名和关键词意图触发
+
+**变更原因**：西柚找词和西柚洞察名称未在所有工具说明中体现，关键词能力缺少自然语言意图映射。
+**改动点**：更新 ops-xiyou 描述与 MCP 工具描述，覆盖西柚找词/西柚洞察、Xiyou、xydc、xydx；补充搜索量、ABA、竞价、反查词和竞争分析的入口映射，支持同任务追问继承来源；未指定来源时可推荐，实际付费调用仍须用户选用；Skill 升级为 v1.3.1。
+**验证结果**：Skill 校验通过；现有 Skill 安装及 MCP 注册回归 11 passed；git diff --check 通过。
+**影响范围**：Skill 发现、意图路由和 MCP 工具说明；接口名称、参数和调用实现保持原合同。
+**回滚方式**：回滚本条描述与 Skill 版本变更。
+
+---
+
+## 2026-09-22 Xiyou - 新增正式 REST API
+
+**变更原因**：业务系统需要像 Keepa 一样通过 HTTP 使用西柚查询。
+**改动点**：新增 GET /api/v1/xydc/scenarios 和 POST /api/v1/xydc/run；共用 MCP 操作合同、AppHub 身份、日额度、遥测及 Provider 审计日志；补充错误映射、文档和回归测试。
+**验证结果**：tests/api 全量及西柚/MCP 注册/限额回归 149 passed；含真实 Provider + mock HTTP 的 REST 用户身份和审计联通检查，不消耗供应商 Credit。
+**影响范围**：同一 opscli-mcp HTTP 服务新增两个 REST 路由；旧网页/供应商 MCP 入口继续废弃。
+**回滚方式**：回滚本次路由、合同、错误映射和文档变更，无 MySQL 表结构变化。
+
 
 ## 2026-09-20 Skills - 反馈铁律改为同报错三次触发并支持 install 原地更新
 

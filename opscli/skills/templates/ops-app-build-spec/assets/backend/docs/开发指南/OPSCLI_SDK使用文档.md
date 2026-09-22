@@ -211,7 +211,7 @@ except SystemNotFoundError:
 | keepa | `KeepaApiManager`（包根可导）、`KeepaApiClient`（`opscli.keepa.api.client`，需 `api_key`） | Keepa API Key |
 | seller_sprite | `SellerSpriteApiManager`（`opscli.seller_sprite.services.api_manager`） | 卖家精灵账号 Cookie（账号经 ops 授权拉取） |
 | google_trends | `GoogleTrendsApiManager`（包根可导） | SerpApi key 池 |
-| xiyou | `XiyouApiManager`（`opscli.xiyou.services.api_manager`） | 西柚 authorization JWT |
+| xydc_openapi | `XydcOpenApiProvider`（`opscli.xiyou.providers.xydc_openapi`） | 西柚 OpenAPI API Key |
 | sif | `SifServiceManager`（`opscli.sif.services.manager`） | `OPSCLI_SIF_TOKEN` 等环境变量 |
 | scrape_do | `ScrapeDoApiManager`（`opscli.scrape_do.services.api_manager`） | ScrapeDo key（凭据池） |
 | notify | `send_wecom_markdown(webhook, content)`（包根可导） | 企业微信 webhook 显式传参 |

@@ -1538,7 +1538,9 @@ class SellerSpriteBrowserRouteWorker:
                     await route.abort("blockedbyclient")
                     return
                 if route_metadata is not None:
-                    route_metadata["asinList"] = list(effective_payload["asinList"])
+                    route_metadata["asinList"] = _keyword_comparison_export_asin_list(
+                        effective_payload
+                    )
             elif request and request.scenario == "traffic-extend":
                 try:
                     effective_payload = _traffic_extend_route_payload(
@@ -1658,10 +1660,17 @@ def _keyword_comparison_route_payload(
             api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST",
         )
     asin_list = [str(value).strip().upper() for value in asin_values]
+    own_asin = str(payload.get("asin") or "").strip().upper()
+    export_asin_list = [
+        own_asin,
+        *[asin for asin in asin_list if asin != own_asin],
+    ]
     if (
-        not 2 <= len(asin_list) <= 11
+        not 1 <= len(asin_list) <= 11
         or len(set(asin_list)) != len(asin_list)
         or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
+        or not re.fullmatch(r"[A-Z0-9]{10}", own_asin)
+        or not 2 <= len(export_asin_list) <= 11
     ):
         raise SellerSpriteApiError(
             "卖家精灵流量词对比畅销变体列表无效",
@@ -1669,6 +1678,21 @@ def _keyword_comparison_route_payload(
         )
     # 页面只能覆盖 prepare 生成的 asinList，其他筛选和分页继续以后端校验结果为准。
     return {**payload, "asinList": asin_list, "page": 1, "size": 100}
+
+
+def _keyword_comparison_export_asin_list(payload: dict[str, Any]) -> list[str]:
+    """生成导出列顺序：自身 ASIN 在前，页面变体列表去重保序。"""
+    own_asin = str(payload.get("asin") or "").strip().upper()
+    asin_values = payload.get("asinList")
+    page_asins = asin_values if isinstance(asin_values, list) else []
+    return [
+        own_asin,
+        *[
+            str(value).strip().upper()
+            for value in page_asins
+            if str(value).strip().upper() != own_asin
+        ],
+    ]
 
 
 def _real_time_bidding_task_items(

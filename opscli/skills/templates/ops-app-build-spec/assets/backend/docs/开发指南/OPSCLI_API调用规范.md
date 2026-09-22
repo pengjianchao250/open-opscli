@@ -17,7 +17,7 @@ opscli 服务端以 `opscli-mcp` 为唯一对外 HTTP 入口：REST API 与 MCP 
 | 协议 | HTTP/1.1（uvicorn ASGI），JSON 编码 |
 | REST 前缀 | `/api/v1`（health 除外：`/health/live`） |
 | MCP 端点 | `/mcp`（Streamable HTTP）、`/sse`（SSE），与 REST 同进程同端口 |
-| 端点总数 | 15 个：query 12 + keepa 2 + health 1 |
+| 端点范围 | query、Keepa、西柚、SellerSprite、认证与健康检查；以 `/openapi.json` 为准 |
 | 鉴权 | REST：AppHub viewer/session；MCP：API Key，见 §2 |
 | OpenAPI | `/docs`（Swagger UI）、`/openapi.json` |
 | CORS | 本地原型 4173/4174 与受限私有网段来源，支持凭据 Cookie，方法 GET/POST/OPTIONS |
@@ -202,5 +202,11 @@ opscli-mcp --transport both --host 0.0.0.0 --port 8765
 | `/api/v1/charts/{uuid}/doc` | GET | 需已授权 |
 | `/api/v1/keepa/scenarios` | GET | 无 |
 | `/api/v1/keepa/run` | POST | 需已授权 |
+| `/api/v1/xydc/scenarios` | GET | 无 |
+| `/api/v1/xydc/run` | POST | 需已授权 |
 
-> `/api/v1/keepa/scenarios` 与健康检查公开；其余 REST 端点要求 AppHub 身份。`/mcp`、`/sse` 继续要求 MCP API Key。
+> `/api/v1/keepa/scenarios`、`/api/v1/xydc/scenarios` 与健康检查公开；其余 REST 端点要求 AppHub 身份。`/mcp`、`/sse` 继续要求 MCP API Key。
+
+### 西柚 REST 补充约定
+
+`POST /api/v1/xydc/run` 使用 `operation` + `payload`，共享 MCP 的 `ext_xydc_openapi_call` 日额度与 Provider 审计。供应商 Key 从服务端 `xydc_openapi` MySQL 凭据池获取；用户授权通过 AppHub Header/Cookie 传入。用户认证失败为 401，供应商 Key 或余额不可用为 503，日限额/供应商限流为 429。上游查询可能消费 Credit，不自动从客户端重放失败请求。接口不提供新的缓存或幂等保证。

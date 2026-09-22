@@ -13,6 +13,7 @@ opscli 可以服务端形态运行：一条 `opscli-mcp` 命令同时提供 **RE
 
 - **query 取数全家桶（12 个端点）**：自然语言规划/取数、数据集元数据、语义目录、payload 构造与执行、图表查询；
 - **Keepa 场景（2 个端点）**：场景清单与场景执行；
+- **西柚场景（2 个端点）**：操作目录与执行，共用 MCP 查询、限额和审计；
 - **SellerSprite 场景**：场景/额度、普通异步任务与 Listing Analysis；
 - **认证检查**：当前 AppHub OPS 凭据检查；
 - **健康检查（1 个端点）**。
@@ -297,6 +298,64 @@ curl -s -X POST $BASE/api/v1/keepa/run -H "X-Ops-Token: $OPS_TOKEN" \
 ```
 
 响应即 Keepa MCP 工具的统一合同，额外附 `quota`（当日额度占用）；受与 MCP 相同的日额度治理，失败自动退回额度。导出文件获取方式与 MCP `keepa export` 一致。
+
+---
+
+### 6.4 西柚找词/西柚洞察（前缀 `/api/v1/xydc`）
+
+#### `GET /scenarios` — 公开操作目录
+
+无需登录或配置西柚 Key，不访问供应商、不消耗 Credit。返回 `data` 操作数组，字段为 `operation`、`title`、`method`、`endpoint`、`required_fields` 和 `description`，与 MCP 目录一致。目录中的 `endpoint` 是供应商路径；业务系统统一调用下方 `/run`。
+
+```bash
+curl -s "$BASE/api/v1/xydc/scenarios"
+```
+
+#### `POST /run` — 执行西柚操作
+
+使用与 Keepa 相同的 AppHub session/viewer 认证。供应商 API Key 由服务端 MySQL 的 `provider=xydc_openapi` 账号池提供，浏览器无需传入该 Key；MCP 连接 Key 不能替代 REST 登录态。
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| operation | string | 是 | `/scenarios` 返回的操作名，Swagger 枚举与 MCP 共用 |
+| payload | object | 是 | 西柚业务 JSON，字段保留原始大小写，如 `searchTerms`、`pageSize`；必填字段见目录，字段类型和限制见供应商文档 |
+
+请求体仅接受这两个顶层字段，不接受 `jwt`、`session_id`、`api_key`、`userEmail` 或任意 URL。目录与 JSON Schema 不会代替所有供应商业务参数校验。
+
+查询美国站关键词 `bed frame`：
+
+```bash
+curl -s -X POST "$BASE/api/v1/xydc/run" \
+  -H "X-Session-Id: $SESSION_ID" \
+  -H "X-Ops-Token: $OPS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"operation":"search_terms_info","payload":{"country":"US","searchTerms":["bed frame"]}}'
+```
+
+查询 ASIN 当前商品信息：
+
+```json
+{"operation":"asin_info","payload":{"entities":[{"country":"US","asin":"B091ZFL4X5"}]}}
+```
+
+成功响应沿用 MCP 信封，`data` 为完整供应商 JSON；额外包含 `source=xydc_openapi`、`operation`、`endpoint`、`provider_status`、`trace_id`、`cost_credits`，限额启用时包含 `quota`。供应商未返回 Trace ID 或 Credit 时对应字段为 null。
+
+`quota` 是 opscli 用户日调用限额，与 MCP 共用历史 `xiyou` 计费分组；`cost_credits` 是西柚供应商消耗，两者不能混作余额。业务失败退回本地日调用次数，供应商重试由 Provider 管理。调用一次只查询请求所指定的页面，不自动查全量；重复 POST 可能重复消费 Credit，没有额外 REST 幂等缓存。
+
+| HTTP | 情况 |
+| --- | --- |
+| 400 | 缺少业务必填字段或供应商返回 InvalidParams / InvalidBiz |
+| 401 | AppHub 未登录；完成用户授权后再发起查询 |
+| 422 | operation 非法、payload 非对象或多余顶层字段 |
+| 429 | opscli 日限额耗尽或供应商限流；供应商返回有效 `retry_after` 时同步输出 `Retry-After` 响应头 |
+| 502 | 上游网络/服务失败、未分类内部异常 |
+| 503 | 服务端西柚 Key、供应商额度账户或本地限额存储不可用；联系服务管理员，不需要反复刷新用户登录态 |
+
+错误返回 `success=false`、`data=null`、`error` 以及可用的 `quota`；保留可安全输出的供应商业务错误码和 Trace ID，内部连接异常统一脱敏。REST 不输出 MCP 专用 feedback 草案。
+
+Provider 审计日志继续记录经认证用户、查询条件、返回结果/错误、Trace ID、Credit、耗时与重试记录。位置通过 `OPSCLI_XYDC_OPENAPI_AUDIT_LOG` 配置，默认 `CONFIG_DIR/logs/xydc-openapi.jsonl`。请求在认证/合同/日限额阶段被拒绝时不会进入 Provider 日志。新增 REST 不改 MySQL 表结构。
+
+供应商文档注明 `client_quota` 只支持旧版 v1 鉴权；目录保留该条目便于识别限制，它不适用于当前 API Key v2，不应拿它测试当前账号余额。旧供应商 MCP、网页/爬虫入口保持废弃。
 
 ---
 

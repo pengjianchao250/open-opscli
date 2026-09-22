@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from opscli.api_credentials.config import load_settings
+from opscli.api_credentials.models import DEPRECATED_PROVIDERS
 from opscli.api_credentials.repository import MySqlApiCredentialRepository
 
 
@@ -34,7 +35,7 @@ def add_account(
     provider: str = typer.Option(
         ...,
         "--provider",
-        help="serpapi/canopy/scrape_do/keepa/xydc_mcp/xydc_openapi",
+        help="serpapi/canopy/scrape_do/keepa/xydc_openapi",
     ),
     name: str = typer.Option(..., "--name", help="平台内唯一账号名称"),
     priority: int = typer.Option(100, "--priority", min=1, help="数值越小越优先"),
@@ -53,6 +54,11 @@ def add_account(
     Returns:
         无；终端仅输出脱敏账号摘要。
     """
+    normalized_provider = provider.strip().lower().replace("-", "_")
+    if normalized_provider in DEPRECATED_PROVIDERS:
+        raise typer.BadParameter(
+            f"Provider {normalized_provider} 已废弃；请使用 xydc_openapi 添加正式 API Key"
+        )
     api_key = typer.prompt("API Key", hide_input=True, confirmation_prompt=True)
     account = _repository().upsert_account(
         provider=provider,

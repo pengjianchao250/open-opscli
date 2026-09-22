@@ -342,12 +342,14 @@
 1. browser-route 填写自己的 ASIN 和竞品 ASIN，点击“立即查询”。
 2. 捕获并校验 `POST /v3/api/keyword-comparison/prepare`；HTTP、JSON、业务状态或 `data.diamondList` 任一异常都立即失败，不继续等待弹窗。
 3. prepare 成功后按 `variantSelection` 点击对应按钮；用户未指定时默认点击“用畅销变体拓词”，明确要求当前变体时点击“用当前变体拓词”，无需再次确认。
-4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
+4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；主请求中的 `asin` 始终表示自己的 ASIN，页面最终 `asinList` 只表示竞品或变体列表，可以不包含自己的 ASIN。只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
 5. 变体控制参数不进入主请求；页面交互后未捕获主响应时直接失败，不使用静默接口 fallback。
+6. 请求参数已经包含合法 `ownAsin` / `asin`，但任务仍返回 `SELLER_SPRITE_CONFIG_ERROR: 流量词对比导出缺少自己的 ASIN` 时，按运行时导出合同异常处理并提交工具反馈；保留原参数和错误信息，不要求用户重复输入 ASIN，也不通过切换 JSON/XLSX 格式重试同一链路。
 
 ### 数据与导出
 
 - 只保留第一页最多 100 条，不请求后续页；`row_count` 等于第一页 `data.items` 实际数量。
+- 本地导出 ASIN 顺序按 `[asin] + asinList` 合并并去重，自己的 ASIN 固定在首位；兼容页面 `asinList` 已包含自己的 ASIN，不重复生成列。
 - 每个最终 ASIN 动态生成“流量占比 + 流量词类型”两列，自己的 ASIN 标记 `(我的)`；对比值从 `competitorList` 读取。
 - 查询 JSON 在本地生成 `CompareKeywords-{站点}-{自己的ASIN}-...xlsx`，不调用官网额度型导出。
 - 工作簿包含动态业务主表和 `ASIN` 辅助表，不生成 `Notes`。

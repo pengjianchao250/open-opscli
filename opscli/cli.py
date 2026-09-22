@@ -34,7 +34,6 @@ from opscli.seller_sprite_debug.cli import app as seller_sprite_debug_app
 from opscli.sif.cli import app as sif_app
 from opscli.skills.cli import app as skills_app
 from opscli.version import get_version
-from opscli.xiyou.cli import app as xiyou_app
 
 try:
     from opscli.asin_review.cli import app as asin_review_app
@@ -79,7 +78,6 @@ app.add_typer(keepa_app, name="keepa")
 app.add_typer(seller_sprite_app, name="seller-sprite")
 # app.add_typer(seller_sprite_debug_app, name="seller-sprite-debug")
 # app.add_typer(sif_app, name="sif")
-# app.add_typer(xiyou_app, name="xiyou")
 # app.add_typer(methods_card_app, name="methods-card")
 app.add_typer(skills_app, name="skills")
 app.add_typer(mcp_app, name="mcp")

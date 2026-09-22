@@ -70,8 +70,8 @@ def test_query_tools_expose_optional_global_currency_in_mcp_schema(tool_name):
     assert properties["global_currency"]["default"] is None
 
 
-def test_mcp_hides_temporarily_closed_service_tools():
-    """Sif / 西柚暂不开放时，不应出现在 MCP tool 列表。"""
+def test_mcp_exposes_openapi_and_hides_deprecated_xiyou_tools():
+    """正式 OpenAPI 工具可用，旧网页/爬虫工具不再出现在 MCP 列表。"""
     async def scenario():
         async with Client(mcp) as client:
             tools = await client.list_tools()
@@ -83,6 +83,10 @@ def test_mcp_hides_temporarily_closed_service_tools():
     assert "sif_scenarios" not in names
     assert "xiyou_run" not in names
     assert "xiyou_scenarios" not in names
+    assert "xiyou_job_status" not in names
+    assert "xiyou_export" not in names
+    assert "ext_xydc_openapi_operations" in names
+    assert "ext_xydc_openapi_call" in names
 
 
 def test_seller_sprite_internal_controls_are_not_exposed():
