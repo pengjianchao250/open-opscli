@@ -8,6 +8,7 @@ from typing import Annotated, Any, Literal
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
+from opscli.xiyou.contracts import XydcOperation
 from opscli.xiyou.providers.xydc_openapi import (
     XydcOpenApiError,
     XydcOpenApiProvider,
@@ -35,33 +36,6 @@ async def _call_xydc(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any
             feedback_type="query_result",
         )
 
-
-_OPENAPI_OPERATION_NAMES = Literal[
-    "asin_traffic",
-    "asin_info_change_daily",
-    "asin_traffic_score_daily",
-    "asin_traffic_score_weekly",
-    "asin_traffic_score_monthly",
-    "asin_advertising_change_daily",
-    "asin_bsr_daily",
-    "asin_orders_trends",
-    "asin_info_trends_daily",
-    "asin_research_period",
-    "asin_research_monthly",
-    "asin_info",
-    "asin_orders",
-    "asin_variations",
-    "asin_search_terms_traffic_daily",
-    "asin_search_terms_rank_daily",
-    "asin_search_terms_rank_hourly",
-    "search_terms_aba_weekly",
-    "search_terms_info",
-    "search_terms_analysis_period",
-    "search_terms_analysis_monthly",
-    "client_quota",
-]
-
-
 @_xydc_tool
 async def ext_xydc_openapi_operations() -> dict[str, Any]:
     """列出西柚找词/西柚洞察（Xiyou、xydc、xydx）的 OpenAPI 目录与必填字段，涵盖关键词搜索量、ABA、CPC、反查词、排名趋势及商品数据；本工具仅查看目录。"""
@@ -70,7 +44,7 @@ async def ext_xydc_openapi_operations() -> dict[str, Any]:
 
 @_xydc_tool
 async def ext_xydc_openapi_call(
-    operation: _OPENAPI_OPERATION_NAMES,
+    operation: XydcOperation,
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查询反查关键词、ABA周趋势、关键词月度竞争、ASIN词排名/流量趋势等；operation 和 payload 按接口目录传入。"""

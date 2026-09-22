@@ -1,6 +1,7 @@
-"""REST 请求合同（Pydantic Schema），按业务域拆分：query / keepa。"""
+"""REST 请求合同（Pydantic Schema），按业务域拆分：query / keepa / xydc。"""
 
 from opscli.api.schemas.keepa import KeepaRunRequest
+from opscli.api.schemas.xydc import XydcRunRequest
 from opscli.api.schemas.query import (
     ChartRunRequest,
     QueryBuildRequest,
@@ -16,6 +17,7 @@ from opscli.api.schemas.query import (
 __all__ = [
     "ChartRunRequest",
     "KeepaRunRequest",
+    "XydcRunRequest",
     "QueryBuildRequest",
     "QueryFlowOrderBy",
     "QueryFlowRequest",

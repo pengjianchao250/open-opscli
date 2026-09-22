@@ -11708,3 +11708,13 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回滚本条描述与 Skill 版本变更。
 
 ---
+
+## 2026-09-22 Xiyou - 新增正式 REST API
+
+**变更原因**：业务系统需要像 Keepa 一样通过 HTTP 使用西柚查询。
+**改动点**：新增 GET /api/v1/xydc/scenarios 和 POST /api/v1/xydc/run；共用 MCP 操作合同、AppHub 身份、日额度、遥测及 Provider 审计日志；补充错误映射、文档和回归测试。
+**验证结果**：tests/api 全量及西柚/MCP 注册/限额回归 149 passed；含真实 Provider + mock HTTP 的 REST 用户身份和审计联通检查，不消耗供应商 Credit。
+**影响范围**：同一 opscli-mcp HTTP 服务新增两个 REST 路由；旧网页/供应商 MCP 入口继续废弃。
+**回滚方式**：回滚本次路由、合同、错误映射和文档变更，无 MySQL 表结构变化。
+
+---

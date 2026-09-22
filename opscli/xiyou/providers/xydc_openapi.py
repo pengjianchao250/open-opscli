@@ -19,7 +19,7 @@ import httpx
 from opscli.api_credentials import ApiCredentialLease, ApiCredentialPool
 from opscli.api_credentials.exceptions import ApiCredentialUnavailableError
 
-from .xydc_audit import XydcAuditLogger
+from .xydc_audit import XydcAuditLogger, _sanitize
 
 
 XYDC_OPENAPI_BASE_URL = "https://openapi.xydc.com"
@@ -301,6 +301,9 @@ class XydcOpenApiProvider:
                 body = response.json()
             except (ValueError, json.JSONDecodeError):
                 body = {"message": response.text[:1000]}
+            # REST 和 MCP 都会返回该结果；供应商回显的密钥必须在共享出口脱敏。
+            body = _sanitize(body, headers["X-Api-Key"])
+            trace_id = _sanitize(trace_id, headers["X-Api-Key"])
             if response.status_code >= 400:
                 code = _error_code(response.status_code, body)
                 raise XydcOpenApiError(
@@ -309,7 +312,7 @@ class XydcOpenApiProvider:
                     status_code=response.status_code,
                     payload=body,
                     trace_id=trace_id,
-                    retry_after=response.headers.get("Retry-After"),
+                    retry_after=_sanitize(response.headers.get("Retry-After"), headers["X-Api-Key"]),
                 )
             return {
                 "success": True,
