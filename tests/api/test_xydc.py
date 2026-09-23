@@ -48,12 +48,27 @@ def test_catalog_is_public_and_matches_mcp_schema(client, monkeypatch):
     response = client.get("/api/v1/xydc/scenarios")
     assert response.status_code == 200
     operations = {item["operation"] for item in response.json()["data"]}
-    assert operations == set(OPERATIONS) == set(get_args(XydcOperation))
+    assert "client_quota" not in operations
+    assert operations == set(OPERATIONS) - {"client_quota"} == set(get_args(XydcOperation))
     schema = client.get("/openapi.json").json()
     assert "/api/v1/xydc/run" in schema["paths"]
     contract = schema["components"]["schemas"]["XydcRunRequest"]
     assert set(contract["properties"]["operation"]["enum"]) == operations
     assert contract["additionalProperties"] is False
+
+
+def test_client_quota_is_rejected_by_public_rest_contract(client, monkeypatch):
+    def forbidden():
+        pytest.fail("内部额度操作不应进入公共 REST 入口")
+
+    monkeypatch.setattr(tools, "XydcOpenApiProvider", forbidden)
+    response = client.post(
+        "/api/v1/xydc/run",
+        headers=HEADERS,
+        json={"operation": "client_quota", "payload": {}},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
 def test_run_requires_apphub_identity_before_provider(client, monkeypatch):

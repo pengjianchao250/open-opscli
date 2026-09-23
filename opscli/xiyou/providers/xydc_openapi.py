@@ -120,6 +120,8 @@ OPERATIONS: dict[str, XydcOpenApiOperation] = {
     ),
 }
 
+PUBLIC_OPERATION_NAMES = tuple(name for name in OPERATIONS if name != "client_quota")
+
 LEGACY_OPERATION_ALIASES = {
     "get_asin_info": "asin_info",
     "get_asin_traffic": "asin_traffic",
@@ -352,8 +354,14 @@ class XydcOpenApiProvider:
             pass
 
 
-def list_operations() -> list[dict[str, Any]]:
-    return [item.to_dict() for item in OPERATIONS.values()]
+def list_operations(*, include_internal: bool = False) -> list[dict[str, Any]]:
+    """返回操作目录；默认只返回允许暴露给用户的公共操作。"""
+    operations = (
+        OPERATIONS.values()
+        if include_internal
+        else (OPERATIONS[name] for name in PUBLIC_OPERATION_NAMES)
+    )
+    return [item.to_dict() for item in operations]
 
 
 def _normalize_legacy_payload(operation: str, payload: dict[str, Any]) -> dict[str, Any]:

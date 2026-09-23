@@ -123,9 +123,13 @@ def test_legacy_asin_info_uses_openapi_v2_and_writes_audit_log(tmp_path: Path):
 
 def test_all_documented_operations_are_registered():
     assert len(OPERATIONS) == 22
-    assert len(list_operations()) == 22
+    assert len(list_operations()) == 21
+    assert "client_quota" not in {item["operation"] for item in list_operations()}
+    assert len(list_operations(include_internal=True)) == 22
     assert {item["method"] for item in list_operations()} == {"POST"}
-    assert "/v1/client/quota" in {item["endpoint"] for item in list_operations()}
+    assert "/v1/client/quota" in {
+        item["endpoint"] for item in list_operations(include_internal=True)
+    }
 
 
 def test_401_rotates_openapi_key_and_429_retries_without_rotation(tmp_path: Path):
