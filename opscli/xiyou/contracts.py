@@ -26,5 +26,4 @@ XydcOperation = Literal[
     "search_terms_info",
     "search_terms_analysis_period",
     "search_terms_analysis_monthly",
-    "client_quota",
 ]

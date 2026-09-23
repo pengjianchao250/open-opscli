@@ -10,6 +10,9 @@ from pydantic import Field
 
 from opscli.xiyou.contracts import XydcOperation
 from opscli.xiyou.providers.xydc_openapi import (
+    LEGACY_OPERATION_ALIASES,
+    OPERATIONS,
+    PUBLIC_OPERATION_NAMES,
     XydcOpenApiError,
     XydcOpenApiProvider,
     list_operations,
@@ -18,9 +21,38 @@ from opscli.xiyou.providers.xydc_openapi import (
 from .helpers import _err
 
 
+_COMPATIBILITY_TOOL_OPERATIONS = {
+    "ext_xydc_get_asin_info": "get_asin_info",
+    "ext_xydc_get_asin_traffic": "get_asin_traffic",
+    "ext_xydc_get_keyword_info": "get_keyword_info",
+    "ext_xydc_get_keyword_asin_analysis": "get_keyword_asin_analysis",
+}
+
+
+def _xydc_telemetry_dimensions(
+    arguments: dict[str, Any],
+    *,
+    tool_name: str,
+) -> dict[str, str]:
+    """把西柚 MCP 入口归一为可聚合的正式 OpenAPI 场景。"""
+    operation = arguments.get("operation")
+    if operation is None:
+        operation = _COMPATIBILITY_TOOL_OPERATIONS.get(tool_name)
+    normalized = LEGACY_OPERATION_ALIASES.get(str(operation or "").strip(), str(operation or "").strip())
+    dimensions = {"provider": "xydc_openapi"}
+    if normalized in OPERATIONS:
+        dimensions["scenario"] = normalized
+        dimensions["endpoint"] = OPERATIONS[normalized].endpoint
+    return dimensions
+
+
 def _xydc_tool(fn: Callable[..., Any]) -> Callable[..., Any]:
     fn.__opscli_catalog_module__ = "external_xydc"
     fn.__opscli_telemetry_role__ = "gateway_proxy"
+    fn.__opscli_telemetry_dimension_resolver__ = lambda arguments: _xydc_telemetry_dimensions(
+        arguments,
+        tool_name=fn.__name__,
+    )
     return fn
 
 
@@ -48,6 +80,16 @@ async def ext_xydc_openapi_call(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     """【OpenAPI｜消耗西柚 Credit】用户已选择西柚找词/西柚洞察（Xiyou、xydc、xydx）时，查询反查关键词、ABA周趋势、关键词月度竞争、ASIN词排名/流量趋势等；operation 和 payload 按接口目录传入。"""
+    if operation not in PUBLIC_OPERATION_NAMES:
+        return _err(
+            XydcOpenApiError(
+                "XYDC_OPENAPI_INTERNAL_OPERATION",
+                "该西柚 OpenAPI 操作仅供服务端内部逻辑使用",
+            ),
+            tool=f"MCP -> ext_xydc_openapi_call({operation})",
+            call_params={"operation": operation},
+            feedback_type="query_result",
+        )
     try:
         return await XydcOpenApiProvider().call(operation, payload)
     except XydcOpenApiError as exc:

@@ -355,7 +355,7 @@ curl -s -X POST "$BASE/api/v1/xydc/run" \
 
 Provider 审计日志继续记录经认证用户、查询条件、返回结果/错误、Trace ID、Credit、耗时与重试记录。位置通过 `OPSCLI_XYDC_OPENAPI_AUDIT_LOG` 配置，默认 `CONFIG_DIR/logs/xydc-openapi.jsonl`。请求在认证/合同/日限额阶段被拒绝时不会进入 Provider 日志。新增 REST 不改 MySQL 表结构。
 
-供应商文档注明 `client_quota` 只支持旧版 v1 鉴权；目录保留该条目便于识别限制，它不适用于当前 API Key v2，不应拿它测试当前账号余额。旧供应商 MCP、网页/爬虫入口保持废弃。
+供应商文档中的 `client_quota` 仅供服务端 Provider 内部额度检查使用，不出现在 MCP 或 REST 公共目录，也不接受公共请求。它只支持旧版 v1 鉴权，不适用于当前 API Key v2；用户不得用它测试当前账号余额。旧供应商 MCP、网页/爬虫入口保持废弃。
 
 ---
 

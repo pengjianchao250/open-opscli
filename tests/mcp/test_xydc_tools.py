@@ -59,6 +59,22 @@ def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch):
     ]
 
 
+def test_client_quota_is_rejected_before_provider_call(monkeypatch):
+    def forbidden():
+        raise AssertionError("内部额度操作不应进入公开 MCP Provider")
+
+    monkeypatch.setattr(xydc_tools, "XydcOpenApiProvider", forbidden)
+    result = _run(
+        xydc_tools.ext_xydc_openapi_call(
+            operation="client_quota",
+            payload={},
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "XYDC_OPENAPI_INTERNAL_OPERATION"
+
+
 def test_xydc_tools_have_testing_description_and_gateway_metadata():
     assert {tool.__name__ for tool in xydc_tools._ALL_TOOLS} == XYDC_TOOL_NAMES
     for tool in xydc_tools._ALL_TOOLS:
@@ -144,7 +160,7 @@ def test_default_server_registers_full_openapi_operation_contract(monkeypatch, t
     operation_tool = tools["ext_xydc_openapi_call"]
     operation_schema = operation_tool.inputSchema["properties"]["operation"]
 
-    assert len(operation_schema["enum"]) == 22
+    assert len(operation_schema["enum"]) == 21
     assert "asin_info" in operation_schema["enum"]
     assert "search_terms_analysis_monthly" in operation_schema["enum"]
-    assert "client_quota" in operation_schema["enum"]
+    assert "client_quota" not in operation_schema["enum"]
