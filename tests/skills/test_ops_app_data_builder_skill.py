@@ -122,29 +122,26 @@ def test_ops_app_data_builder_routes_contract_validation_to_existing_skills():
         assert required in text
 
 
-def test_ops_app_data_builder_updates_migration_coverage_matrix() -> None:
-    """迁移数据层必须读取动态模块、回写合同证据并通过数据门禁。"""
+def test_ops_app_data_builder_keeps_migration_copy_out_of_refactor_flow() -> None:
+    """源码复制迁移不自动进入模板数据层重构状态机。"""
     text = SKILL_MD.read_text(encoding="utf-8")
 
     for required in (
-        ".opscli/migration/current.json",
-        "coverage-matrix.json",
-        "dynamic=true",
-        "opscli app migrate verify-ui",
-        "当前迁移阶段至少是 `data_integration`",
-        "data_contract",
-        "candidate`、`verified`、`degraded`、`blocked`、`deferred_attachment`",
-        "FakeGateway 测试和线上真实查询必须分别记录",
-        "unblock_conditions",
-        "implementation_status",
-        "contract_verified_only",
-        "layout_only",
-        "全部未阻塞动态项",
-        "opscli app migrate export",
-        "opscli app migrate verify-data",
+        "origin_type=migration_copy",
+        "源码复制迁移项目",
+        "不自动进入模板数据层重构",
+        "不得为了满足本 Skill 的模板前置条件改写迁移项目业务源码",
+        "用户明确提出迁移后的独立数据层开发任务",
+        "真实数据、凭证隔离、后端代理和合同验证规则",
     ):
         assert required in text
 
+    for obsolete in (
+        "opscli app migrate verify-ui",
+        "opscli app migrate export",
+        "opscli app migrate verify-data",
+    ):
+        assert obsolete not in text
 
 def test_ops_app_data_builder_requires_real_query_closure() -> None:
     """清晰的真实数据需求必须查询、留证并通过交付校验。"""

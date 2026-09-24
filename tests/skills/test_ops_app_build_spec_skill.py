@@ -358,71 +358,71 @@ def test_ops_app_build_spec_opscli_integration_uses_project_gateways() -> None:
 
 
 def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
-    """迁移必须统一为模板基础上的业务能力重构。"""
+    """迁移必须统一为源码复制、最小适配并与新建流程隔离。"""
     skill = _read("SKILL.md")
     migration = _read("references/migration-standard.md")
+    content = "\n".join((skill, migration))
 
     for required in (
         "“站点”和“看板”含义相同",
-        "迁移统一指基于当前统一模板的业务能力迁移与代码重构",
-        "旧看板源码目录始终只读",
-        "业务能力覆盖矩阵",
-        "不得通过复制、移动、批量同步、改扩展名或机械翻译旧文件完成迁移",
-        "取数能力按当前 `data-access-standard.md` 重新核对",
-        "`blocked`",
-        "`deferred_attachment`",
-        "能够构建”都不能代替业务行为一致",
-        "assets/backend/",
+        "源码复制迁移流程",
+        "完整复制源码 + 最小运行适配",
+        "不拉取模板",
+        "源目录只读",
+        "origin_type=migration_copy",
+        "migration_id",
+        "startup_manual_required",
+        "convert-legacy",
+        "普通新建项目行为",
     ):
-        assert required in migration
+        assert required in content
 
     for required in (
         "## 任务分流",
         "新建看板",
         "已有合规模板看板开发",
-        "已有看板迁移重构",
-        "旧看板源码只读",
-        "唯一的迁移规范",
+        "源码复制迁移",
+        "普通新建项目继续使用原有",
     ):
         assert required in skill
 
     assert "dashboard-migration-standard.md" not in skill
     assert not (SKILL_DIR / "references" / "dashboard-migration-standard.md").exists()
 
-    for duplicated_detail in ("alembic upgrade head", "migrations/versions", "data/app.db"):
-        assert duplicated_detail not in migration
-
+    for obsolete in (
+        "opscli app migrate init",
+        "opscli app migrate verify-ui",
+        "opscli app migrate verify-data",
+        "opscli app migrate verify-release",
+        "opscli app migrate export",
+        "coverage-matrix.json",
+        "ui-blueprint.json",
+    ):
+        assert obsolete not in content
 
 def test_ops_app_build_spec_requires_command_driven_migration_gates() -> None:
-    """迁移必须使用机器可读矩阵、UI 蓝图和 UI/数据/发布门禁。"""
+    """迁移必须使用源码复制、启动扫描和独立的迁移状态。"""
     skill = _read("SKILL.md")
     migration = _read("references/migration-standard.md")
     content = "\n".join((skill, migration))
 
     for required in (
-        "opscli app migrate init",
+        "opscli app migrate start",
         ".opscli/migration/current.json",
-        "coverage-matrix.json",
-        "ui-blueprint.json",
-        "先一比一还原导航、路由、页面区域、模块顺序、父子层级",
-        "opscli app migrate verify-ui",
-        "UI 门禁通过前不得开始真实数据接入",
-        "opscli app migrate verify-data",
-        "opscli app migrate verify-release",
-        "opscli app migrate export",
-        "delivery_ready",
-        "next_required_gate",
-        "Schema v2",
-        "remaining_issues",
-        "unblock_conditions",
-        "contract_verified_only",
-        "candidate` 不能通过数据门禁",
-        "migration-acceptance.md",
-        "不是第二套状态源",
-        "opscli:migration-data",
+        "copy-manifest.json",
+        "startup-manifest.json",
+        "scripts/start_app.py",
+        "opscli app migrate scan-startup",
+        "opscli app migrate verify",
+        "opscli app migrate convert-legacy",
+        "startup_manual_required",
+        "origin_type=migration_copy",
+        "business_source_rewritten=false",
+        "`.env`、`.env.*`",
+        "data/",
+        "不能改变普通新建项目行为",
     ):
         assert required in content
-
 
 def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
     """源码交付必须保持当前 AppHub 单应用合同。"""

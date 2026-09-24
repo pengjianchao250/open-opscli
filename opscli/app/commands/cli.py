@@ -15,7 +15,7 @@ from opscli.app.services.migration import MigrationService
 from opscli.app.services.template import TemplateService
 
 app = typer.Typer(help="管理 AppHub 应用、Git 仓库、本地开发预览和源码推送")
-migrate_app = typer.Typer(help="管理旧看板到标准模板的迁移重构任务")
+migrate_app = typer.Typer(help="管理源码复制迁移项目")
 app.add_typer(migrate_app, name="migrate")
 
 
@@ -30,45 +30,13 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         if data.get("credential_refreshed"):
             typer.echo("Git 认证已自动刷新。")
         for key in (
-            "app_id",
-            "app_name",
-            "slug",
-            "path",
-            "repo_url",
-            "default_branch",
-            "runtime_env_status",
-            "runtime_env_value",
-            "runtime_env_expected_value",
-            "runtime_env_updated",
-            "commit_sha",
-            "ready",
-            "status",
-            "platform",
-            "architecture",
-            "translated",
-            "git_path",
-            "detected_via",
-            "git_version",
-            "minimum_version",
-            "install_method",
-            "migration_id",
-            "phase",
-            "gate",
-            "passed",
-            "total_items",
-            "dynamic_items",
-            "state_path",
-            "project_root",
-            "running",
-            "active",
-            "identity_verified",
-            "ports_reused",
-            "frontend_url",
-            "backend_url",
-            "supervisor_pid",
-            "frontend_pid",
-            "backend_pid",
-            "state_file",
+            "app_id", "app_name", "slug", "path", "repo_url", "default_branch",
+            "runtime_env_status", "runtime_env_value", "runtime_env_expected_value",
+            "runtime_env_updated", "commit_sha", "ready", "status", "platform",
+            "architecture", "translated", "git_path", "detected_via", "git_version",
+            "minimum_version", "install_method", "migration_id", "origin_type", "phase",
+            "startup_status", "target_root", "source_root", "copy_manifest",
+            "startup_manifest", "passed", "state_path", "target_reason", "target_notice",
         ):
             if data.get(key) is not None:
                 typer.echo(f"{key}: {data[key]}")
@@ -116,10 +84,10 @@ def _run(command: str, action, *, json_output: bool) -> None:
 
 
 def _run_migration(command: str, action, *, json_output: bool) -> None:
-    """执行迁移服务动作，并复用 `opscli app` 的稳定输出信封。"""
+    service = MigrationService()
     try:
         _emit(
-            {"success": True, "command": command, "data": action(MigrationService()), "error": None},
+            {"success": True, "command": command, "data": action(service), "error": None},
             json_output=json_output,
         )
     except AppError as exc:
@@ -145,58 +113,38 @@ def _run_migration(command: str, action, *, json_output: bool) -> None:
             json_output=json_output,
         )
         raise typer.Exit(1) from exc
+    finally:
+        service.close()
 
 
-@migrate_app.command("init")
-def migrate_init(
-    source: Path = typer.Option(..., "--source", help="旧看板源码目录，只读"),
-    target: Path = typer.Option(Path("."), "--target", help="标准模板目标项目目录"),
+@migrate_app.command("start")
+def migrate_start(
+    source: Path = typer.Option(..., "--source", help="旧项目源码目录，只读"),
+    target_root: Path | None = typer.Option(None, "--target-root", help="迁移后的目标项目根目录"),
+    app_name: str | None = typer.Option(None, "--app-name", help="AppHub 应用名称；省略时使用源目录名"),
     migration_id: str | None = typer.Option(None, "--migration-id", help="可选迁移任务 ID"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """初始化迁移任务、审计快照、覆盖矩阵、UI 蓝图和项目文档。"""
+    """复制源码并自动完成 AppHub 创建与 Git 初始化。"""
     _run_migration(
-        "app migrate init",
-        lambda service: service.initialize(source, target, migration_id=migration_id),
-        json_output=json_output,
-    )
-
-
-@migrate_app.command("audit")
-def migrate_audit(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
-    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """重新扫描旧项目只读候选证据。"""
-    _run_migration(
-        "app migrate audit",
-        lambda service: service.audit(target, migration_id=migration_id),
-        json_output=json_output,
-    )
-
-
-@migrate_app.command("plan")
-def migrate_plan(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
-    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """生成迁移计划、UI 规格和数据规格。"""
-    _run_migration(
-        "app migrate plan",
-        lambda service: service.plan(target, migration_id=migration_id),
+        "app migrate start",
+        lambda service: service.start(
+            source,
+            target_root,
+            app_name=app_name,
+            migration_id=migration_id,
+        ),
         json_output=json_output,
     )
 
 
 @migrate_app.command("status")
 def migrate_status(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
+    target: Path = typer.Option(Path("."), "--target", help="迁移目标项目目录"),
     migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """查看迁移阶段、门禁状态、交付就绪状态和阻塞项。"""
+    """查看源码复制迁移状态。"""
     _run_migration(
         "app migrate status",
         lambda service: service.status(target, migration_id=migration_id),
@@ -204,76 +152,44 @@ def migrate_status(
     )
 
 
-@migrate_app.command("check")
-def migrate_check(
-    gate: str = typer.Option(..., "--gate", help="inventory、ui、data 或 release"),
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
+@migrate_app.command("scan-startup")
+def migrate_scan_startup(
+    target: Path = typer.Option(Path("."), "--target", help="迁移目标项目目录"),
     migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """只读检查指定迁移门禁，不推进阶段。"""
+    """重新扫描迁移项目的前后端启动方式。"""
     _run_migration(
-        "app migrate check",
-        lambda service: service.check(target, gate=gate, migration_id=migration_id),
+        "app migrate scan-startup",
+        lambda service: service.scan_startup(target, migration_id=migration_id),
         json_output=json_output,
     )
 
 
-def _verify_migration(
-    command: str,
-    gate: str,
-    target: Path,
-    migration_id: str | None,
-    json_output: bool,
+@migrate_app.command("verify")
+def migrate_verify(
+    target: Path = typer.Option(Path("."), "--target", help="迁移目标项目目录"),
+    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
+    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """复用阶段验证命令的参数转发和统一输出。"""
+    """执行迁移复制、启动、身份和 Git 交付检查。"""
     _run_migration(
-        command,
-        lambda service: service.verify(target, gate=gate, migration_id=migration_id),
+        "app migrate verify",
+        lambda service: service.verify(target, migration_id=migration_id),
         json_output=json_output,
     )
 
 
-@migrate_app.command("verify-ui")
-def migrate_verify_ui(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
+@migrate_app.command("convert-legacy")
+def migrate_convert_legacy(
+    target: Path = typer.Option(Path("."), "--target", help="包含旧迁移状态的项目目录"),
     migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """验证 UI 结构门禁并推进到真实数据接入阶段。"""
-    _verify_migration("app migrate verify-ui", "ui", target, migration_id, json_output)
-
-
-@migrate_app.command("verify-data")
-def migrate_verify_data(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
-    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """验证真实合同、数据层实现和项目工件并推进阶段。"""
-    _verify_migration("app migrate verify-data", "data", target, migration_id, json_output)
-
-
-@migrate_app.command("verify-release")
-def migrate_verify_release(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
-    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """验证最终交付门禁并完成迁移任务。"""
-    _verify_migration("app migrate verify-release", "release", target, migration_id, json_output)
-
-
-@migrate_app.command("export")
-def migrate_export(
-    target: Path = typer.Option(Path("."), "--target", help="目标项目目录"),
-    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
-    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
-) -> None:
-    """从当前状态重新生成全部迁移文档。"""
+    """一次性备份并清理旧的模板重构迁移状态。"""
     _run_migration(
-        "app migrate export",
-        lambda service: service.export(target, migration_id=migration_id),
+        "app migrate convert-legacy",
+        lambda service: service.convert_legacy(target, migration_id=migration_id),
         json_output=json_output,
     )
 

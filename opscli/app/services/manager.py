@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Literal
 
@@ -48,9 +49,20 @@ class AppManager:
     def close(self) -> None:
         self.client.close()
 
-    def create_app(self, app_name: str, *, path: str | Path | None = None) -> dict:
+    def create_app(
+        self,
+        app_name: str,
+        *,
+        path: str | Path | None = None,
+        origin_type: str | None = None,
+        migration_id: str | None = None,
+    ) -> dict:
         """创建并绑定应用，不消费或保存创建响应中的 Git 凭据。"""
-        request = AppCreateRequest.from_app_name(app_name)
+        request = AppCreateRequest.from_app_name(
+            app_name,
+            origin_type=origin_type,
+            migration_id=migration_id,
+        )
         root = self.binding_store.prepare_root(path if path is not None else request.name)
         if self.binding_store.is_bound(root):
             binding = self._ensure_binding(root)
@@ -74,6 +86,23 @@ class AppManager:
     def create_site(self, site_name: str, *, path: str | Path | None = None) -> dict:
         """兼容旧 SDK 方法名。"""
         return self.create_app(site_name, path=path)
+
+    def bind_app(self, path: str | Path, *, app_id: str) -> dict:
+        """只保存明确指定的 AppHub 应用绑定，不初始化 Git 或推送源码。"""
+        root = self.binding_store.prepare_root(path)
+        binding = self._ensure_binding(root, app_id=app_id)
+        detail = self.client.get_app(binding.app_id)
+        self._verify_detail(binding, detail)
+        binding = binding.migrated(
+            apphub_url=self.client.api_base_url,
+            app_name=_optional_text(detail.get("title")) or binding.app_name,
+            owner_user_id=_optional_text(detail.get("owner_user_id")) or binding.owner_user_id,
+            owner_email=_optional_text(detail.get("owner_email") or detail.get("owner"))
+            or binding.owner_email,
+        )
+        self.binding_store.save(root, binding)
+        self.manifest_store.sync_identity(root, binding)
+        return self._binding_result(root, binding, "应用绑定已保存；尚未初始化仓库或推送源码。")
 
     def init_git(
         self,
@@ -108,10 +137,13 @@ class AppManager:
         summary = self._validate_message(message, command="push")
         git_environment = self._ensure_git_environment()
         root = self.binding_store.prepare_root(path)
+        migration_project = self._is_migration_project(root)
+        if migration_project:
+            self._validate_migration_push(root)
         binding, credential_result, git_init_result, runtime_env_result = (
             self._prepare_repository(
                 root,
-                manifest_policy="validate",
+                manifest_policy="migration" if migration_project else "validate",
             )
         )
         git_result = self.git_service.push_all(
@@ -147,7 +179,7 @@ class AppManager:
         *,
         app_slug: str | None = None,
         app_id: str | None = None,
-        manifest_policy: Literal["sync", "validate"] = "sync",
+        manifest_policy: Literal["sync", "validate", "migration"] = "sync",
     ) -> tuple[SiteBinding, dict[str, Any], dict[str, Any], dict[str, Any]]:
         root.mkdir(parents=True, exist_ok=True)
         binding = self._ensure_binding(root, app_slug=app_slug, app_id=app_id)
@@ -170,7 +202,7 @@ class AppManager:
             git_config,
         )
         self.binding_store.save(root, binding)
-        if manifest_policy == "sync":
+        if manifest_policy in {"sync", "migration"}:
             self.manifest_store.sync_identity(root, binding)
         git_result = self.git_service.initialize(
             root,
@@ -179,6 +211,52 @@ class AppManager:
             credential_username=binding.git_username,
         )
         return binding, credential_result, git_result, runtime_env_result
+
+    def _is_migration_project(self, root: Path) -> bool:
+        marker = root / ".opscli" / "project.json"
+        if not marker.is_file():
+            return False
+        try:
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise AppProjectError("APP-MIGRATION-MARKER", f"迁移项目标识读取失败：{marker}") from exc
+        return isinstance(payload, dict) and payload.get("origin_type") == "migration_copy"
+
+    def _validate_migration_push(self, root: Path) -> None:
+        marker_path = root / ".opscli" / "project.json"
+        migration = _read_json_object(marker_path, "APP-MIGRATION-MARKER")
+        source_value = migration.get("source_root")
+        if not isinstance(source_value, str) or not source_value.strip():
+            raise AppProjectError("APP-MIGRATION-PATH", "迁移项目缺少有效的源目录标识。")
+        source_root = Path(source_value).expanduser().resolve()
+        target_root = root.resolve()
+        if source_root == target_root or source_root in target_root.parents or target_root in source_root.parents:
+            raise AppProjectError(
+                "APP-MIGRATION-PATH",
+                "迁移项目源目录和目标目录无效或互相包含。",
+            )
+        for relative in (
+            Path("copy-manifest.json"),
+            Path("startup-manifest.json"),
+        ):
+            if not (root / ".opscli" / "migration" / str(migration.get("migration_id")) / relative).is_file():
+                raise AppProjectError(
+                    "APP-MIGRATION-GATE",
+                    f"迁移项目缺少必要状态文件：{relative.name}",
+                    fix_hint="执行 opscli app migrate verify 或重新扫描迁移项目。",
+                )
+        tracked = self.git_service.runner.run(
+            root,
+            ["ls-files", "--", ".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "data"],
+            check=False,
+        )
+        if tracked.stdout:
+            raise AppProjectError(
+                "APP-MIGRATION-SENSITIVE",
+                "迁移项目存在默认禁止推送的本地敏感或运行时文件。",
+                fix_hint="将敏感文件从 Git 索引移除后再推送。",
+                detail={"tracked": tracked.stdout.splitlines()},
+            )
 
     def _ensure_runtime_environment(self, app_id: str) -> dict[str, Any]:
         expected_value = self._expected_mcp_rest_api_base_url()
@@ -415,6 +493,16 @@ class AppManager:
         }
 def _optional_text(value: Any) -> str | None:
     return None if value in (None, "") else str(value)
+
+
+def _read_json_object(path: Path, code: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise AppProjectError(code, f"迁移项目标识读取失败：{path}") from exc
+    if not isinstance(payload, dict):
+        raise AppProjectError(code, f"迁移项目标识必须是 JSON 对象：{path}")
+    return payload
 
 
 def _custom_env(payload: dict[str, Any]) -> dict[str, str]:

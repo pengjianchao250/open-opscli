@@ -94,20 +94,15 @@ AppHub SellerSprite 数据产品还必须在 `technical_contract.apphub_request`
 
 仅缺少 `origin/master` 不是阻塞条件。项目已完成 `opscli app create/init`、模板和身份检查通过，且本地处于尚无首次提交的 `master` 时，继续实现和验证业务代码。首次提交与推送属于源码交付阶段；未经项目规则要求的用户授权不得执行，也不得要求用户先提交或推送后才开始数据层开发。
 
-#### 迁移覆盖矩阵协作
+#### 源码复制迁移项目协作
 
-如果项目存在 `.opscli/migration/current.json`，说明当前数据工作属于迁移重构，必须读取当前任务的 `coverage-matrix.json`：
+如果项目存在 `.opscli/project.json` 且 `origin_type=migration_copy`，说明当前目录是源码复制迁移项目。迁移流程只负责复制源码、登记 AppHub、初始化 Git 和生成启动脚本，不自动进入模板数据层重构，也不要求 `coverage-matrix.json`、UI 门禁或迁移重构状态机。
 
-1. 只处理覆盖矩阵中 `dynamic=true` 的模块；一个动态模块对应一个明确的数据产品合同，不把多个语义不同的模块合并成模糊合同。
-2. 开始取数前确认 `opscli app migrate verify-ui --target "<project-directory>" --json` 已通过，当前迁移阶段至少是 `data_integration`；UI 门禁未通过时停止数据代码生成并交回 `$ops-app-build-spec`。
-3. 正式验证后把 `product_key`、合同状态、`implementation_status` 和证据回写到对应项的 `data_contract`。合同状态允许 `candidate`、`verified`、`degraded`、`blocked`、`deferred_attachment`；实现状态至少区分 `not_started`、`in_progress`、`implemented`、`verified`、`contract_verified_only`、`layout_only`、`blocked`。
-4. 合同样例、FakeGateway 测试和线上真实查询必须分别记录；只有正式合同验证成功或成功零行可以写为 `verified`，本地测试成功不能替代真实数据证据。
-5. `degraded`、`blocked` 和 `deferred_attachment` 必须写入证据与 `unblock_conditions` 数组，对应模块不能标记为 `已完成`。
-6. 合同 `verified` 只表示上游技术合同已经确认；后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI 证据全部完成后，`implementation_status` 才能写为 `verified`。仅完成合同验证时必须写为 `contract_verified_only`，只有布局时写为 `layout_only`。
-7. 一个产品验证成功后继续处理覆盖矩阵中全部未阻塞动态项，不得提前结束；每批数据合同更新后执行 `opscli app migrate export --target "<project-directory>" --json`，完成全部动态模块后执行 `opscli app migrate verify-data --target "<project-directory>" --json`。
+1. 迁移期间不得为了满足本 Skill 的模板前置条件改写迁移项目业务源码；迁移源目录始终只读。
+2. 只有用户明确提出迁移后的独立数据层开发任务时，才按当前目标项目实际合同重新评估；该任务属于迁移后的普通开发，不得回写为旧迁移重构状态。
+3. 需要数据层开发时，仍必须遵守本 Skill 的真实数据、凭证隔离、后端代理和合同验证规则；不得因为项目来源是迁移复制而跳过安全门禁。
 
-普通非迁移开发不存在 `.opscli/migration/current.json` 时，继续使用本 Skill 的常规 assessment、data-spec 和 `data-contracts.json` 工作流，不得为了使用迁移命令伪造迁移任务。
-
+普通非迁移开发不存在 `origin_type=migration_copy` 时，继续使用本 Skill 的常规 assessment、data-spec 和 `data-contracts.json` 工作流，不得为了使用迁移命令伪造迁移任务。
 ### 1. 读取项目证据
 
 读取项目规范、标准模板前后端入口、API 调用、环境变量、数据库、迁移和测试，确认 QueryGateway 基线完整且未被破坏。

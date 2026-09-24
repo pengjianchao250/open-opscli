@@ -101,6 +101,20 @@ def test_create_request_includes_explicit_contact() -> None:
     assert request.to_dict()["contact"] == "owner@example.com"
 
 
+def test_create_request_includes_migration_metadata() -> None:
+    request = AppCreateRequest.from_app_name(
+        "项目十部-v31",
+        slug="project-10-v31",
+        origin_type="migration_copy",
+        migration_id="migration-demo",
+    )
+
+    payload = request.to_dict()
+
+    assert payload["origin_type"] == "migration_copy"
+    assert payload["migration_id"] == "migration-demo"
+
+
 def test_client_fetches_latest_jwt_for_every_request() -> None:
     authorizations = []
 
