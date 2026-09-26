@@ -1345,7 +1345,7 @@ def hooks_migrate(
     apply: bool = typer.Option(False, "--apply", help="实际写入迁移结果；默认仅预览"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """预览或执行历史 hooks.json -> config.toml 迁移。"""
+    """预览或执行用户级 Codex Hook 单表示迁移。"""
     from opscli.skills.hooks.settings_injector import migrate_codex_hooks
 
     try:

@@ -5,8 +5,8 @@
 
 支持的 AI 工具：
   - Claude Code: ~/.claude/settings.json（hooks 嵌入在 settings 中）
-  - Codex CLI:   ~/.codex/config.toml（用户级 canonical TOML hooks 表）
-                   ~/.codex/hooks.json 仅用于迁移历史 opscli 条目，保留其他用户 Hook
+  - Codex CLI:   ~/.codex/hooks.json 或 ~/.codex/config.toml
+                  同一用户层复用已有有效表示，避免两者并存触发启动告警
 
 工作流程：
 1. 将 Hook 脚本从 opscli 包内部署到 ~/.opscli/hooks/report_skill_usage_hook.py
@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -41,10 +42,10 @@ _logger = logging.getLogger("opscli.skills")
 # Claude Code: hooks 嵌入在 settings.json 的 "hooks" 字段中
 _CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 
-# Codex CLI: 历史独立 hooks.json 文件（仅迁移来源）
+# Codex CLI: 用户级独立 hooks.json 文件；同层已有该表示时优先复用
 _CODEX_HOOKS_PATH = Path.home() / ".codex" / "hooks.json"
 
-# Codex CLI: config.toml 内联 hooks 表（Codex 实际执行 hooks 的配置）
+# Codex CLI: config.toml 内联 hooks 表；仅在没有有效 hooks.json Hook 时使用
 _CODEX_CONFIG_TOML_PATH = Path.home() / ".codex" / "config.toml"
 
 # ── Hook 脚本部署路径（固定位置，所有用户统一） ─────────────────────────
@@ -209,6 +210,59 @@ def _update_existing_hook_in_settings(settings: dict, settings_path: Path) -> No
 
 # ── Codex CLI 专用（独立 hooks.json 文件） ───────────────────────────────
 
+def _write_new_codex_hooks(hooks_path: Path) -> bool:
+    """hooks.json 不存在时，创建包含 opscli Hook 的新文件。"""
+    hooks_data = {"hooks": {"PostToolUse": [_build_hook_entry()]}}
+    try:
+        _atomic_write_text(hooks_path, json.dumps(hooks_data, indent=2, ensure_ascii=False) + "\n")
+        _logger.info("已创建 %s 并注入 Skill 使用上报 Hook", hooks_path)
+        return True
+    except Exception as exc:
+        _logger.warning("创建 %s 失败: %s", hooks_path, exc)
+        return False
+
+
+def _update_existing_hook_in_hooks_json(hooks_data: dict, hooks_path: Path) -> None:
+    """更新 hooks.json 中已有 opscli Hook 的命令为稳定 Runner。"""
+    new_cmd = _build_hook_command()
+    hooks = hooks_data.get("hooks", {})
+    post_use = hooks.get("PostToolUse", [])
+    for entry in post_use:
+        for hook in entry.get("hooks", []):
+            if _is_opscli_hook_command(hook.get("command")):
+                hook["command"] = new_cmd
+    try:
+        _atomic_write_text(hooks_path, json.dumps(hooks_data, indent=2, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        _logger.warning("更新 %s 中的 Hook 命令失败: %s", hooks_path, exc)
+
+
+def _inject_codex_hooks_json() -> bool:
+    """在已有 hooks.json 中复用同层表示并注入 PostToolUse Hook。"""
+    hooks_path = _CODEX_HOOKS_PATH
+    if not hooks_path.exists():
+        return _write_new_codex_hooks(hooks_path)
+
+    hooks_data = _read_json_file(hooks_path)
+    if hooks_data is None:
+        _logger.warning("读取 %s 失败，跳过 JSON Hook 注入", hooks_path)
+        return False
+
+    if _hook_already_exists(hooks_data):
+        _update_existing_hook_in_hooks_json(hooks_data, hooks_path)
+        return False
+
+    hooks = hooks_data.setdefault("hooks", {})
+    post_use = hooks.setdefault("PostToolUse", [])
+    post_use.append(_build_hook_entry())
+    try:
+        _atomic_write_text(hooks_path, json.dumps(hooks_data, indent=2, ensure_ascii=False) + "\n")
+        _logger.info("已注入 Skill 使用上报 Hook 到 %s", hooks_path)
+        return True
+    except Exception as exc:
+        _logger.warning("写入 %s 失败: %s", hooks_path, exc)
+        return False
+
 # ── Codex CLI config.toml 专用（TOML 内联 hooks 表） ─────────────────────
 
 def _build_codex_toml_block() -> str:
@@ -232,10 +286,7 @@ def _build_codex_toml_block() -> str:
 
 def _codex_toml_has_hook(raw: str) -> bool:
     """检查 config.toml 原始文本中是否已包含 opscli 的 Skill 上报 Hook。"""
-    return any(
-        _HOOK_COMMAND_MARKER in line and "command" in line
-        for line in raw.splitlines()
-    )
+    return _count_opscli_hooks_in_toml(raw) > 0
 
 
 def _codex_toml_update_hook(raw: str) -> str:
@@ -248,7 +299,7 @@ def _codex_toml_update_hook(raw: str) -> str:
     lines = raw.splitlines()
     updated = []
     for line in lines:
-        if _HOOK_COMMAND_MARKER in line and "command" in line:
+        if re.match(r"^\s*command\s*=", line) and _HOOK_COMMAND_MARKER in line:
             # 找到 command 行，替换为新的命令值，保留行首缩进
             indent = len(line) - len(line.lstrip())
             updated.append(" " * indent + f"command = {_toml_string(new_cmd)}")
@@ -302,6 +353,70 @@ def _inject_codex_config_toml() -> bool:
         return False
 
 
+def _count_opscli_hooks_in_toml(raw: str) -> int:
+    """统计 TOML 事件 Hook 中由 opscli 生成的命令处理器数量。"""
+    return sum(
+        bool(re.match(r"^\s*command\s*=", line)) and _HOOK_COMMAND_MARKER in line
+        for line in raw.splitlines()
+    )
+
+
+def _count_event_hooks_in_toml(raw: str) -> int:
+    """统计 TOML 中的事件数组表，排除 hooks.state 和嵌套处理器表。"""
+    event_header = re.compile(r"^\s*\[\[hooks\.[^.\]]+\]\]\s*(?:#.*)?$")
+    return sum(bool(event_header.match(line)) for line in raw.splitlines())
+
+
+def _count_hook_handlers_in_toml(raw: str) -> int:
+    """统计 TOML 事件组中的处理器数组表数量。"""
+    handler_header = re.compile(r"^\s*\[\[hooks\.[^.\]]+\.hooks\]\]\s*(?:#.*)?$")
+    return sum(bool(handler_header.match(line)) for line in raw.splitlines())
+
+
+def _remove_opscli_hooks_from_toml(raw: str) -> tuple[str, int]:
+    """移除 TOML 中 opscli 生成的完整事件组，保留其他配置。"""
+    lines = raw.splitlines(keepends=True)
+    event_header = re.compile(r"^\s*\[\[hooks\.[^.\]]+\]\]\s*(?:#.*)?$")
+    event_starts = [
+        index
+        for index, line in enumerate(lines)
+        if event_header.match(line.rstrip("\r\n"))
+    ]
+    if not event_starts:
+        return raw, 0
+
+    remove_ranges: list[tuple[int, int]] = []
+    removed = 0
+    for start in event_starts:
+        end = start + 1
+        while end < len(lines):
+            stripped = lines[end].strip()
+            # 嵌套处理器仍属于当前事件组；其他表头表示事件组结束。
+            if stripped.startswith("[") and not stripped.startswith("[[hooks."):
+                break
+            if event_header.match(lines[end].rstrip("\r\n")):
+                break
+            end += 1
+        block = lines[start:end]
+        if any(
+            re.match(r"^\s*command\s*=", line) and _HOOK_COMMAND_MARKER in line
+            for line in block
+        ):
+            remove_ranges.append((start, end))
+            removed += 1
+
+    if not remove_ranges:
+        return raw, 0
+
+    removed_indexes = {
+        index
+        for start, end in remove_ranges
+        for index in range(start, end)
+    }
+    updated = "".join(line for index, line in enumerate(lines) if index not in removed_indexes)
+    return updated, removed
+
+
 # ── 通用逻辑 ────────────────────────────────────────────────────────────
 
 def _hook_already_exists(data: dict) -> bool:
@@ -347,15 +462,16 @@ def ensure_skill_usage_hook() -> None:
     同时将 Hook 脚本部署到 ~/.opscli/hooks/report_skill_usage_hook.py。
 
     Codex CLI 注入策略：
-    - 只注入 config.toml（Codex 实际执行 hooks 的配置）
-    - 不再注入 hooks.json（与 config.toml 同时存在会导致同一 hook 重复触发）
+    - 同层已有有效 hooks.json Hook 时复用 JSON 表示，并清理 TOML 中的 opscli 条目
+    - 没有有效 hooks.json Hook 时才使用 config.toml 表示
+    - 不自动搬运用户自定义 Hook，避免改变其授权来源
     """
     # 先部署脚本文件（所有平台共用同一份脚本）
     _deploy_hook_script()
 
     # 逐个平台注入 Hook（文件存在时才处理，静默跳过未安装的工具）
     _inject_claude_hook()
-    _inject_codex_config_toml()
+    _ensure_codex_single_representation()
 
 
 def _codex_hook_paths() -> tuple[Path, Path]:
@@ -367,45 +483,6 @@ def _is_opscli_hook_command(command: object) -> bool:
     """只识别 opscli 自己生成的上报 Hook，不误删用户自定义命令。"""
     text = str(command or "")
     return "report_skill_usage_hook.py" in text or "report_skill_usage_hook" in text
-
-
-def _remove_opscli_hooks_from_json(data: dict) -> tuple[dict, int]:
-    """移除 hooks.json 中 opscli 生成的 handler，保留其他 Hook。"""
-    hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
-        return data, 0
-
-    removed = 0
-    new_hooks: dict = {}
-    for event, groups in hooks.items():
-        if not isinstance(groups, list):
-            new_hooks[event] = groups
-            continue
-        kept_groups = []
-        for group in groups:
-            if not isinstance(group, dict):
-                kept_groups.append(group)
-                continue
-            handlers = group.get("hooks")
-            if not isinstance(handlers, list):
-                kept_groups.append(group)
-                continue
-            kept_handlers = []
-            for handler in handlers:
-                if isinstance(handler, dict) and _is_opscli_hook_command(handler.get("command")):
-                    removed += 1
-                else:
-                    kept_handlers.append(handler)
-            if kept_handlers:
-                updated = dict(group)
-                updated["hooks"] = kept_handlers
-                kept_groups.append(updated)
-        if kept_groups:
-            new_hooks[event] = kept_groups
-
-    updated_data = dict(data)
-    updated_data["hooks"] = new_hooks
-    return updated_data, removed
 
 
 def _count_opscli_hooks_in_json(data: object) -> int:
@@ -435,6 +512,64 @@ def _read_json_file(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def _count_codex_json_hooks(data: object) -> int:
+    """统计 hooks.json 中所有有效 Hook 处理器数量。"""
+    if not isinstance(data, dict) or not isinstance(data.get("hooks"), dict):
+        return 0
+    count = 0
+    for groups in data["hooks"].values():
+        if not isinstance(groups, list):
+            continue
+        for group in groups:
+            if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+                count += sum(isinstance(handler, dict) for handler in group["hooks"])
+    return count
+
+
+def _ensure_codex_single_representation() -> None:
+    """按同层已有配置选择 JSON 或 TOML，并清理可安全识别的重复 opscli 条目。"""
+    hooks_path, config_path = _codex_hook_paths()
+    hooks_data = _read_json_file(hooks_path)
+    if hooks_path.exists() and hooks_data is None:
+        # 损坏的 JSON 不可安全改写，保留现场并继续维护可用的 TOML 配置。
+        _inject_codex_config_toml()
+        return
+
+    json_hook_count = _count_codex_json_hooks(hooks_data)
+    if json_hook_count > 0:
+        _inject_codex_hooks_json()
+        if not config_path.exists():
+            return
+        try:
+            config_raw = config_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _logger.warning("读取 %s 失败: %s", config_path, exc)
+            return
+
+        toml_opscli_count = _count_opscli_hooks_in_toml(config_raw)
+        toml_handler_count = _count_hook_handlers_in_toml(config_raw)
+        if toml_opscli_count == 0:
+            return
+        if toml_handler_count > toml_opscli_count:
+            _logger.warning(
+                "%s 与 %s 同时包含用户 Hook，无法安全自动合并；请运行 skills hooks status 处理",
+                hooks_path,
+                config_path,
+            )
+            return
+        updated_config, removed = _remove_opscli_hooks_from_toml(config_raw)
+        if removed and updated_config != config_raw:
+            try:
+                _atomic_write_text(config_path, updated_config)
+                _logger.info("已移除 %s 中重复的 opscli Hook", config_path)
+            except Exception as exc:
+                _logger.warning("清理 %s 中重复 Hook 失败: %s", config_path, exc)
+        return
+
+    # 没有有效 JSON Hook 时，config.toml 是唯一可用表示。
+    _inject_codex_config_toml()
+
+
 def codex_hook_status() -> dict:
     """读取用户级 Codex Hook 状态，不修改任何文件。"""
     hooks_path, config_path = _codex_hook_paths()
@@ -446,26 +581,29 @@ def codex_hook_status() -> dict:
         except OSError:
             config_raw = ""
     hooks_json_count = _count_opscli_hooks_in_json(hooks_data)
-    toml_count = sum(
-        _HOOK_COMMAND_MARKER in line and "command" in line
-        for line in config_raw.splitlines()
-    )
+    hooks_json_total = _count_codex_json_hooks(hooks_data)
+    toml_count = _count_opscli_hooks_in_toml(config_raw)
+    toml_total = _count_event_hooks_in_toml(config_raw)
+    toml_handlers = _count_hook_handlers_in_toml(config_raw)
     return {
-        "canonical": "config.toml",
+        "canonical": "hooks.json" if hooks_json_total else ("config.toml" if toml_total else None),
         "hooks_json": {
             "path": str(hooks_path),
             "exists": hooks_path.exists(),
+            "hook_handlers": hooks_json_total,
             "opscli_hooks": hooks_json_count,
             "valid_json": hooks_data is not None if hooks_path.exists() else True,
         },
         "config_toml": {
             "path": str(config_path),
             "exists": config_path.exists(),
+            "hook_groups": toml_total,
+            "hook_handlers": toml_handlers,
             "opscli_hooks": toml_count,
             "has_opscli_hook": toml_count > 0,
         },
-        "duplicate_representation": hooks_json_count > 0 and toml_count > 0,
-        "duplicate_opscli_hooks": hooks_json_count + max(toml_count, 1 if toml_count else 0),
+        "duplicate_representation": hooks_json_total > 0 and toml_total > 0,
+        "duplicate_opscli_hooks": hooks_json_count + toml_count,
         "runner_path": str(_HOOK_RUNNER_PATH),
         "script_path": str(_HOOK_SCRIPT_PATH),
     }
@@ -489,27 +627,49 @@ def _make_migration_backup(paths: list[Path]) -> Path:
 
 
 def migrate_codex_hooks(*, dry_run: bool = True) -> dict:
-    """将历史 hooks.json 中的 opscli Hook 迁移到 config.toml。"""
+    """将用户级 Codex Hook 收敛到当前层已经使用的单一表示。"""
     hooks_path, config_path = _codex_hook_paths()
     hooks_data = _read_json_file(hooks_path)
     if hooks_path.exists() and hooks_data is None:
         raise ValueError(f"无法解析 Codex hooks.json：{hooks_path}")
 
-    updated_hooks = hooks_data
-    removed = 0
-    if hooks_data is not None:
-        updated_hooks, removed = _remove_opscli_hooks_from_json(hooks_data)
-
     config_exists = config_path.exists()
     config_raw = config_path.read_text(encoding="utf-8") if config_exists else ""
-    has_toml_hook = _codex_toml_has_hook(config_raw)
+    json_hook_count = _count_codex_json_hooks(hooks_data)
+    toml_hook_count = _count_event_hooks_in_toml(config_raw)
+    toml_handler_count = _count_hook_handlers_in_toml(config_raw)
+    toml_opscli_count = _count_opscli_hooks_in_toml(config_raw)
+
+    updated_hooks = hooks_data
     migrated_config = config_raw
-    if removed and not has_toml_hook:
-        migrated_config = config_raw + _build_codex_toml_block()
-    elif has_toml_hook:
+    moved_to_hooks_json = 0
+    removed_from_config_toml = 0
+    canonical = "config.toml"
+    if json_hook_count > 0:
+        canonical = "hooks.json"
+        if toml_hook_count and toml_handler_count > toml_opscli_count:
+            raise ValueError(
+                "hooks.json 与 config.toml 都包含非 opscli Hook，无法安全自动合并；"
+                "请先选择要保留的用户级 Hook 表示"
+            )
+
+        # 复用已有 JSON 表示，只追加或刷新 opscli 自己的处理器。
+        updated_hooks = json.loads(json.dumps(hooks_data, ensure_ascii=False))
+        if not _hook_already_exists(updated_hooks):
+            hooks = updated_hooks.setdefault("hooks", {})
+            hooks.setdefault("PostToolUse", []).append(_build_hook_entry())
+            moved_to_hooks_json = 1
+        else:
+            new_cmd = _build_hook_command()
+            for entry in updated_hooks.get("hooks", {}).get("PostToolUse", []):
+                for hook in entry.get("hooks", []):
+                    if _is_opscli_hook_command(hook.get("command")):
+                        hook["command"] = new_cmd
+        migrated_config, removed_from_config_toml = _remove_opscli_hooks_from_toml(config_raw)
+    elif config_exists and _codex_toml_has_hook(config_raw):
         migrated_config = _codex_toml_update_hook(config_raw)
 
-    changed_hooks = hooks_data is not None and removed > 0
+    changed_hooks = updated_hooks != hooks_data
     changed_config = migrated_config != config_raw
     backup_dir: Path | None = None
     if not dry_run and (changed_hooks or changed_config):
@@ -523,7 +683,10 @@ def migrate_codex_hooks(*, dry_run: bool = True) -> dict:
 
     return {
         "dry_run": dry_run,
-        "removed_from_hooks_json": removed,
+        "canonical": canonical,
+        "removed_from_hooks_json": 0,
+        "moved_to_hooks_json": moved_to_hooks_json,
+        "removed_from_config_toml": removed_from_config_toml,
         "config_toml_changed": changed_config,
         "hooks_json_changed": changed_hooks,
         "backup_dir": str(backup_dir) if backup_dir else None,

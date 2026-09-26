@@ -11740,3 +11740,12 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
 **回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---
+
+## 2026-09-27 Skills - 修复 Codex 用户级 Hook 双表示告警
+
+**变更原因**：旧迁移只把 opscli Hook 写入 `~/.codex/config.toml`，同时保留 `~/.codex/hooks.json` 中的第三方 Hook；Codex 会把这两个文件视为同一用户层的两种有效表示，因此启动时仍提示 `prefer a single representation for this layer`。
+**改动点**：Codex Hook 安装改为复用用户层已有的有效表示：`hooks.json` 已有 Hook 时将 opscli 写入同一 JSON 并清理 TOML 中可安全识别的 opscli 事件组，否则继续使用 `config.toml`；状态检测改为统计所有 Hook 而非只统计 opscli；迁移与回滚适配新的单表示策略，没有现存 Hook 时迁移保持只读；并补充第三方 JSON Hook + opscli TOML Hook 的事故回归。
+**验证结果**：Hook 回归 `6 passed`；Hook/CLI/跳过安装/远程安装目录/元数据保护组合回归 `48 passed`；本地源码已 editable 安装为 `opscli v0.0.139`。真实用户配置已备份并收敛为 `hooks.json` 单表示，`opscli skills hooks status` 返回 `duplicate_representation=false`；CLI 首次迁移后完成一次 Trust，第二轮 CLI 与 Desktop 重启均无双表示告警或重复 Trust。Skills 管理集合仍有 3 个既有模板断言/缺失模板失败，与本次无关。
+**影响范围**：仅影响 Skill 使用上报 Hook 的用户级 Codex 配置选择、状态和迁移；不搬运或改写 Orca、Codex BI 等第三方 Hook 命令。
+**回滚方式**：回退 `settings_injector.py`、Hook 回归测试与说明文档；真实配置可使用迁移备份目录执行 `opscli skills hooks rollback <backup_dir>`。
+---
