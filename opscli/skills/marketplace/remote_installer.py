@@ -101,6 +101,7 @@ def install_remote_skill(
     runtime: str | None = None,
     force: bool = False,
     share_code: str | None = None,
+    install_hook: bool | None = None,
 ) -> dict:
     """安装远程广场技能的完整流程，返回统一 payload dict。
 
@@ -202,6 +203,15 @@ def install_remote_skill(
         batch_result.to_dict()["version"],
     )
     skipped = all(item.skipped for item in batch_result.installs)
+    should_install_hook = install_hook if install_hook is not None else not skills_dir
+    if should_install_hook and not skills_dir and not skipped:
+        # 与内置 Skill 安装保持一致；显式隔离目录不得写用户级 Hook。
+        try:
+            from opscli.skills.hooks.settings_injector import ensure_skill_usage_hook
+            ensure_skill_usage_hook()
+        except Exception as exc:
+            _logger.debug("Hook 注入失败（不影响远程安装）: %s", exc)
+
     if client is not None and not skipped:
         # 仅实际下载安装才回调；跳过和复用中央副本补链接均不增加广场安装次数。
         try:

@@ -133,6 +133,7 @@ class SkillsManager:
         cwd: Path | None = None,
         runtime: str | list[str] | None = None,
         force: bool = False,
+        install_hook: bool | None = None,
     ) -> SkillBatchInstallResult:
         """从内置模板安装 Skill。
 
@@ -151,6 +152,8 @@ class SkillsManager:
             cwd: 当前工作目录，用于自动检测安装目标
             runtime: 运行时类型（claude/openclaw/all 或逗号分隔）
             force: 是否覆盖已存在的安装/链接
+            install_hook: 是否同步确保全局 AI 工具 Hook；未指定时，显式
+                skills_dir 安装默认关闭，其他安装默认开启
         """
         template_dir = self.templates_dir / skill_name
         if not template_dir.exists():
@@ -175,8 +178,11 @@ class SkillsManager:
                 force=force,
             )
 
-        # 全部跳过时不重复修改用户配置。
-        if all(item.skipped for item in result.installs):
+        # 显式隔离安装不得写入用户级 Hook；默认全局安装保持兼容行为。
+        should_install_hook = install_hook if install_hook is not None else not skills_dir
+
+        # 全部跳过或明确关闭时不修改用户配置。
+        if not should_install_hook or all(item.skipped for item in result.installs):
             return result
 
         # 安装成功后，自动注入 PostToolUse Hook 到 ~/.claude/settings.json

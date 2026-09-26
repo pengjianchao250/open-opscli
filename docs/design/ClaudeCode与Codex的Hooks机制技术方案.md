@@ -19,7 +19,7 @@ Hooks 是 AI 编程工具（Claude Code、Codex CLI）提供的生命周期扩�
 
 | 特性 | Claude Code | Codex CLI |
 |------|-------------|-----------|
-| 配置文件 | `.claude/settings.json` | `.codex/hooks.json` 或 `.codex/config.toml` |
+| 配置文件 | `.claude/settings.json` | 用户级以 `.codex/config.toml` 为唯一 canonical 表示；项目级可单独使用 `.codex/hooks.json` |
 | Skill tool name | `Skill` | `mcp__<server>__<tool>` |
 | Hook 并发模型 | 串行执行 | **并发执行**（同事件多 hook 同时触发） |
 | 信任机制 | 无需显式信任 | 必须 `/hooks` 手动 Trust（或 `--dangerously-bypass-hook-trust`） |
@@ -96,16 +96,18 @@ sys.exit(0)
 
 ## 三、Codex CLI 配置方案
 
-### 3.1 配置文件位置（优先级从低到高）
+### 3.1 配置文件位置与表示边界
 
 ```
-~/.codex/hooks.json          # 全局用户级
-~/.codex/config.toml         # 全局用户级（TOML 格式）
+~/.codex/config.toml         # 全局用户级 canonical 表示（TOML 格式）
+~/.codex/hooks.json          # 历史兼容/迁移来源，不再注入新的 opscli Hook
 <repo>/.codex/hooks.json     # 项目级（推荐）
 <repo>/.codex/config.toml    # 项目级（TOML 格式）
 ```
 
-> 多个配置文件**同时生效**，高优先级不会覆盖低优先级，所有匹配的 hook 都会执行。
+> Codex 会加载同一配置层中的两种表示；如果用户级 `hooks.json` 和
+> `config.toml` 同时存在 Hook，所有匹配项都会执行并出现重复表示警告。opscli
+> 因此只维护用户级 `config.toml`，项目级配置仍由项目自行管理。
 
 ### 3.2 Matcher 说明
 
@@ -120,29 +122,7 @@ Codex 中 Skill 通过 MCP 服务暴露，tool name 格式为 `mcp__<server>__<t
 | Bash 命令 | `Bash` |
 | 文件编辑 | `Edit\|Write` 或 `apply_patch` |
 
-### 3.3 配置示例（`hooks.json` 格式）
-
-```json
-{
-  "hooks": {
-    "PostToolUse": [
-      {
-        "matcher": "mcp__skill-seeker__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/.codex/hooks/report_skill_usage.py\"",
-            "statusMessage": "上报 Skill 使用次数",
-            "timeout": 10
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### 3.4 配置示例（`config.toml` 格式）
+### 3.3 配置示例（用户级 canonical `config.toml`）
 
 ```toml
 [[hooks.PostToolUse]]
@@ -150,12 +130,26 @@ matcher = "mcp__skill-seeker__.*"
 
 [[hooks.PostToolUse.hooks]]
 type = "command"
-command = '/usr/bin/python3 "$(git rev-parse --show-toplevel)/.codex/hooks/report_skill_usage.py"'
+command = "/Users/mask/.opscli/hooks/report_skill_usage_hook"
 timeout = 10
-statusMessage = "上报 Skill 使用次数"
 ```
 
-### 3.5 Hook 脚本（`.codex/hooks/report_skill_usage.py`）
+### 3.4 历史迁移、幂等安装与稳定 Runner
+
+```bash
+opscli skills hooks status --pretty
+opscli skills hooks migrate --pretty          # 只预览
+opscli skills hooks migrate --apply --pretty  # 备份后迁移
+opscli skills hooks rollback <backup_dir> --pretty
+```
+
+`opscli skills install` 默认只在实际安装成功时确保 Hook；Skill 已存在并跳过、
+`--no-hook` 或显式 `--skills-dir` 时不写全局配置。Hook command 固定指向
+`~/.opscli/hooks/report_skill_usage_hook`，Runner 内部才保存当前 Python 解释器路径。
+因此升级 opscli 或切换虚拟环境不会改变 Codex Hook 定义；只有首次迁移表示或用户
+主动修改命令时，才可能需要重新 Trust。
+
+### 3.5 Hook 脚本（`~/.opscli/hooks/report_skill_usage_hook.py`）
 
 ```python
 #!/usr/bin/env python3

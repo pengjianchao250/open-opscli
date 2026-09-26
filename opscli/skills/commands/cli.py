@@ -52,6 +52,10 @@ app.add_typer(marketplace_app, name="marketplace")
 sync_exclude_app = typer.Typer(help="管理不同步到本地的技能排除名单")
 app.add_typer(sync_exclude_app, name="sync-exclude")
 
+# Codex / Claude Hook 生命周期管理
+hooks_app = typer.Typer(help="管理 Skill 使用上报 Hook、状态和历史迁移")
+app.add_typer(hooks_app, name="hooks")
+
 _console = Console()
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
@@ -673,6 +677,7 @@ def _install_sync_market(
     runtime: str | None,
     dry_run: bool,
     pretty: bool,
+    install_hook: bool = True,
 ) -> None:
     """--sync-market 模式：拉取市场同步队列，补装缺失 + 升级旧版。"""
     from packaging.version import InvalidVersion, Version
@@ -749,6 +754,7 @@ def _install_sync_market(
                 skills_dir=skills_dir,
                 runtime=runtime,
                 force=True,
+                install_hook=install_hook and not skills_dir,
             )
             if payload.get("success"):
                 if is_upgrade:
@@ -775,6 +781,7 @@ def _install_interactive(
     yes: bool,
     pretty: bool,
     verbose: bool = False,
+    install_hook: bool = True,
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
@@ -820,6 +827,7 @@ def _install_interactive(
                 skill_name,
                 link_targets=target_pairs,
                 force=force,
+                install_hook=install_hook and not bool(skills_dir),
             )
             all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
             all_installs.extend(result.installs)
@@ -1299,6 +1307,73 @@ def list_excludes(
         border_style="yellow",
     ))
     _console.print(f"[dim]共 {len(items)} 个技能被排除在自动同步之外[/dim]")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# hooks 子命令组
+# ══════════════════════════════════════════════════════════════════════════════
+
+@hooks_app.command("status")
+def hooks_status(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """查看用户级 Codex Hook 的 canonical 配置、重复项和 Runner 路径。"""
+    from opscli.skills.hooks.settings_injector import codex_hook_status
+
+    _emit({"success": True, "command": "skills hooks status", "data": codex_hook_status(), "error": None}, pretty)
+
+
+@hooks_app.command("install")
+def hooks_install(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """安装或修复 opscli 的 Claude/Codex 使用上报 Hook。"""
+    from opscli.skills.hooks.settings_injector import codex_hook_status, ensure_skill_usage_hook
+
+    try:
+        ensure_skill_usage_hook()
+        payload = {"success": True, "command": "skills hooks install", "data": codex_hook_status(), "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks install", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
+
+
+@hooks_app.command("migrate")
+def hooks_migrate(
+    apply: bool = typer.Option(False, "--apply", help="实际写入迁移结果；默认仅预览"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """预览或执行历史 hooks.json -> config.toml 迁移。"""
+    from opscli.skills.hooks.settings_injector import migrate_codex_hooks
+
+    try:
+        data = migrate_codex_hooks(dry_run=not apply)
+        payload = {"success": True, "command": "skills hooks migrate", "data": data, "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks migrate", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
+
+
+@hooks_app.command("rollback")
+def hooks_rollback(
+    backup_dir: str = typer.Argument(..., help="skills hooks migrate 生成的备份目录"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """从指定迁移备份恢复用户级 Codex Hook 配置。"""
+    from opscli.skills.hooks.settings_injector import rollback_codex_hooks
+
+    try:
+        data = rollback_codex_hooks(backup_dir)
+        payload = {"success": True, "command": "skills hooks rollback", "data": data, "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks rollback", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1818,6 +1893,7 @@ def install_skill(
     dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
     share_code: str | None = typer.Option(None, "--share-code", help="分享码，绕过 personal/department 权限限制安装广场技能"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="输出每个安装目标的逐条日志（默认仅输出汇总）"),
+    install_hook: bool = typer.Option(True, "--hook/--no-hook", help="是否确保全局 Skill 使用上报 Hook；--skills-dir 隔离安装始终不写全局 Hook"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
@@ -1868,6 +1944,7 @@ def install_skill(
             runtime=runtime,
             dry_run=dry_run,
             pretty=pretty,
+            install_hook=install_hook,
         )
         return
 
@@ -1888,6 +1965,7 @@ def install_skill(
                 yes=yes,
                 pretty=pretty,
                 verbose=verbose,
+                install_hook=install_hook,
             )
             return
 
@@ -1900,6 +1978,7 @@ def install_skill(
                 runtime=runtime,
                 force=force,
                 share_code=share_code,
+                install_hook=install_hook and not bool(skills_dir),
             )
             _emit(payload, pretty)
             if not payload.get("success"):
@@ -1917,6 +1996,7 @@ def install_skill(
             skills_dir=skills_dir,
             runtime=resolved_runtime,
             force=force,
+            install_hook=install_hook and not bool(skills_dir),
         )
         # CLI 层统一注入铁律：仅安装 ops-feedback 时触发
         if name == "ops-feedback" and not skills_dir:
