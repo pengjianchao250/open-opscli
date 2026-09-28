@@ -2,7 +2,7 @@
 
 ## 1. 测试先行
 
-- [x] 1.1 新增 `skills install ops-amazon-rufus` 成功输出登录提示测试。
+- [x] 1.1 新增 `skills install ops-amazon-rufus-or-alexa` 成功输出登录提示测试。
 - [x] 1.2 新增普通 Skill 安装不包含 Rufus 登录提示测试。
 - [x] 1.3 新增交互安装结果包含 Rufus 登录提示测试。
 - [x] 1.4 新增未捕获 `/rufus/cl/streaming` 时提示 `opscli amazon-rufus init <country>` 的测试。

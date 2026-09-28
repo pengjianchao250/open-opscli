@@ -226,7 +226,7 @@ ai_optimize: bool = True
 - 报告顶部增加结果状态。
 - 每题显示原问题、最终问题、尝试次数、失败原因、AI 改写原因。
 
-### `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
+### `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
 
 改动点：
 

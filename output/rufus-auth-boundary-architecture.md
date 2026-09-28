@@ -116,14 +116,14 @@ def _rufus_manager_for_current_request() -> RufusManager:
 - `RufusTransportClient` 仍会透传 `X-MCP-API-Key`，用于后端审计或多用户校验。
 - 如果隔离凭证目录没有有效 OPS session/JWT，MCP 返回 OPS/MCP 鉴权错误，Skill 先走 `auth_mcp_login`。
 
-### `opscli/skills/templates/ops-amazon-rufus/`
+### `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
 
 需要同步：
 
 - `SKILL.md`
 - `README.md`
 - `references/rufus-mcp-workflow.md`
-- `.agents/skills/ops-amazon-rufus/` 对应副本
+- `.agents/skills/ops-amazon-rufus-or-alexa/` 对应副本
 
 新增执行限制：
 

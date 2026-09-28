@@ -28,7 +28,7 @@ Rufus MCP 当前已经 MCP-only，但 `opscli/mcp/tools/amazon_rufus.py` 仍承�
 
 ### Agent 用户
 
-通过 `ops-amazon-rufus` Skill 运行 Rufus 问答，期望：
+通过 `ops-amazon-rufus-or-alexa` Skill 运行 Rufus 问答，期望：
 
 - 自动检查 MCP/OPS 登录。
 - 必要时通过 MCP Tool 打开 Amazon 登录采集。

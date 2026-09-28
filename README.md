@@ -984,7 +984,35 @@ opscli skills install --sync-market --pretty
 
 # 预览同步计划，不实际执行
 opscli skills install --sync-market --dry-run --pretty
+
+# 控制全局使用上报 Hook（默认开启；隔离目录始终不写全局配置）
+opscli skills install ops-auth --no-hook
+opscli skills install ops-auth --hook
 ```
+
+### `opscli skills hooks`
+
+Codex 用户级 Hook 在同一层只使用一种表示。若 `~/.codex/hooks.json` 已包含有效
+Hook，opscli 会复用该 JSON 文件；否则使用 `~/.codex/config.toml`。这可避免两个文件
+同时包含 Hook 时出现“loading hooks from both ... prefer a single representation”警告，
+并且不会搬运或改写其他工具已有的 Hook 命令。
+
+```bash
+# 只读检查：重复表示、Hook 数量和稳定 Runner 路径
+opscli skills hooks status --pretty
+
+# 默认只预览；确认后执行，自动在 ~/.codex/opscli-hook-backups/ 创建备份
+opscli skills hooks migrate --pretty
+opscli skills hooks migrate --apply --pretty
+
+# 从迁移命令返回的 backup_dir 回滚
+opscli skills hooks rollback ~/.codex/opscli-hook-backups/<timestamp> --pretty
+```
+
+Hook 配置中的命令固定为 `~/.opscli/hooks/report_skill_usage_hook`。升级 Python
+环境或重新安装 opscli 只刷新 Runner 内容，不改变 Codex Hook 命令；已有
+`hooks.json` 的环境也继续沿用该来源，因此不会仅因 opscli 升级或解释器路径变化而
+重新授权。首次安装新的 Hook 仍需按 Codex 正常流程 Trust 一次。
 
 **安装目标的优先级**（三选一，从高到低，对内置模板与广场远程安装同样适用）：
 

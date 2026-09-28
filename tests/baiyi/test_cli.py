@@ -38,8 +38,10 @@ def test_root_cli_registers_baiyi_namespace() -> None:
     """顶层命令必须注册佰易业务数据命名空间。"""
     root_command = get_command(root_app)
 
-    assert "baiyi" in root_command.commands
-    assert "polaris" not in root_command.commands
+    # 懒加载：顶级 commands 不再急切持有子命令组，以命令名单为准
+    assert "baiyi" in root_command.list_commands(None)
+    assert root_command.get_command(None, "baiyi") is not None
+    assert "polaris" not in root_command.list_commands(None)
 
 
 def test_baiyi_help_exposes_product_info_command() -> None:

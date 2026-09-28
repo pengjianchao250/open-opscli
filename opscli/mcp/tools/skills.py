@@ -54,6 +54,7 @@ async def skills_install(
     runtime: str | None = None,
     force: bool = False,
     version: str | None = None,
+    install_hook: bool | None = None,
 ) -> dict:
     """安装 Skill 到本地目录。
 
@@ -68,6 +69,7 @@ async def skills_install(
         runtime:    可选，只安装到指定运行时；与 skills_dir 同传时被忽略
         force:      是否强制覆盖已有安装（默认 False）
         version:    可选，指定安装版本（仅远程安装有效）
+        install_hook: 可选，是否确保全局 Skill 使用上报 Hook；隔离目录始终不写全局配置
     """
     if "@" in name:
         from opscli.skills.marketplace.remote_installer import install_remote_skill
@@ -78,6 +80,7 @@ async def skills_install(
                 skills_dir=skills_dir,
                 runtime=runtime,
                 force=force,
+                install_hook=install_hook,
             )
         except Exception as exc:
             return _err(exc)
@@ -90,6 +93,7 @@ async def skills_install(
             skills_dir=skills_dir,
             runtime=runtime,
             force=force,
+            install_hook=install_hook,
         )
         return _ok(result.to_dict())
     except Exception as exc:

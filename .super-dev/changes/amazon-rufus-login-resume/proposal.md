@@ -2,7 +2,7 @@
 
 ## 背景
 
-`ops-amazon-rufus` 依赖对应国家站点的 Amazon 登录态。当前 `amazon-rufus get` 在已捕获 Rufus seed request 但 replay 没有返回可用答案时，可能继续生成空答案报告；如果命令使用 `--new-chrome`，本次新开的 Chrome 默认会在命令结束时关闭，用户无法在同一窗口完成登录后继续。
+`ops-amazon-rufus-or-alexa` 依赖对应国家站点的 Amazon 登录态。当前 `amazon-rufus get` 在已捕获 Rufus seed request 但 replay 没有返回可用答案时，可能继续生成空答案报告；如果命令使用 `--new-chrome`，本次新开的 Chrome 默认会在命令结束时关闭，用户无法在同一窗口完成登录后继续。
 
 ## 目标
 
@@ -59,6 +59,6 @@ if new_chrome and not keep_chrome_open and not keep_open_after_capture:
 1. `RufusManager.get()` 在 replay 返回空答案时抛出 `RUFUS_LOGIN_REQUIRED`。
 2. `BrowserAttachService.capture_seed_request()` 在 `on_captured` 返回 `True` 时不关闭新 Chrome。
 3. CLI 失败输出包含 `RUFUS_LOGIN_REQUIRED` 和“如果登录完成，请继续告诉我，我会继续执行”。
-4. 两份 `ops-amazon-rufus/SKILL.md` 包含登录中断续跑规则。
+4. 两份 `ops-amazon-rufus-or-alexa/SKILL.md` 包含登录中断续跑规则。
 5. `tests/amazon_rufus/test_core.py` 定向测试通过。
 

@@ -2,7 +2,7 @@
 
 ## 背景
 
-`ops-amazon-rufus` Skill 已切换为 MCP-first 使用方式，但当前文档和安装引导仍把部分前置流程交给 `opscli amazon-rufus` CLI，包括授权偏好、登录态检查、登录采集、登出恢复和拒绝远程授权后的 `get-backend` fallback。
+`ops-amazon-rufus-or-alexa` Skill 已切换为 MCP-first 使用方式，但当前文档和安装引导仍把部分前置流程交给 `opscli amazon-rufus` CLI，包括授权偏好、登录态检查、登录采集、登出恢复和拒绝远程授权后的 `get-backend` fallback。
 
 用户已明确要求：Skill 使用 MCP 后不再使用 opscli CLI 处理，运行期全程走 MCP 提供的工具。
 

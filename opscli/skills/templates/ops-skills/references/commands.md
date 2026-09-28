@@ -77,6 +77,10 @@ opscli skills status --skills-dir ~/.claude/skills/
 - **广场远程**：传 `username@skill_name` 格式
 - **TUI 模式**：不传参数，进入交互批量安装
 
+已有安装默认跳过并返回 `skipped: true`，不因版本不同自动覆盖；缺失的运行时链接会补齐。
+需要覆盖时显式加 `--force`；`--yes` 仅跳过交互确认。
+远程 Skill 补链接前会核对中央副本的发布者；来源缺失或不同会提示使用 `--force` 重新下载，避免复用同名的其他技能。
+
 **远程安装流程：**
 1. 从广场获取元数据与下载地址
 2. 下载 zip，解压到 `~/.opscli/skills/<name>/`（中央存储）

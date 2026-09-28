@@ -2,13 +2,13 @@
 
 ## 任务 1：更新项目级 Skill 文档
 
-- [x] 修改 `.agents/skills/ops-amazon-rufus/SKILL.md`
+- [x] 修改 `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`
 - [x] 增加 `--question` 单题模式说明
 - [x] 增加题库模式与单题模式选择规则
 - [x] 增加拒答检测、180 字内改写、最多 3 次重试说明
 - [x] 增加拒答后改写问题必须使用中文的规则
 - [x] 保留 UTF-8、登录、报告路径和敏感字段隐藏要求
-- [x] 同步 `.agents/skills/ops-amazon-rufus/references/question-templates.md`
+- [x] 同步 `.agents/skills/ops-amazon-rufus-or-alexa/references/question-templates.md`
 
 ## 任务 2：实现 CLI 单题模式
 

@@ -16,8 +16,8 @@
 
 ## 3. Skill 文档
 
-- [x] 3.1 更新 `opscli/skills/templates/ops-amazon-rufus/SKILL.md` 的登录中断续跑规则。
-- [x] 3.2 同步更新 `.agents/skills/ops-amazon-rufus/SKILL.md`。
+- [x] 3.1 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md` 的登录中断续跑规则。
+- [x] 3.2 同步更新 `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`。
 
 ## 4. 验证与记录
 

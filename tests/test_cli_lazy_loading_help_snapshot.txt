@@ -1,0 +1,39 @@
+                                                                                
+ Usage: python -m opscli [OPTIONS] COMMAND [ARGS]...                            
+                                                                                
+ Aukeys 运营 CLI 工具集                                                         
+                                                                                
+╭─ Options ────────────────────────────────────────────────────────────────────╮
+│ --version             -V        显示版本信息                                 │
+│ --install-completion            Install completion for the current shell.    │
+│ --show-completion               Show completion for the current shell, to    │
+│                                 copy it or customize the installation.       │
+│ --help                          Show this message and exit.                  │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Commands ───────────────────────────────────────────────────────────────────╮
+│ self-update        一键升级 opscli 并自动同步 Skills（等效于 pip 升级 +      │
+│                    skills install/upgrade）。                                │
+│ auth               认证授权管理                                              │
+│ app                管理 AppHub 应用、Git 仓库、本地开发预览和源码推送        │
+│ api-credentials    统一管理 SerpAPI、Canopy、scrape.do、Keepa 和西柚的多账 … │
+│                    API Key。                                                 │
+│ amazon             Amazon 商品抓取与 ops 提交通道                            │
+│ amazon-rufus       Amazon Rufus 自动问答采集                                 │
+│ asin-data          ASIN 批量取数服务                                         │
+│ calculator         新品计算器                                                │
+│ asin-review        复盘 ASIN 数据查询                                        │
+│ canopy             Canopy 远端 MCP 正式命令面。                              │
+│ collector-monitor  只读查看 Collector Monitor 状态。                         │
+│ query              数据查询入口，统一转发远端查询请求                        │
+│ scrape-do          Scrape.do Amazon Scraper 远端 MCP 正式命令面。            │
+│ feedback           用户反馈提交与查询                                        │
+│ notify             发送企业微信等内部通知                                    │
+│ feedtask           通用工单管理                                              │
+│ google-trends      Google Trends 正式场景与本地运维命令。                    │
+│ keepa              Keepa 远端 MCP 正式命令面。                               │
+│ seller-sprite      卖家精灵远端 MCP 正式命令面。                             │
+│ skills             Skill 生命周期管理                                        │
+│ mcp                MCP Server 管理                                           │
+│ baiyi              佰易产品数据查询                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+

@@ -4,10 +4,8 @@
 `opscli skills upgrade` 从远端拉取的真实元数据（近 600KB、数千字段）
 换成内置模板里的占位符（CSV 仅表头、JSON 空集合）。
 
-触发面比 `--force` 更宽：模板版本与 upgrade 写入的数据版本属于两套版本空间、
-永远不相等，`_template_version_differs()` 每次都为真，因此普通 install 同样会
-走到 rmtree。次生后果是模板 VERSION.json 的 data_state=placeholder 覆盖过去后，
-规划器的 _data_state_ready() 判定未就绪，整个 Skill 直接不可用。
+普通安装现在直接跳过已有目录；显式 `--force` 覆盖时仍须保留真实元数据，
+避免模板占位数据造成规划器不可用。
 """
 
 from __future__ import annotations
@@ -142,7 +140,7 @@ def test_central_install_preserves_real_metadata(manager: SkillsManager, tmp_pat
     central = tmp_path / "central" / "ops-dataset-query"
     _make_upgraded_install(central)
 
-    result = manager.install("ops-dataset-query", link_targets=[], cwd=tmp_path)
+    result = manager.install("ops-dataset-query", link_targets=[], cwd=tmp_path, force=True)
 
     assert (central / "data" / "datasets.csv").read_text(encoding="utf-8") == _REAL_DATASETS_CSV
     assert "新版规划器" in (central / "scripts" / "query_plan.py").read_text(encoding="utf-8")

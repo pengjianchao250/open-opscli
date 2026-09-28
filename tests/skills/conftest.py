@@ -6,6 +6,17 @@ sys.path 注入与 Skill 版 enum_cache 缓存目录重定向（autouse fixture�
 并被删除。枚举缓存的隔离改由内核用例通过 `base_dir=tmp_path` 参数完成
 （见 tests/query/planner/test_enum_cache.py），符合铁律8。
 
-本文件保留为空配置，供 pytest 识别目录级 rootdir 语义；后续如需目录级 fixture
-再在此追加。
+安装测试隔离用户 Hook 写入，避免验证安装逻辑时修改真实用户配置。
 """
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_install_hook(monkeypatch):
+    """安装流程测试只记录 Hook 调用，不修改用户配置。"""
+    from unittest.mock import Mock
+
+    hook = Mock()
+    monkeypatch.setattr("opscli.skills.hooks.settings_injector.ensure_skill_usage_hook", hook)
+    return hook

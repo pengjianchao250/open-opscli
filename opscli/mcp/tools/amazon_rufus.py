@@ -159,7 +159,7 @@ async def amazon_rufus_get(
 
     Amazon 商品页购物助手 Rufus 已改名为 Alexa，兼容 Alexa/alexa、Rufus/rufus 请求。
     用户要求 Alexa/Rufus 商品页问答、ASIN 或 Listing 诊断时，先使用
-    ops-amazon-rufus Skill 完成授权、登录态检查和问题编排，再调用本工具。
+    ops-amazon-rufus-or-alexa Skill 完成授权、登录态检查和问题编排，再调用本工具。
     MCP 工具名继续使用 amazon_rufus_*，CLI 继续使用 opscli amazon-rufus。
     本工具不用于 Alexa/Echo 智能音箱或智能家居控制。
 

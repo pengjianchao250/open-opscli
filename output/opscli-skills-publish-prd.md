@@ -66,7 +66,7 @@ CLI 拉取服务端安装队列，补装缺失技能并升级旧版。
 - 广场浏览、搜索、详情、版本、评分。
 - 远程安装和分享码安装。
 - 市场安装记录同步和同步排除名单。
-- `ops-dataset-query`、`ops-amazon-rufus` 的远端数据升级。
+- `ops-dataset-query`、`ops-amazon-rufus-or-alexa` 的远端数据升级。
 
 不属于当前发布能力：
 

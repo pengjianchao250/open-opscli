@@ -10,7 +10,7 @@
 2. 在 `opscli amazon-rufus` CLI 下增加只读/写 consent 的正式入口。
 3. 在 `opscli amazon-rufus` CLI 下增加脱敏登录态检查入口，供 Agent 在发起 Rufus 获取前判断是否需要登录采集。
 4. 在 `opscli amazon-rufus` CLI 下增加复用 MCP/headless 获取逻辑的正式获取入口。
-5. 更新 `ops-amazon-rufus` Skill 文档和 reference，使 Agent 先读取 consent，再检查本地登录态，最后选择 MCP 获取或 CLI 获取。
+5. 更新 `ops-amazon-rufus-or-alexa` Skill 文档和 reference，使 Agent 先读取 consent，再检查本地登录态，最后选择 MCP 获取或 CLI 获取。
 6. 不改 `amazon_rufus_get` MCP 入参，避免把 CDP、cookie、storage_state 等敏感或本地浏览器参数重新暴露给 MCP。
 
 ## 数据模型
@@ -261,8 +261,8 @@ opscli amazon-rufus watch-login <ASIN> <COUNTRY> --launch-if-needed --close-brow
    - 登录恢复后的报告路径必须使用重试返回的最新 `report_path`。
 
 5. 安装与子代理测试：
-   - 执行 `opscli skills install ops-amazon-rufus --skills-dir ".agents/skills" --force`。
-   - 启动子代理运行指定 `$ops-amazon-rufus` 提示词。
+   - 执行 `opscli skills install ops-amazon-rufus-or-alexa --skills-dir ".agents/skills" --force`。
+   - 启动子代理运行指定 `$ops-amazon-rufus-or-alexa` 提示词。
    - 覆盖至少两类配置：`use_remote_authorization=true` 和 `false`。
 
 ## 变更记录

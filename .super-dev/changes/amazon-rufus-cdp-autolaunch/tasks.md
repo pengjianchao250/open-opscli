@@ -7,7 +7,7 @@
 - [x] 补充 MCP `launch_if_needed` / `chrome_path` 透传 RED 测试。
 - [x] 实现 CDP 探测、Chrome 路径发现和 Python 启动逻辑。
 - [x] 将 Manager、CLI、MCP 参数接入真实调用链。
-- [x] 更新 `ops-amazon-rufus` Skill/README 的 CDP 处理规则。
+- [x] 更新 `ops-amazon-rufus-or-alexa` Skill/README 的 CDP 处理规则。
 - [x] 追加 `docs/change-log-pending.md` 变更记录。
 - [x] 运行定向测试和 Rufus 相关回归测试。
 

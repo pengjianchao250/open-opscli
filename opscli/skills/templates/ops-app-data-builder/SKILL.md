@@ -64,6 +64,11 @@ metadata:
 - Keepa：使用 `$ops-keepa` 验证正式场景、参数、返回结构和少量样本。
 - SellerSprite：使用 `$ops-seller-sprite` 验证开发期场景、参数、返回结构和少量样本。
 
+当来源是 SellerSprite 且目标是新建或改造 AppHub 数据产品时，必须额外加载
+`$ops-seller-sprite` 模板目录下的 `APPHUB_SCENARIO_CONTRACTS.json`。先按机器合同识别
+`scenario`、`endpoint_family`、`site`、`period`、`params` 和 `export_format`，再调用
+`seller_sprite_scenarios` 确认线上场景仍然暴露；不得用模型记忆、相似字段、旧站点或旧看板实现替代合同。
+
 依赖 Skill 负责认证、元数据、字段校验和真实查询。本 Skill 不凭记忆选择数据集、字段、聚合、公式、筛选枚举或第三方场景参数，也不复制其内部查询实现。静态字段资料、历史授权目录和应用清单只能形成 `candidate`，不能替代当前在线元数据或把合同标记为 `verified`。
 
 对业务范围已经足以构造查询的真实数据产品，必须实际发起正式合同验证；不得在没有查询尝试的情况下直接生成最终 `blocked` 页面或固定返回 `blocked` 的业务 API。临时服务异常、超时和上游不可用应记录为 `degraded`，并继续完成不依赖该来源的其他模块。查询成功但零行仍是 `verified`，页面按“暂无数据”处理。
@@ -71,6 +76,8 @@ metadata:
 只获取足以验证合同的少量样本。真实结果、导出文件和凭证不得提交到站点源码。
 
 Keepa 和 SellerSprite 的在线验证必须额外固化精确 `response_shape`、业务角色字段映射和脱敏 `shape_evidence`。包含已验证第三方产品时，`docs/ops-app/data-contracts.json` 使用 `schema_version: "1.1"`；OPS-only 合同继续兼容 1.0。验证处于 `degraded` 时只允许生成传输、任务、缓存和错误恢复基础设施，不得根据旧项目、历史样本或相似字段生成猜测的生产投影器。
+
+AppHub SellerSprite 数据产品还必须在 `technical_contract.apphub_request` 中保留经过机器合同校验的实际请求。页面需要结构化数据时，实际请求必须显式传递 `export_format=json`；缺少场景、线上场景未暴露、参数缺失或类型/数量错误、endpoint family 混用、结果路径缺失时，停止该数据产品的正式数据层生成。
 
 ## 工作流
 
@@ -87,20 +94,15 @@ Keepa 和 SellerSprite 的在线验证必须额外固化精确 `response_shape`�
 
 仅缺少 `origin/master` 不是阻塞条件。项目已完成 `opscli app create/init`、模板和身份检查通过，且本地处于尚无首次提交的 `master` 时，继续实现和验证业务代码。首次提交与推送属于源码交付阶段；未经项目规则要求的用户授权不得执行，也不得要求用户先提交或推送后才开始数据层开发。
 
-#### 迁移覆盖矩阵协作
+#### 源码复制迁移项目协作
 
-如果项目存在 `.opscli/migration/current.json`，说明当前数据工作属于迁移重构，必须读取当前任务的 `coverage-matrix.json`：
+如果项目存在 `.opscli/project.json` 且 `origin_type=migration_copy`，说明当前目录是源码复制迁移项目。迁移流程只负责复制源码、登记 AppHub、初始化 Git 和生成启动脚本，不自动进入模板数据层重构，也不要求 `coverage-matrix.json`、UI 门禁或迁移重构状态机。
 
-1. 只处理覆盖矩阵中 `dynamic=true` 的模块；一个动态模块对应一个明确的数据产品合同，不把多个语义不同的模块合并成模糊合同。
-2. 开始取数前确认 `opscli app migrate verify-ui --target "<project-directory>" --json` 已通过，当前迁移阶段至少是 `data_integration`；UI 门禁未通过时停止数据代码生成并交回 `$ops-app-build-spec`。
-3. 正式验证后把 `product_key`、合同状态、`implementation_status` 和证据回写到对应项的 `data_contract`。合同状态允许 `candidate`、`verified`、`degraded`、`blocked`、`deferred_attachment`；实现状态至少区分 `not_started`、`in_progress`、`implemented`、`verified`、`contract_verified_only`、`layout_only`、`blocked`。
-4. 合同样例、FakeGateway 测试和线上真实查询必须分别记录；只有正式合同验证成功或成功零行可以写为 `verified`，本地测试成功不能替代真实数据证据。
-5. `degraded`、`blocked` 和 `deferred_attachment` 必须写入证据与 `unblock_conditions` 数组，对应模块不能标记为 `已完成`。
-6. 合同 `verified` 只表示上游技术合同已经确认；后端 API、service、Pydantic Schema、前端消费者、测试和 OpenAPI 证据全部完成后，`implementation_status` 才能写为 `verified`。仅完成合同验证时必须写为 `contract_verified_only`，只有布局时写为 `layout_only`。
-7. 一个产品验证成功后继续处理覆盖矩阵中全部未阻塞动态项，不得提前结束；每批数据合同更新后执行 `opscli app migrate export --target "<project-directory>" --json`，完成全部动态模块后执行 `opscli app migrate verify-data --target "<project-directory>" --json`。
+1. 迁移期间不得为了满足本 Skill 的模板前置条件改写迁移项目业务源码；迁移源目录始终只读。
+2. 只有用户明确提出迁移后的独立数据层开发任务时，才按当前目标项目实际合同重新评估；该任务属于迁移后的普通开发，不得回写为旧迁移重构状态。
+3. 需要数据层开发时，仍必须遵守本 Skill 的真实数据、凭证隔离、后端代理和合同验证规则；不得因为项目来源是迁移复制而跳过安全门禁。
 
-普通非迁移开发不存在 `.opscli/migration/current.json` 时，继续使用本 Skill 的常规 assessment、data-spec 和 `data-contracts.json` 工作流，不得为了使用迁移命令伪造迁移任务。
-
+普通非迁移开发不存在 `origin_type=migration_copy` 时，继续使用本 Skill 的常规 assessment、data-spec 和 `data-contracts.json` 工作流，不得为了使用迁移命令伪造迁移任务。
 ### 1. 读取项目证据
 
 读取项目规范、标准模板前后端入口、API 调用、环境变量、数据库、迁移和测试，确认 QueryGateway 基线完整且未被破坏。
@@ -270,6 +272,8 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - 项目缺少标准模板 QueryGateway 文件或签名不完整：停止数据层生成并提示重新执行标准模板初始化，不兼容旧适配器或旧数据层项目。
 - Keepa 需求依赖 `/api/v1/keepa/run` 未声明的运行时端点或返回字段：不得猜测路径，标记待平台补齐。
 - SellerSprite 场景或参数未通过正式场景合同验证：停止该数据产品，不凭 SDK、CLI 或旧项目实现猜测 REST 合同。
+- AppHub SellerSprite 场景未通过 `APPHUB_SCENARIO_CONTRACTS.json` 和 `seller_sprite_scenarios` 双重校验：停止正式数据层生成，并把原因记录在 data-spec 与合同凭证中。
+- AppHub 页面需要 JSON 结果但请求未显式包含 `export_format=json`：阻止生成，不以 XLS/XLSX 或相似格式回退。
 - SellerSprite 仅支持 XLS/XLSX 导出而页面需要 SQLite JSON 数据产品：标记阻塞或改为明确的导出型任务，不把文件伪装成 JSON 快照。
 - 依赖 Skill 返回正式能力不支持、权限缺失或运行硬前置缺失：将对应数据产品标记为 `blocked`，不影响其他数据产品继续交付。
 - 依赖 Skill 已实际调用但遇到认证外的临时错误、超时或上游不可用：按反馈规则处理并标记 `degraded`，继续完成其他模块，不得改写成“尚未完成在线验证”。

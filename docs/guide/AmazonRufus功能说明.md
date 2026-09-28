@@ -9,7 +9,7 @@
 - `opscli/amazon_rufus/services/manager.py`
 - `opscli/amazon_rufus/services/mcp_manager.py`
 - `opscli/mcp/tools/amazon_rufus.py`
-- `opscli/skills/templates/ops-amazon-rufus/`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/`
 
 ## 1. 功能定位
 
@@ -76,7 +76,7 @@ MCP Tool 暴露位于 `opscli/mcp/tools/amazon_rufus.py`，当前注册的工具
 
 ### 3.3 Skill 入口
 
-Skill 模板位于 `opscli/skills/templates/ops-amazon-rufus/`。它本身不实现采集逻辑，只负责：
+Skill 模板位于 `opscli/skills/templates/ops-amazon-rufus-or-alexa/`。它本身不实现采集逻辑，只负责：
 
 - 题库数据提供。
 - Agent 编排规则。
@@ -87,7 +87,7 @@ Skill 模板位于 `opscli/skills/templates/ops-amazon-rufus/`。它本身不实
 
 - `opscli/amazon_rufus/`：真正执行业务逻辑。
 - `opscli/mcp/tools/amazon_rufus.py`：把业务逻辑包装成 MCP Tool。
-- `ops-amazon-rufus` Skill：告诉 Agent 什么时候调哪个 Tool。
+- `ops-amazon-rufus-or-alexa` Skill：告诉 Agent 什么时候调哪个 Tool。
 
 ## 4. 核心能力总览
 
@@ -285,7 +285,7 @@ CONFIG_DIR/amazon-rufus/remote-consent.json
 默认题库读取路径是：
 
 ```text
-.agents/skills/ops-amazon-rufus/data/question_templates.json
+.agents/skills/ops-amazon-rufus-or-alexa/data/question_templates.json
 ```
 
 也可以通过 `--skills-dir` 或 MCP 的 `skills_dir` 指定其他 skill 根目录。
@@ -671,7 +671,7 @@ uv run pytest tests/mcp/test_tools.py -q
 
 ### 15.3 Skill 文档和升级契约测试
 
-如果改了 `opscli/skills/templates/ops-amazon-rufus/` 或 Agent 编排规则，运行：
+如果改了 `opscli/skills/templates/ops-amazon-rufus-or-alexa/` 或 Agent 编排规则，运行：
 
 ```powershell
 uv run pytest tests/skills/test_ops_amazon_rufus_updater.py -q
@@ -738,7 +738,7 @@ uv run opscli amazon-rufus get-backend B0TEST1234 US -q "这个商品适合送�
 - `RUFUS_HEADLESS_CAPTURE_ERROR`：检查浏览器、商品页、登录态和 Playwright。
 - `RUFUS_HEADLESS_REQUEST_ERROR`：检查 Rufus 请求是否被拒绝、登录态是否失效。
 - `RUFUS_PLATFORM_COOKIE_AUTH_ERROR`：这是 OPS 鉴权问题，不是 Amazon 登录态问题。
-- `QUESTION_BANK_NOT_READY`：安装或升级 `ops-amazon-rufus` Skill，或临时用 `-q` 指定问题。
+- `QUESTION_BANK_NOT_READY`：安装或升级 `ops-amazon-rufus-or-alexa` Skill，或临时用 `-q` 指定问题。
 
 在本项目内，任何 `opscli` CLI 命令失败都需要按 `ops-feedback` 规则提交结构化反馈；反馈内容只能包含脱敏摘要，不能包含 Cookie、headers、payload、cURL、seed 或平台 Cookie content 原文。
 

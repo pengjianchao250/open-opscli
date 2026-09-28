@@ -180,7 +180,7 @@ opscli skills upgrade
   1. 后端扩展 skill manifest 协议：支持任意 skill 的版本 + 文件清单（SKILL.md、reference/、scripts/ 均可下发），复用现有 `MANIFEST_ENDPOINT` 或新增通用端点
   2. `updater.py` 移除 `ops-dataset-query` 硬编码分支，按 manifest 声明的文件清单下载 + 原子替换（沿用现有临时目录 + 原子 mv 策略）
   3. manifest 中每个 skill 增加 `min_cli_version` 字段，CLI 版本不满足时跳过该 skill 升级并提示（防止新 skill 依赖新 CLI 能力）
-  4. 首批接入 2–3 个高频变更 skill（建议：ops-dataset-query 存量迁移 + ops-amazon-rufus + ops-query-wizard）
+  4. 首批接入 2–3 个高频变更 skill（建议：ops-dataset-query 存量迁移 + ops-amazon-rufus-or-alexa + ops-query-wizard）
 - **涉及文件：** `opscli/skills/sync/updater.py`、`opscli/skills/manager.py`；后端 manifest 发布链路
 - **工作量：** opscli 侧 3 人日 + 后端 1.5 人日
 - **依赖：** 无（可与 T2-1~T2-3 并行）

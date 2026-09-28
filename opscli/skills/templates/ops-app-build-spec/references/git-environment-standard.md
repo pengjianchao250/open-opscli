@@ -12,7 +12,7 @@ opscli app ensure-git --check --json
 
 - `ready=true` 时静默继续，并在后续 Git 命令中使用返回的绝对路径。
 - 纯规范咨询、方案讨论或不访问本地项目的任务只记录检测结果，不安装软件。
-- 新建、迁移重构、模板克隆、仓库初始化、Git 状态或历史读取、提交和推送任务在 `ready=false` 时执行：
+- 新建、源码复制迁移、模板克隆、仓库初始化、Git 状态或历史读取、提交和推送任务在 `ready=false` 时执行：
 
   ```bash
   opscli app ensure-git --install --json

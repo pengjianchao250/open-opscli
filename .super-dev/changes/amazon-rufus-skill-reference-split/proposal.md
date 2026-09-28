@@ -1,8 +1,8 @@
-# ops-amazon-rufus Skill 文档拆分提案
+# ops-amazon-rufus-or-alexa Skill 文档拆分提案
 
 ## 背景
 
-`ops-amazon-rufus/SKILL.md` 当前同时承载前置条件、MCP 工具调用、Chrome CDP 排障、远程授权、问题来源、拒答改写、输出隐藏和文件边界。主文档过长，Agent 在执行时需要读取大量非当前任务必要的细则。
+`ops-amazon-rufus-or-alexa/SKILL.md` 当前同时承载前置条件、MCP 工具调用、Chrome CDP 排障、远程授权、问题来源、拒答改写、输出隐藏和文件边界。主文档过长，Agent 在执行时需要读取大量非当前任务必要的细则。
 
 ## 目标
 
@@ -20,12 +20,12 @@
 
 本次修改覆盖：
 
-- `opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- `opscli/skills/templates/ops-amazon-rufus/README.md`
-- `opscli/skills/templates/ops-amazon-rufus/references/*.md`
-- `.agents/skills/ops-amazon-rufus/SKILL.md`
-- `.agents/skills/ops-amazon-rufus/README.md`
-- `.agents/skills/ops-amazon-rufus/references/*.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`
+- `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/*.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/README.md`
+- `.agents/skills/ops-amazon-rufus-or-alexa/references/*.md`
 - 相关文档断言测试
 
 ## 非目标

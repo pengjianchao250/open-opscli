@@ -133,6 +133,7 @@ class SkillsManager:
         cwd: Path | None = None,
         runtime: str | list[str] | None = None,
         force: bool = False,
+        install_hook: bool | None = None,
     ) -> SkillBatchInstallResult:
         """从内置模板安装 Skill。
 
@@ -151,6 +152,8 @@ class SkillsManager:
             cwd: 当前工作目录，用于自动检测安装目标
             runtime: 运行时类型（claude/openclaw/all 或逗号分隔）
             force: 是否覆盖已存在的安装/链接
+            install_hook: 是否同步确保全局 AI 工具 Hook；未指定时，显式
+                skills_dir 安装默认关闭，其他安装默认开启
         """
         template_dir = self.templates_dir / skill_name
         if not template_dir.exists():
@@ -174,6 +177,13 @@ class SkillsManager:
                 runtime=runtime,
                 force=force,
             )
+
+        # 显式隔离安装不得写入用户级 Hook；默认全局安装保持兼容行为。
+        should_install_hook = install_hook if install_hook is not None else not skills_dir
+
+        # 全部跳过或明确关闭时不修改用户配置。
+        if not should_install_hook or all(item.skipped for item in result.installs):
+            return result
 
         # 安装成功后，自动注入 PostToolUse Hook 到 ~/.claude/settings.json
         # 确保用户在任意目录下触发 Skill 时都能自动上报使用次数
@@ -199,6 +209,13 @@ class SkillsManager:
         target_root.mkdir(parents=True, exist_ok=True)
         target_dir = target_root / skill_name
 
+        # 已有安装按原样返回；更新必须显式传入 force。
+        if target_dir.exists() and not force:
+            return SkillBatchInstallResult(
+                name=skill_name,
+                installs=[self._skipped_install(skill_name, target_dir, runtime)],
+            )
+
         replaced = False
         stashed: list[str] = []
         # 覆盖前先把运行时元数据暂存到临时目录，copytree 之后写回，
@@ -206,8 +223,6 @@ class SkillsManager:
         with TemporaryDirectory() as stash_dir:
             stash_path = Path(stash_dir)
             if target_dir.exists():
-                if not force:
-                    raise ValueError(f"Skill 已存在: {target_dir}")
                 stashed = self._stash_runtime_metadata(target_dir, template_dir, stash_path)
                 shutil.rmtree(target_dir)
                 replaced = True
@@ -236,6 +251,24 @@ class SkillsManager:
             ],
         )
 
+    def _skipped_install(self, skill_name: str, target_dir: Path, runtime: str) -> SkillInstallResult:
+        """返回现有安装的真实版本，不修改文件、链接或安装记录。"""
+        central_dir = self._central_skills_dir / skill_name
+        try:
+            version = self._read_version(target_dir)
+        except (OSError, ValueError, AttributeError):
+            # 手工安装或旧副本可能没有有效版本文件，仍保留原文件并跳过。
+            version = "unknown"
+        return SkillInstallResult(
+            name=skill_name,
+            runtime=runtime,
+            target_dir=target_dir,
+            version=version,
+            replaced=False,
+            skipped=True,
+            central_dir=central_dir if target_dir.resolve() == central_dir.resolve() else None,
+        )
+
     def _install_central(
         self,
         skill_name: str,
@@ -250,22 +283,33 @@ class SkillsManager:
         """中央存储模式：复制到 ~/.opscli/skills，再在各工具目录建链接。"""
         central_skill_dir = self._central_skills_dir / skill_name
 
-        # Step 1：将模板写入中央存储
-        # force 时无条件覆盖；否则比较内置模板与已有中央副本的版本，
-        # 只要版本号不一致就以模板为准覆盖（允许降级），保证 install 始终与当前发行包模板对齐；
-        # 版本号完全相同时复用旧副本，避免多余的删除重拷。
-        # 覆盖中央副本时同样要保留运行时元数据：模板 data/ 只是占位符，
-        # 真实元数据（近 600KB / 数千字段）只存在于中央副本，由 upgrade 从远端写入。
-        # 注意此处不只 force 会触发覆盖——模板版本与 upgrade 写入的数据版本属于
-        # 两套版本空间、永远不相等，_template_version_differs 每次都为真，
-        # 因此普通 install 也会走到 rmtree，必须一并保护。
+        # 先检查目标，避免目标已安装时仍创建或覆盖中央副本。
+        if link_targets is not None:
+            targets = link_targets
+        else:
+            current = cwd or Path.cwd()
+            runtime_list = self._normalize_runtime_arg(runtime)
+            targets = self._detect_link_targets(current, runtime_list)
+        if not force:
+            if targets and all((root / skill_name).exists() for _, root in targets):
+                return SkillBatchInstallResult(
+                    name=skill_name,
+                    installs=[self._skipped_install(skill_name, root / skill_name, kind) for kind, root in targets],
+                )
+            if not targets and central_skill_dir.exists():
+                return SkillBatchInstallResult(
+                    name=skill_name,
+                    installs=[self._skipped_install(skill_name, central_skill_dir, "central")],
+                )
+
+        # 仅显式 force 才替换已有中央副本；普通安装只补齐缺失链接。
+        central_replaced = force and central_skill_dir.exists()
         stashed: list[str] = []
         with TemporaryDirectory() as stash_dir:
             stash_path = Path(stash_dir)
-            if central_skill_dir.exists():
-                if force or self._template_version_differs(template_dir, central_skill_dir):
-                    stashed = self._stash_runtime_metadata(central_skill_dir, template_dir, stash_path)
-                    shutil.rmtree(central_skill_dir)
+            if central_replaced:
+                stashed = self._stash_runtime_metadata(central_skill_dir, template_dir, stash_path)
+                shutil.rmtree(central_skill_dir)
             if not central_skill_dir.exists():
                 self._central_skills_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(
@@ -277,28 +321,18 @@ class SkillsManager:
 
         version = self._read_version(central_skill_dir)
 
-        # Step 2：确定链接目标列表
-        if link_targets is not None:
-            targets = link_targets
-        else:
-            current = cwd or Path.cwd()
-            runtime_list = self._normalize_runtime_arg(runtime)
-            targets = self._detect_link_targets(current, runtime_list)
-
         # Step 3：在各工具目录下创建链接
         installs: list[SkillInstallResult] = []
         for target_runtime, tool_skills_dir in targets:
-            # 链接已存在且正确指向中央副本时：中央内容刚按版本刷新过，
-            # 符号链接会自动反映新版本。此处用 force 重建（仅删链接、不动中央内容），
-            # 幂等刷新，避免普通 install 因"目标已存在"报错；
-            # 若链接缺失或指向异常，则保持原有 force 语义（非 force 时报错以防误删未知内容）。
             link_path = tool_skills_dir / skill_name
-            link_force = force or self.linker.is_link_valid(link_path, central_skill_dir)
+            if link_path.exists() and not force:
+                installs.append(self._skipped_install(skill_name, link_path, target_runtime))
+                continue
             link_result = self.linker.link(
                 skill_name,
                 central_skill_dir,
                 tool_skills_dir,
-                force=link_force,
+                force=force,
             )
             self._record_install(
                 skill_name,
@@ -339,7 +373,7 @@ class SkillsManager:
                     runtime="central",
                     target_dir=central_skill_dir,
                     version=version,
-                    replaced=False,
+                    replaced=central_replaced,
                     central_dir=central_skill_dir,
                     link_method=None,
                     preserved_data_files=len(stashed),
@@ -403,7 +437,7 @@ class SkillsManager:
     ) -> SkillBatchUpgradeResult:
         """升级指定 Skill 到最新版本。
 
-        当前支持 ops-dataset-query 与 ops-amazon-rufus。会先查找本地已安装的记录，
+        当前支持 ops-dataset-query 与 ops-amazon-rufus-or-alexa。会先查找本地已安装的记录，
         再委托给 SkillsUpdater 执行实际的远端数据拉取和文件替换。
 
         Args:
@@ -442,11 +476,11 @@ class SkillsManager:
 
         if not targets:
             raise ValueError(f"未找到已安装 Skill: {name}（未检测到 AI 工具，且中央存储中也不存在该 Skill）")
-        if name not in {"ops-dataset-query", "ops-amazon-rufus"}:
+        if name not in {"ops-dataset-query", "ops-amazon-rufus-or-alexa"}:
             raise ValueError(f"暂不支持升级 Skill: {name}")
 
-        # ops-amazon-rufus 使用独立升级接口（本地题库，不依赖 ops-dataset-query 的 manifest 体系）
-        if name == "ops-amazon-rufus":
+        # ops-amazon-rufus-or-alexa 使用独立升级接口（本地题库，不依赖 ops-dataset-query 的 manifest 体系）
+        if name == "ops-amazon-rufus-or-alexa":
             results: list[SkillUpgradeResult] = []
             for t in targets:
                 results.append(self.updater.upgrade_ops_amazon_rufus(t, force=force))
@@ -679,21 +713,6 @@ class SkillsManager:
         version_file = target_dir / "data" / "VERSION.json"
         payload = json.loads(version_file.read_text(encoding="utf-8"))
         return str(payload.get("version", "unknown"))
-
-    def _template_version_differs(self, template_dir: Path, central_skill_dir: Path) -> bool:
-        """比较内置模板与中央副本的版本，版本号不一致时返回 True。
-
-        用于 install 非 force 场景判断是否需要用模板覆盖已有中央副本：
-        只要版本号不同（模板更高或更低）就以当前发行包模板为准覆盖（允许降级）。
-        任一 VERSION.json 读取失败时返回 False，保守复用旧副本，避免误覆盖。
-        """
-        try:
-            template_version = self._read_version(template_dir)
-            central_version = self._read_version(central_skill_dir)
-        except Exception:
-            return False
-        # compare_versions 返回 0 表示两版本相等；非 0 即不一致，需要以模板覆盖
-        return self.updater.compare_versions(template_version, central_version) != 0
 
     @staticmethod
     def _template_data_is_placeholder(template_dir: Path) -> bool:

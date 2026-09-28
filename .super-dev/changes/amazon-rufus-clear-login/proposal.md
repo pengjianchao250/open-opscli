@@ -71,8 +71,8 @@ Only directories named `amazon-rufus-<PORT>` may be removed.
 Detailed research, PRD, architecture, and UX are in:
 
 ```text
-output/ops-amazon-rufus-clear-login-research.md
-output/ops-amazon-rufus-clear-login-prd.md
-output/ops-amazon-rufus-clear-login-architecture.md
-output/ops-amazon-rufus-clear-login-uiux.md
+output/ops-amazon-rufus-or-alexa-clear-login-research.md
+output/ops-amazon-rufus-or-alexa-clear-login-prd.md
+output/ops-amazon-rufus-or-alexa-clear-login-architecture.md
+output/ops-amazon-rufus-or-alexa-clear-login-uiux.md
 ```

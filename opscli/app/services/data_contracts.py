@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -92,6 +94,426 @@ FORBIDDEN_PAYLOAD_KEYS = {
     "rows",
     "sample_rows",
 }
+
+# AppHub SellerSprite 机器合同的默认位置。
+APPHUB_SELLER_SPRITE_CONTRACT = (
+    Path(__file__).resolve().parents[2]
+    / "skills"
+    / "templates"
+    / "ops-seller-sprite"
+    / "APPHUB_SCENARIO_CONTRACTS.json"
+)
+APPHUB_ENDPOINT_FAMILIES = {
+    "ordinary_jobs",
+    "browser_route_json",
+    "browser_route_export",
+    "export_only",
+    "listing_analysis",
+}
+APPHUB_DELIVERY_MODES = {"json", "export-only"}
+APPHUB_PARAMETER_TYPES = {
+    "string",
+    "string_list",
+    "number",
+    "integer",
+    "boolean",
+    "enum",
+    "asin",
+}
+APPHUB_ASIN_PATTERN = re.compile(r"^[A-Z0-9]{10}$")
+APPHUB_PERIOD_PATTERNS = {
+    "YYYY-MM": re.compile(r"^\d{4}-(0[1-9]|1[0-2])$"),
+    "YYYY-MM-DD": re.compile(r"^\d{4}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$"),
+}
+
+
+def load_apphub_seller_sprite_contracts(
+    contract_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """加载 AppHub 专用 SellerSprite 场景合同。"""
+    path = Path(contract_path) if contract_path is not None else APPHUB_SELLER_SPRITE_CONTRACT
+    return json.loads(path.expanduser().read_text(encoding="utf-8"))
+
+
+def _validate_apphub_parameter_definition(
+    parameter_name: str,
+    definition: Any,
+    location: str,
+    errors: list[str],
+) -> None:
+    """校验单个 AppHub 场景参数的声明。"""
+    if not isinstance(definition, dict):
+        _add_error(errors, location, "参数合同必须是对象")
+        return
+
+    parameter_type = definition.get("type")
+    if parameter_type not in APPHUB_PARAMETER_TYPES:
+        _add_error(errors, f"{location}.type", "参数类型不受支持")
+        return
+
+    if parameter_type == "enum":
+        allowed = definition.get("allowed")
+        if not isinstance(allowed, list) or not allowed or not all(
+            _is_non_empty_text(value) for value in allowed
+        ):
+            _add_error(errors, f"{location}.allowed", "枚举参数必须提供非空 allowed")
+
+    for key in ("min_length", "min_items", "max_items", "minimum", "maximum"):
+        if key not in definition:
+            continue
+        value = definition[key]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            _add_error(errors, f"{location}.{key}", "数量或数值边界必须是数字")
+    if "min_items" in definition and "max_items" in definition:
+        if definition["min_items"] > definition["max_items"]:
+            _add_error(errors, location, "最小数量不能大于最大数量")
+    if "minimum" in definition and "maximum" in definition:
+        if definition["minimum"] > definition["maximum"]:
+            _add_error(errors, location, "最小值不能大于最大值")
+    if parameter_type == "asin" and parameter_name.lower() not in {
+        "asin",
+        "asins",
+        "ownasin",
+        "competitorasin",
+        "competitorasins",
+    }:
+        _add_error(errors, location, "ASIN 参数命名必须保持场景语义")
+
+
+def _validate_apphub_scenario_contract(
+    scenario_name: str,
+    scenario: Any,
+    catalog_sites: set[str],
+    errors: list[str],
+) -> None:
+    """校验单个 AppHub SellerSprite 场景合同。"""
+    location = f"scenarios.{scenario_name}"
+    if not isinstance(scenario, dict):
+        _add_error(errors, location, "场景合同必须是对象")
+        return
+
+    for key in ("title", "description", "business_boundary", "tool", "delivery_mode"):
+        if not _is_non_empty_text(scenario.get(key)):
+            _add_error(errors, f"{location}.{key}", "必须提供非空字符串")
+
+    endpoint_family = scenario.get("endpoint_family")
+    if endpoint_family not in APPHUB_ENDPOINT_FAMILIES:
+        _add_error(errors, f"{location}.endpoint_family", "endpoint family 不受支持")
+
+    delivery_mode = scenario.get("delivery_mode")
+    if delivery_mode not in APPHUB_DELIVERY_MODES:
+        _add_error(errors, f"{location}.delivery_mode", "数据交付模式不受支持")
+
+    supported_sites = scenario.get("supported_sites", list(catalog_sites))
+    if not isinstance(supported_sites, list) or not supported_sites or not all(
+        _is_non_empty_text(site) and site in catalog_sites for site in supported_sites
+    ):
+        _add_error(errors, f"{location}.supported_sites", "支持站点必须来自目录站点")
+
+    period = scenario.get("period")
+    if not isinstance(period, dict):
+        _add_error(errors, f"{location}.period", "必须提供周期合同")
+    else:
+        allowed_periods = period.get("allowed")
+        if not isinstance(allowed_periods, list) or not allowed_periods or not all(
+            _is_non_empty_text(value) for value in allowed_periods
+        ):
+            _add_error(errors, f"{location}.period.allowed", "必须提供允许的周期枚举")
+
+    export_formats = scenario.get("export_formats")
+    if not isinstance(export_formats, list) or not export_formats or not all(
+        _is_non_empty_text(value) for value in export_formats
+    ):
+        _add_error(errors, f"{location}.export_formats", "必须提供导出格式")
+        export_formats = []
+    if delivery_mode == "json" and "json" not in export_formats:
+        _add_error(errors, f"{location}.export_formats", "JSON 场景必须允许 json")
+    if delivery_mode == "export-only" and "json" in export_formats:
+        _add_error(errors, f"{location}.export_formats", "文件型场景不能允许 json")
+
+    params = scenario.get("params")
+    if not isinstance(params, dict):
+        _add_error(errors, f"{location}.params", "必须提供参数合同")
+        params = {}
+    for parameter_name, definition in params.items():
+        _validate_apphub_parameter_definition(
+            str(parameter_name),
+            definition,
+            f"{location}.params.{parameter_name}",
+            errors,
+        )
+
+    for key in ("required_params", "required_any_of"):
+        values = scenario.get(key, [])
+        if not isinstance(values, list) or not all(_is_non_empty_text(value) for value in values):
+            _add_error(errors, f"{location}.{key}", "必须是字符串数组")
+            continue
+        for value in values:
+            if value not in params:
+                _add_error(errors, f"{location}.{key}", f"参数未在场景合同中登记：{value}")
+
+    response = scenario.get("response")
+    if not isinstance(response, dict):
+        _add_error(errors, f"{location}.response", "必须提供结果合同")
+    elif delivery_mode == "json":
+        for key in ("records_path", "columns_path", "record_type"):
+            if not _is_non_empty_text(response.get(key)):
+                _add_error(errors, f"{location}.response.{key}", "JSON 结果必须提供精确路径")
+        if response.get("record_type") != "array":
+            _add_error(errors, f"{location}.response.record_type", "JSON 结果必须是 array")
+        business_fields = response.get("business_fields")
+        if not isinstance(business_fields, list) or not business_fields:
+            _add_error(errors, f"{location}.response.business_fields", "必须提供业务字段投影")
+        else:
+            for index, field in enumerate(business_fields):
+                field_location = f"{location}.response.business_fields[{index}]"
+                if not isinstance(field, dict):
+                    _add_error(errors, field_location, "字段投影必须是对象")
+                    continue
+                for key in ("role", "source_field", "source_path", "result_field", "data_type"):
+                    if not _is_non_empty_text(field.get(key)):
+                        _add_error(errors, f"{field_location}.{key}", "字段投影必须提供精确值")
+    elif not _is_non_empty_text(response.get("file_type")):
+        _add_error(errors, f"{location}.response.file_type", "文件型场景必须声明 file_type")
+
+    async_contract = scenario.get("async")
+    if not isinstance(async_contract, dict):
+        _add_error(errors, f"{location}.async", "必须提供异步任务合同")
+    else:
+        states = async_contract.get("states")
+        if not isinstance(states, list) or not states or not all(
+            _is_non_empty_text(state) for state in states
+        ):
+            _add_error(errors, f"{location}.async.states", "必须提供任务状态映射")
+        if not isinstance(async_contract.get("reuse_pending_job"), bool):
+            _add_error(errors, f"{location}.async.reuse_pending_job", "必须声明 pending 是否复用")
+        if not isinstance(async_contract.get("max_retries"), int) or isinstance(
+            async_contract.get("max_retries"), bool
+        ):
+            _add_error(errors, f"{location}.async.max_retries", "必须声明有限重试次数")
+
+
+def validate_apphub_seller_sprite_catalog(catalog: Any) -> list[str]:
+    """校验 AppHub SellerSprite 场景目录的完整性。"""
+    errors: list[str] = []
+    if not isinstance(catalog, dict):
+        return ["catalog: AppHub SellerSprite 合同必须是对象"]
+    if catalog.get("contract_schema_version") != "1.0":
+        _add_error(errors, "contract_schema_version", "必须为 1.0")
+    if catalog.get("scope") != "apphub":
+        _add_error(errors, "scope", "必须为 apphub")
+    if catalog.get("provider") != "seller_sprite":
+        _add_error(errors, "provider", "必须为 seller_sprite")
+    if catalog.get("discovery_tool") != "seller_sprite_scenarios":
+        _add_error(errors, "discovery_tool", "必须使用 seller_sprite_scenarios")
+
+    supported_sites = catalog.get("supported_sites")
+    if not isinstance(supported_sites, list) or not supported_sites or not all(
+        _is_non_empty_text(site) for site in supported_sites
+    ):
+        _add_error(errors, "supported_sites", "必须提供非空站点数组")
+        catalog_sites: set[str] = set()
+    else:
+        catalog_sites = set(supported_sites)
+
+    scenarios = catalog.get("scenarios")
+    if not isinstance(scenarios, dict) or not scenarios:
+        _add_error(errors, "scenarios", "必须提供非空场景目录")
+        return errors
+    for scenario_name, scenario in scenarios.items():
+        if not _is_non_empty_text(scenario_name):
+            _add_error(errors, "scenarios", "场景名称必须是非空字符串")
+            continue
+        _validate_apphub_scenario_contract(scenario_name, scenario, catalog_sites, errors)
+    return errors
+
+
+def _validate_apphub_period(period: Any, allowed_periods: list[str], location: str, errors: list[str]) -> None:
+    """校验请求周期是否匹配场景合同。"""
+    if not _is_non_empty_text(period):
+        _add_error(errors, location, "周期必须是非空字符串")
+        return
+    if period in allowed_periods:
+        return
+    for pattern_name, pattern in APPHUB_PERIOD_PATTERNS.items():
+        if pattern_name in allowed_periods and pattern.fullmatch(period):
+            return
+    _add_error(errors, location, "周期不在场景合同允许范围内")
+
+
+def _validate_apphub_parameter_value(
+    parameter_name: str,
+    value: Any,
+    definition: dict[str, Any],
+    location: str,
+    errors: list[str],
+) -> None:
+    """按场景合同校验请求参数值。"""
+    parameter_type = definition.get("type")
+    if parameter_type == "string":
+        if not _is_non_empty_text(value):
+            _add_error(errors, location, "必须是非空字符串")
+        elif "min_length" in definition and len(value) < definition["min_length"]:
+            _add_error(errors, location, "字符串长度未达到最小限制")
+        return
+    if parameter_type == "string_list":
+        if not isinstance(value, list) or not all(_is_non_empty_text(item) for item in value):
+            _add_error(errors, location, "必须是字符串数组")
+            return
+        _validate_apphub_collection_size(value, definition, location, errors)
+        return
+    if parameter_type == "asin":
+        if not _is_non_empty_text(value) or not APPHUB_ASIN_PATTERN.fullmatch(value):
+            _add_error(errors, location, "必须是合法 ASIN")
+        return
+    if parameter_type == "number":
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            _add_error(errors, location, "必须是数字")
+            return
+        _validate_apphub_numeric_range(value, definition, location, errors)
+        return
+    if parameter_type == "integer":
+        if not isinstance(value, int) or isinstance(value, bool):
+            _add_error(errors, location, "必须是整数")
+            return
+        _validate_apphub_numeric_range(value, definition, location, errors)
+        return
+    if parameter_type == "boolean":
+        if not isinstance(value, bool):
+            _add_error(errors, location, "必须是布尔值")
+        return
+    if parameter_type == "enum":
+        if value not in definition.get("allowed", []):
+            _add_error(errors, location, "值不在枚举允许范围内")
+        return
+    _add_error(errors, location, f"参数类型未实现：{parameter_name}")
+
+
+def _validate_apphub_collection_size(
+    values: list[Any],
+    definition: dict[str, Any],
+    location: str,
+    errors: list[str],
+) -> None:
+    """校验数组参数的数量边界。"""
+    if "min_items" in definition and len(values) < definition["min_items"]:
+        _add_error(errors, location, "参数数量少于最小限制")
+    if "max_items" in definition and len(values) > definition["max_items"]:
+        _add_error(errors, location, "参数数量超过最大限制")
+
+
+def _validate_apphub_numeric_range(
+    value: int | float,
+    definition: dict[str, Any],
+    location: str,
+    errors: list[str],
+) -> None:
+    """校验数值参数的上下界。"""
+    if "minimum" in definition and value < definition["minimum"]:
+        _add_error(errors, location, "数值小于最小限制")
+    if "maximum" in definition and value > definition["maximum"]:
+        _add_error(errors, location, "数值超过最大限制")
+
+
+def validate_apphub_seller_sprite_request(
+    request: Any,
+    *,
+    available_scenarios: Any = None,
+    require_json: bool = False,
+    catalog: dict[str, Any] | None = None,
+) -> list[str]:
+    """校验 AppHub SellerSprite 实际请求与场景机器合同的一致性。"""
+    errors: list[str] = []
+    if not isinstance(request, dict):
+        return ["request: AppHub SellerSprite 请求必须是对象"]
+    try:
+        contract_catalog = (
+            catalog if catalog is not None else load_apphub_seller_sprite_contracts()
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"catalog: 无法加载 AppHub SellerSprite 合同：{exc}"]
+
+    catalog_errors = validate_apphub_seller_sprite_catalog(contract_catalog)
+    if catalog_errors:
+        return [f"catalog: {error}" for error in catalog_errors]
+
+    if request.get("scope") != "apphub":
+        _add_error(errors, "request.scope", "必须为 apphub")
+    if request.get("contract_schema_version") != contract_catalog.get("contract_schema_version"):
+        _add_error(errors, "request.contract_schema_version", "必须匹配 AppHub 合同版本")
+
+    scenario_name = request.get("scenario")
+    scenarios = contract_catalog["scenarios"]
+    scenario = scenarios.get(scenario_name) if isinstance(scenario_name, str) else None
+    if scenario is None:
+        _add_error(errors, "request.scenario", "场景未登记")
+        return errors
+
+    if available_scenarios is not None:
+        if isinstance(available_scenarios, dict):
+            available_names = set(available_scenarios)
+        elif isinstance(available_scenarios, (list, tuple, set)):
+            available_names = set(available_scenarios)
+        else:
+            available_names = set()
+        if scenario_name not in available_names:
+            _add_error(errors, "request.scenario", "线上 seller_sprite_scenarios 未暴露该场景")
+
+    endpoint_family = request.get("endpoint_family")
+    if endpoint_family != scenario.get("endpoint_family"):
+        _add_error(errors, "request.endpoint_family", "endpoint family 与场景合同不一致")
+    if request.get("tool") != scenario.get("tool"):
+        _add_error(errors, "request.tool", "工具与场景合同不一致")
+
+    supported_sites = scenario.get("supported_sites", contract_catalog["supported_sites"])
+    if request.get("site") not in supported_sites:
+        _add_error(errors, "request.site", "站点不在场景合同允许范围内")
+    _validate_apphub_period(
+        request.get("period"),
+        scenario.get("period", {}).get("allowed", []),
+        "request.period",
+        errors,
+    )
+
+    page_size = request.get("page_size")
+    if not isinstance(page_size, int) or isinstance(page_size, bool) or page_size <= 0:
+        _add_error(errors, "request.page_size", "page_size 必须是正整数")
+
+    params = request.get("params")
+    if not isinstance(params, dict):
+        _add_error(errors, "request.params", "必须提供参数对象")
+        params = {}
+    definitions = scenario.get("params", {})
+    for parameter_name in params:
+        if parameter_name not in definitions:
+            _add_error(errors, f"request.params.{parameter_name}", "参数未在场景合同中登记")
+
+    required_params = scenario.get("required_params", [])
+    missing_required = [name for name in required_params if name not in params]
+    if missing_required:
+        _add_error(errors, "request.params", f"缺少必填参数：{', '.join(missing_required)}")
+    required_any_of = scenario.get("required_any_of", [])
+    if required_any_of and not any(name in params for name in required_any_of):
+        _add_error(errors, "request.params", f"缺少必填参数（至少一个）：{', '.join(required_any_of)}")
+    for parameter_name, value in params.items():
+        definition = definitions.get(parameter_name)
+        if isinstance(definition, dict):
+            _validate_apphub_parameter_value(
+                parameter_name,
+                value,
+                definition,
+                f"request.params.{parameter_name}",
+                errors,
+            )
+
+    export_format = request.get("export_format")
+    if export_format not in scenario.get("export_formats", []):
+        _add_error(errors, "request.export_format", "导出格式不在场景合同允许范围内")
+    if require_json and export_format != "json":
+        _add_error(errors, "request.export_format", "页面结构化数据必须使用 export_format=json")
+    if scenario.get("delivery_mode") == "export-only" and require_json:
+        _add_error(errors, "request.export_format", "文件型场景不能生成 JSON 页面数据")
+    return errors
 
 
 def _is_non_empty_text(value: Any) -> bool:
@@ -504,6 +926,14 @@ def _validate_third_party_technical_contract(
             f"{contract_location}.projection_policy.on_schema_mismatch",
             "结构漂移必须降级并保留最后有效快照",
         )
+
+    apphub_request = technical_contract.get("apphub_request")
+    if apphub_request is not None:
+        for error in validate_apphub_seller_sprite_request(
+            apphub_request,
+            require_json=technical_contract.get("result_format") == "json",
+        ):
+            _add_error(errors, f"{contract_location}.apphub_request", error)
 
 
 def _validate_blockers(

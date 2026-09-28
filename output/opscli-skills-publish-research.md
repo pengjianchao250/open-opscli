@@ -123,7 +123,7 @@ app.add_typer(skills_app, name="skills")
 `SkillsManager.upgrade()` 当前只允许：
 
 - `ops-dataset-query`
-- `ops-amazon-rufus`
+- `ops-amazon-rufus-or-alexa`
 
 `ops-dataset-query` 的远端接口在 `SkillsUpdater` 中：
 

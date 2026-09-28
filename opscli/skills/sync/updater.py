@@ -1,4 +1,4 @@
-﻿"""Skill 远端数据更新器。
+"""Skill 远端数据更新器。
 
 负责从运营系统后端拉取最新的 ops-dataset-query 数据，
 通过"先写临时目录、再原子替换"的策略安全地更新本地 Skill 数据文件。
@@ -17,6 +17,7 @@ from opscli.auth import AuthClient, OPS_URL
 from opscli.auth.exceptions import AuthError
 from opscli.skills.domain.exceptions import SkillRemoteError
 from opscli.skills.domain.models import SkillRecord, SkillUpgradeResult
+from opscli.skills.packaging import get_builtin_templates_dir
 
 # 由 upgrade 从远端写入、归运行时所有的数据文件清单。
 # 这些文件在内置模板里只是占位符（CSV 仅表头、JSON 空集合），真实内容只存在于
@@ -278,7 +279,7 @@ class SkillsUpdater:
         return self.apply_upgrade_data(record, data, force=force, on_step=on_step)
 
     def upgrade_ops_amazon_rufus(self, record: SkillRecord, force: bool = False) -> SkillUpgradeResult:
-        """执行 ops-amazon-rufus 默认题库升级。"""
+        """执行 ops-amazon-rufus-or-alexa 默认题库升级。"""
         response = self._get_rufus_default_question_templates()
         endpoint = self._get_rufus_default_question_templates_endpoint()
         payload = self._parse_json_response(response, endpoint=endpoint)
@@ -296,7 +297,8 @@ class SkillsUpdater:
             )
 
         current_version = record.version
-        remote_version = "v0.0.1"
+        # 接口没有发布版本字段，使用内置版本和已安装版本中的较新值，避免降级。
+        remote_version = self._latest_rufus_version(record)
         data_dir = record.root / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -307,8 +309,10 @@ class SkillsUpdater:
                 json.dumps({"items": data["items"]}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            version_payload = self._read_version_payload(record.version_file)
+            version_payload.update({"name": record.name, "version": remote_version})
             (tmp_path / "VERSION.json").write_text(
-                json.dumps({"name": record.name, "version": remote_version}, ensure_ascii=False, indent=2),
+                json.dumps(version_payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             for filename in ["question_templates.json", "VERSION.json"]:
@@ -323,6 +327,26 @@ class SkillsUpdater:
             updated=True,
             field_count=question_count,
         )
+
+    def _latest_rufus_version(self, record: SkillRecord) -> str:
+        """取内置版本与已安装版本中的较新值，保留现有版本作为兜底。"""
+        current_version = str(record.version or "").strip()
+        builtin_version = self._read_version_payload(
+            get_builtin_templates_dir() / record.name / "data" / "VERSION.json"
+        ).get("version")
+        if isinstance(builtin_version, str) and builtin_version.strip():
+            if self.compare_versions(current_version, builtin_version) < 0:
+                return builtin_version.strip()
+        return current_version
+
+    @staticmethod
+    def _read_version_payload(path: Path) -> dict:
+        """读取 VERSION.json，损坏或缺失时返回空对象。"""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
 
     def _fetch_select_columns_csv(self) -> str:

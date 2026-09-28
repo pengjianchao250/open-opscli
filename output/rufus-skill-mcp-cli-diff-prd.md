@@ -2,7 +2,7 @@
 
 ## 目标
 
-明确 `ops-amazon-rufus` Skill MCP 工具与 `opscli amazon-rufus` CLI 实现之间的功能边界，并按用户反馈补齐 MCP 对 `platform-cookie get/save` 与 `curl save` 的受控支持，避免 Agent 在运行期误用 CLI 调试入口、读取历史报告或暴露敏感登录态。
+明确 `ops-amazon-rufus-or-alexa` Skill MCP 工具与 `opscli amazon-rufus` CLI 实现之间的功能边界，并按用户反馈补齐 MCP 对 `platform-cookie get/save` 与 `curl save` 的受控支持，避免 Agent 在运行期误用 CLI 调试入口、读取历史报告或暴露敏感登录态。
 
 ## 用户问题
 

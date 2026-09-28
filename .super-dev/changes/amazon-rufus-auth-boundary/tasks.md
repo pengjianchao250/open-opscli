@@ -36,10 +36,10 @@
   - [x] 6.4 让 `amazon_rufus_get` 使用新工厂，保持 MCP schema 不变。
 
 - [x] 7. 同步 Skill 恢复规则
-  - [x] 7.1 更新 `opscli/skills/templates/ops-amazon-rufus/SKILL.md`，新增 `RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 禁止 `watch-login` 规则。
-  - [x] 7.2 更新 `opscli/skills/templates/ops-amazon-rufus/README.md`。
-  - [x] 7.3 更新 `opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`。
-  - [x] 7.4 同步 `.agents/skills/ops-amazon-rufus/` 对应副本。
+  - [x] 7.1 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`，新增 `RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 禁止 `watch-login` 规则。
+  - [x] 7.2 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`。
+  - [x] 7.3 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`。
+  - [x] 7.4 同步 `.agents/skills/ops-amazon-rufus-or-alexa/` 对应副本。
   - [x] 7.5 更新 `tests/skills/test_ops_amazon_rufus_updater.py`，验证模板与副本包含限制且不要求用户复制敏感 content。
 
 - [x] 8. 变更记录与回归验证

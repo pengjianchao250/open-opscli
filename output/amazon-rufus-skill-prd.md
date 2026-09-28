@@ -2,7 +2,7 @@
 
 ## 背景
 
-`ops-amazon-rufus` 当前能完成 MCP-first Rufus 获取、登录态恢复、CLI fallback 和报告输出。但如果 Rufus 没有回答、拒答，或回答内容只停留在商品详情而没有覆盖用户真正询问的评价、风险、适配性、广告投放等问题，现有 Skill 缺少问题改写重试规则。
+`ops-amazon-rufus-or-alexa` 当前能完成 MCP-first Rufus 获取、登录态恢复、CLI fallback 和报告输出。但如果 Rufus 没有回答、拒答，或回答内容只停留在商品详情而没有覆盖用户真正询问的评价、风险、适配性、广告投放等问题，现有 Skill 缺少问题改写重试规则。
 
 用户补充发现亚马逊登录态失效时，流程会先打开商品页，再反复打开并快速关闭其他页面。根因是同一次 Skill 调用内多个分支都能触发 `watch_login`，但原流程只限制登录恢复次数，没有限制 `watch_login` 总次数；同时 Chrome 启动参数中带有自动打开 DevTools 的参数，增加额外页面干扰。
 

@@ -4,7 +4,7 @@
 
 ## 目标
 
-将 `ops-amazon-rufus` Skill 的运行期流程改造成 MCP-only：
+将 `ops-amazon-rufus-or-alexa` Skill 的运行期流程改造成 MCP-only：
 
 1. Skill 开始后只调用 MCP Tool，不再执行 `opscli amazon-rufus *` 或 `opscli auth *`。
 2. Rufus 前置检查、远程授权偏好、Amazon 登录采集、登录态恢复和 Rufus 获取全部由 MCP Tool 提供。
@@ -98,7 +98,7 @@
 2. MCP `list_tools` 能看到 Rufus 所需工具集合。
 3. `amazon_rufus_get` 仍保持敏感字段过滤和报告路径新鲜度约束。
 4. `remote-consent`、`login-status`、`watch-login`、`logout` 都有 MCP 单测覆盖。
-5. 安装 `ops-amazon-rufus` 的 CLI 输出不再指导用户执行 Rufus CLI 命令。
+5. 安装 `ops-amazon-rufus-or-alexa` 的 CLI 输出不再指导用户执行 Rufus CLI 命令。
 
 ## 安全边界
 

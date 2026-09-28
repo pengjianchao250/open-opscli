@@ -61,6 +61,7 @@ class SkillInstallResult:
     central_dir: Path | None = None # 中央存储目录（中央模式专属）
     link_method: str | None = None  # 链接方式：symlink / junction / copy_fallback
     preserved_data_files: int = 0   # 覆盖安装时保留的运行时元数据文件数（0 表示无需保留）
+    skipped: bool = False            # 已存在且未覆盖时为 True
 
     def to_dict(self) -> dict:
         """转换为可 JSON 序列化的字典，Path 字段转为字符串。"""
@@ -97,11 +98,13 @@ class SkillBatchInstallResult:
                 {
                     "tool": runtime_to_tool_name(item.runtime),
                     "path": str(item.target_dir),
+                    "version": item.version,
                     "replaced": item.replaced,
                     "link_method": item.link_method,
                     # 暴露保留的元数据文件数：AI Agent 走 JSON 通道，需要据此判断
                     # 是否还要再跑一次 upgrade（0 表示未发生保留）
                     "preserved_data_files": item.preserved_data_files,
+                    "skipped": item.skipped,
                 }
                 for item in self.installs
             ],

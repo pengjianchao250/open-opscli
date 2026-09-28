@@ -2,13 +2,13 @@
 
 ## 背景
 
-`ops-amazon-rufus` 当前把问题模板同步说明放在主使用文档中，容易和 `amazon-rufus get` 的回答获取流程混在一起。现在问题模板不仅需要说明如何获取默认题库，还需要说明管理端如何保存模板和问题列表。
+`ops-amazon-rufus-or-alexa` 当前把问题模板同步说明放在主使用文档中，容易和 `amazon-rufus get` 的回答获取流程混在一起。现在问题模板不仅需要说明如何获取默认题库，还需要说明管理端如何保存模板和问题列表。
 
 前端 `opencalw-management/index.vue` 只是页面入口，实际接口调用落在 `QuestionTemplatesTab`、`QuestionTemplateDescriptionDialog`、`QuestionTemplateQuestionsDialog` 以及 `project/tools/api/modules/opencalw.ts`。这些接口应沉淀为独立 reference，避免主流程文档承担管理接口说明。
 
 ## 目标
 
-1. 新增独立 reference：`opscli/skills/templates/ops-amazon-rufus/references/question-templates.md`。
+1. 新增独立 reference：`opscli/skills/templates/ops-amazon-rufus-or-alexa/references/question-templates.md`。
 2. reference 只描述问题模板的数据结构、获取接口、保存接口和保存工作流。
 3. `README.md` 与 `SKILL.md` 只保留题库升级入口，并链接到新 reference。
 4. 不改变 `amazon-rufus get`、题库读取、Rufus replay、报告格式化或 Skill 安装逻辑。
@@ -39,7 +39,7 @@
 
 `README.md` 与 `SKILL.md` 保留：
 
-- `opscli skills upgrade ops-amazon-rufus` 示例。
+- `opscli skills upgrade ops-amazon-rufus-or-alexa` 示例。
 - 本地题库文件路径。
 - 指向 `references/question-templates.md` 的说明。
 

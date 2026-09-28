@@ -2,12 +2,12 @@
 
 ## 背景
 
-本次调研目标是检查 `ops-amazon-rufus` Skill 中声明的 MCP 工具链，并对比 `opscli amazon-rufus` CLI 与 `opscli/amazon_rufus/` 服务层当前实现，识别功能差异、刻意收敛点和潜在不一致。
+本次调研目标是检查 `ops-amazon-rufus-or-alexa` Skill 中声明的 MCP 工具链，并对比 `opscli amazon-rufus` CLI 与 `opscli/amazon_rufus/` 服务层当前实现，识别功能差异、刻意收敛点和潜在不一致。
 
 ## 本地依据
 
-- Skill 模板：`opscli/skills/templates/ops-amazon-rufus/SKILL.md`
-- Skill 工作流：`opscli/skills/templates/ops-amazon-rufus/references/rufus-mcp-workflow.md`
+- Skill 模板：`opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`
+- Skill 工作流：`opscli/skills/templates/ops-amazon-rufus-or-alexa/references/rufus-mcp-workflow.md`
 - MCP 工具：`opscli/mcp/tools/amazon_rufus.py`
 - MCP façade：`opscli/amazon_rufus/services/mcp_manager.py`
 - CLI 命令：`opscli/amazon_rufus/commands/cli.py`

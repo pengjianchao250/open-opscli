@@ -7,9 +7,9 @@
 
 ## 2. Skill 文档实现
 
-- [x] 更新 `opscli/skills/templates/ops-amazon-rufus/SKILL.md` 的 frontmatter `description`。
+- [x] 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md` 的 frontmatter `description`。
 - [x] 在模板 `SKILL.md` 新增“触发范围”章节。
-- [x] 同步更新 `.agents/skills/ops-amazon-rufus/SKILL.md`。
+- [x] 同步更新 `.agents/skills/ops-amazon-rufus-or-alexa/SKILL.md`。
 
 ## 3. 变更记录
 

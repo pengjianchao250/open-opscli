@@ -17,14 +17,14 @@
 
 - [x] 3. 同步 Skill 与文档
   - [x] 3.1 更新模板 Skill `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md`。
-  - [x] 3.2 同步 `.agents/skills/ops-amazon-rufus` 副本。
+  - [x] 3.2 同步 `.agents/skills/ops-amazon-rufus-or-alexa` 副本。
   - [x] 3.3 追加 `docs/change-log-pending.md`。
 
 - [ ] 4. 验证与真实流程
   - [x] 4.1 运行 Rufus/Skill/MCP 定向测试。
-  - [x] 4.2 使用 `opscli skills install ops-amazon-rufus --force --skills-dir ".agents/skills"` 安装 Skill。
+  - [x] 4.2 使用 `opscli skills install ops-amazon-rufus-or-alexa --force --skills-dir ".agents/skills"` 安装 Skill。
   - [x] 4.3 用用户提供的 cookie 通过 CLI mock 保存本地状态。
-  - [x] 4.4 开启子 agent，按固定提示词真实调用 `$ops-amazon-rufus`。
+  - [x] 4.4 开启子 agent，按固定提示词真实调用 `$ops-amazon-rufus-or-alexa`。
   - [ ] 4.5 检查报告路径、答案数量和敏感字段过滤。（阻塞：当前 Amazon 页面显示未登录，等待用户完成登录后继续 `save-state US` 与 MCP 重试。）
 
 - [x] 5. 登录页监听与 streaming 请求种子捕获

@@ -52,6 +52,10 @@ app.add_typer(marketplace_app, name="marketplace")
 sync_exclude_app = typer.Typer(help="管理不同步到本地的技能排除名单")
 app.add_typer(sync_exclude_app, name="sync-exclude")
 
+# Codex / Claude Hook 生命周期管理
+hooks_app = typer.Typer(help="管理 Skill 使用上报 Hook、状态和历史迁移")
+app.add_typer(hooks_app, name="hooks")
+
 _console = Console()
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
@@ -69,8 +73,8 @@ _TOOL_LABELS = {
     "central":   "中央存储",
 }
 
-# ops-amazon-rufus 安装后引导信息
-_AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus"
+# ops-amazon-rufus-or-alexa 安装后引导信息
+_AMAZON_RUFUS_SKILL_NAME = "ops-amazon-rufus-or-alexa"
 _AMAZON_RUFUS_NEXT_STEPS = [
     "进入 Skill 后先调用 auth_is_authenticated；未登录时调用 auth_mcp_login，Token 失效时调用 auth_token_refresh(system=\"ops\")。",
     "调用 amazon_rufus_remote_consent_status(country) 读取该站点远程授权偏好。",
@@ -556,6 +560,9 @@ def _print_install_line(install: object) -> None:
     runtime = getattr(install, "runtime", "")
     target_dir = getattr(install, "target_dir", "")
     tool_label = _TOOL_LABELS.get(runtime, runtime)
+    if getattr(install, "skipped", False):
+        _console.print(f"  [dim]已存在，跳过：{name} {version} → {tool_label} ({target_dir})[/dim]")
+        return
     _console.print(
         f"  [green]{status_icon}[/green] [bold]{name}[/bold] "
         f"[dim]{version}[/dim] → [cyan]{tool_label}[/cyan] "
@@ -576,6 +583,9 @@ def _inject_rules_for_installs(installs: Sequence[object], *, verbose: bool = Fa
     injector = RuleInjector()
     seen: set[tuple[str, str]] = set()
     for install in installs:
+        # 跳过的安装不应触发配置写入。
+        if getattr(install, "skipped", False):
+            continue
         runtime = getattr(install, "runtime", "")
         target_dir = getattr(install, "target_dir", None)
         if not runtime or not target_dir:
@@ -667,6 +677,7 @@ def _install_sync_market(
     runtime: str | None,
     dry_run: bool,
     pretty: bool,
+    install_hook: bool = True,
 ) -> None:
     """--sync-market 模式：拉取市场同步队列，补装缺失 + 升级旧版。"""
     from packaging.version import InvalidVersion, Version
@@ -743,6 +754,7 @@ def _install_sync_market(
                 skills_dir=skills_dir,
                 runtime=runtime,
                 force=True,
+                install_hook=install_hook and not skills_dir,
             )
             if payload.get("success"):
                 if is_upgrade:
@@ -769,15 +781,14 @@ def _install_interactive(
     yes: bool,
     pretty: bool,
     verbose: bool = False,
+    install_hook: bool = True,
 ) -> None:
     """TUI 交互安装：选择 Skills → 选择目标工具 → 批量安装。
 
-    交互模式默认 force=True（覆盖已有安装），无需手动传 --force。
+    交互模式默认跳过已有安装，显式 --force 才覆盖。
     yes=True 时跳过所有 prompt，直接全选 Skills 和全部检测到的工具。
     verbose=True 时输出每个安装目标的逐条日志（默认仅输出最终汇总）。
     """
-    force = True  # TUI 模式始终覆盖，避免因已安装而中断
-
     # Step 1：选择要安装的 Skills
     try:
         skill_names = _tui_select_skills(manager, yes=yes)
@@ -816,6 +827,7 @@ def _install_interactive(
                 skill_name,
                 link_targets=target_pairs,
                 force=force,
+                install_hook=install_hook and not bool(skills_dir),
             )
             all_results.append(_with_post_install_guidance(result.to_dict(), skill_name))
             all_installs.extend(result.installs)
@@ -857,8 +869,13 @@ def _install_interactive(
             _console.print(f"[yellow]下架 Skill 清理检查失败（不影响安装结果）: {exc}[/yellow]")
 
     _console.print()
+    # 汇总明确区分全部目标跳过的 Skill，避免把重复调用当作新安装。
+    skipped_count = sum(
+        bool(item.get("installed_paths")) and all(path.get("skipped", False) for path in item["installed_paths"])
+        for item in all_results
+    )
     if errors:
-        _console.print(f"[yellow]完成：{len(all_results)} 个成功，{len(errors)} 个失败[/yellow]")
+        _console.print(f"[yellow]完成：{len(all_results) - skipped_count} 个成功，{skipped_count} 个跳过，{len(errors)} 个失败[/yellow]")
         payload = {
             "success": False,
             "command": "skills install",
@@ -873,7 +890,7 @@ def _install_interactive(
             _emit(payload, pretty)
         raise typer.Exit(1)
     else:
-        _console.print(f"[green]全部安装完成：{len(all_results)} 个成功，0 个失败[/green]")
+        _console.print(f"[green]全部安装完成：{len(all_results) - skipped_count} 个成功，{skipped_count} 个跳过，0 个失败[/green]")
         payload = {
             "success": True,
             "command": "skills install",
@@ -1290,6 +1307,73 @@ def list_excludes(
         border_style="yellow",
     ))
     _console.print(f"[dim]共 {len(items)} 个技能被排除在自动同步之外[/dim]")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# hooks 子命令组
+# ══════════════════════════════════════════════════════════════════════════════
+
+@hooks_app.command("status")
+def hooks_status(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """查看用户级 Codex Hook 的 canonical 配置、重复项和 Runner 路径。"""
+    from opscli.skills.hooks.settings_injector import codex_hook_status
+
+    _emit({"success": True, "command": "skills hooks status", "data": codex_hook_status(), "error": None}, pretty)
+
+
+@hooks_app.command("install")
+def hooks_install(
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """安装或修复 opscli 的 Claude/Codex 使用上报 Hook。"""
+    from opscli.skills.hooks.settings_injector import codex_hook_status, ensure_skill_usage_hook
+
+    try:
+        ensure_skill_usage_hook()
+        payload = {"success": True, "command": "skills hooks install", "data": codex_hook_status(), "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks install", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
+
+
+@hooks_app.command("migrate")
+def hooks_migrate(
+    apply: bool = typer.Option(False, "--apply", help="实际写入迁移结果；默认仅预览"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """预览或执行用户级 Codex Hook 单表示迁移。"""
+    from opscli.skills.hooks.settings_injector import migrate_codex_hooks
+
+    try:
+        data = migrate_codex_hooks(dry_run=not apply)
+        payload = {"success": True, "command": "skills hooks migrate", "data": data, "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks migrate", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
+
+
+@hooks_app.command("rollback")
+def hooks_rollback(
+    backup_dir: str = typer.Argument(..., help="skills hooks migrate 生成的备份目录"),
+    pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
+):
+    """从指定迁移备份恢复用户级 Codex Hook 配置。"""
+    from opscli.skills.hooks.settings_injector import rollback_codex_hooks
+
+    try:
+        data = rollback_codex_hooks(backup_dir)
+        payload = {"success": True, "command": "skills hooks rollback", "data": data, "error": None}
+    except Exception as exc:
+        payload = {"success": False, "command": "skills hooks rollback", "data": None, "error": error_to_dict(exc)}
+        _emit(payload, pretty)
+        raise typer.Exit(1)
+    _emit(payload, pretty)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1802,13 +1886,14 @@ def install_skill(
         "--runtime",
         help="只安装到指定运行时：claude、openclaw、codex、auwork、all，或逗号分隔多个值；与 --skills-dir 同传时被忽略",
     ),
-    force: bool = typer.Option(False, "--force", help="覆盖已存在目录"),
+    force: bool = typer.Option(False, "--force", help="覆盖已存在目录（默认跳过）"),
     yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认，自动全选所有 Skills 和检测到的 AI 工具"),
     version: str | None = typer.Option(None, "--version", help="安装指定版本（仅远程安装有效）"),
     sync_market: bool = typer.Option(False, "--sync-market", help="从市场安装记录同步：补装缺失 + 升级旧版"),
     dry_run: bool = typer.Option(False, "--dry-run", help="仅预览同步计划，不实际安装（需配合 --sync-market）"),
     share_code: str | None = typer.Option(None, "--share-code", help="分享码，绕过 personal/department 权限限制安装广场技能"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="输出每个安装目标的逐条日志（默认仅输出汇总）"),
+    install_hook: bool = typer.Option(True, "--hook/--no-hook", help="是否确保全局 Skill 使用上报 Hook；--skills-dir 隔离安装始终不写全局 Hook"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
     """安装 Skill 到本地目录。
@@ -1817,6 +1902,7 @@ def install_skill(
     - 不指定 NAME 时进入 TUI 交互模式，可多选 Skills 和安装目标。
     - NAME 不含 @ 时从内置模板安装（如 ops-auth）。
     - NAME 含 @ 时从技能广场远程安装（如 pengjianchao@ops-auth）。
+    - 已安装时默认跳过，--force 显式覆盖；缺失的运行时链接仍会补齐。
     - --sync-market 从市场安装记录同步，补装缺失 + 升级旧版（不能与 NAME 同时使用）。
     - --dry-run 配合 --sync-market 仅预览同步计划，不实际安装。
 
@@ -1858,6 +1944,7 @@ def install_skill(
             runtime=runtime,
             dry_run=dry_run,
             pretty=pretty,
+            install_hook=install_hook,
         )
         return
 
@@ -1878,18 +1965,20 @@ def install_skill(
                 yes=yes,
                 pretty=pretty,
                 verbose=verbose,
+                install_hook=install_hook,
             )
             return
 
-        # 远程广场安装（标识符含 @）；远程安装默认直接覆盖，无需 --force
+        # 远程广场安装也遵循显式覆盖规则。
         if "@" in name:
             payload = install_remote_skill(
                 identifier=name,
                 version=version,
                 skills_dir=skills_dir,
                 runtime=runtime,
-                force=True,
+                force=force,
                 share_code=share_code,
+                install_hook=install_hook and not bool(skills_dir),
             )
             _emit(payload, pretty)
             if not payload.get("success"):
@@ -1907,6 +1996,7 @@ def install_skill(
             skills_dir=skills_dir,
             runtime=resolved_runtime,
             force=force,
+            install_hook=install_hook and not bool(skills_dir),
         )
         # CLI 层统一注入铁律：仅安装 ops-feedback 时触发
         if name == "ops-feedback" and not skills_dir:

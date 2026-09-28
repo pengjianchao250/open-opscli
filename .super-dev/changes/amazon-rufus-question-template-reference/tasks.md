@@ -4,13 +4,13 @@
 
 - [x] 1.1 创建 `.super-dev/changes/amazon-rufus-question-template-reference/proposal.md`。
 - [x] 1.2 创建 `.super-dev/changes/amazon-rufus-question-template-reference/tasks.md`。
-- [x] 1.3 新增 `opscli/skills/templates/ops-amazon-rufus/references/question-templates.md`。
+- [x] 1.3 新增 `opscli/skills/templates/ops-amazon-rufus-or-alexa/references/question-templates.md`。
 
 ## 2. 主文档收敛
 
-- [x] 2.1 更新 `opscli/skills/templates/ops-amazon-rufus/README.md`，把问题模板细节收敛到新 reference。
-- [x] 2.2 更新 `opscli/skills/templates/ops-amazon-rufus/SKILL.md`，在数据文件章节指向新 reference。
-- [x] 2.3 保留 `opscli skills upgrade ops-amazon-rufus` 和本地题库路径说明。
+- [x] 2.1 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/README.md`，把问题模板细节收敛到新 reference。
+- [x] 2.2 更新 `opscli/skills/templates/ops-amazon-rufus-or-alexa/SKILL.md`，在数据文件章节指向新 reference。
+- [x] 2.3 保留 `opscli skills upgrade ops-amazon-rufus-or-alexa` 和本地题库路径说明。
 
 ## 3. 验证
 

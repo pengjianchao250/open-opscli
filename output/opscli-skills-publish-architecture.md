@@ -91,14 +91,14 @@ flowchart TD
     Upgrade["opscli skills upgrade"] --> Discover["扫描已安装 Skill"]
     Discover --> Supported{"是否支持远端升级"}
     Supported -->|ops-dataset-query| FetchData["fetch_upgrade_data"]
-    Supported -->|ops-amazon-rufus| FetchRufus["upgrade_ops_amazon_rufus"]
+    Supported -->|ops-amazon-rufus-or-alexa| FetchRufus["upgrade_ops_amazon_rufus"]
     Supported -->|其他| Error["暂不支持升级"]
     FetchData --> Dedup["按 root.resolve 去重"]
     Dedup --> AtomicWrite["临时目录写入 + 原子替换"]
     FetchRufus --> AtomicWrite
 ```
 
-当前 `status()` 只对 `ops-dataset-query` 补远端 manifest 摘要；`upgrade()` 明确限制在 `ops-dataset-query` 和 `ops-amazon-rufus`。
+当前 `status()` 只对 `ops-dataset-query` 补远端 manifest 摘要；`upgrade()` 明确限制在 `ops-dataset-query` 和 `ops-amazon-rufus-or-alexa`。
 
 ## 数据模型
 

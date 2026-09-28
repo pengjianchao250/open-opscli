@@ -2,11 +2,11 @@
 
 ## 背景
 
-`ops-amazon-rufus` 依赖对应国家站点的 Amazon 浏览器登录态。当前 Skill 文档已说明前置登录要求，但安装成功输出没有直接提示；`amazon-rufus get` 未捕获 `/rufus/cl/streaming` 时，也没有明确告诉用户执行 `opscli amazon-rufus init <country>`。
+`ops-amazon-rufus-or-alexa` 依赖对应国家站点的 Amazon 浏览器登录态。当前 Skill 文档已说明前置登录要求，但安装成功输出没有直接提示；`amazon-rufus get` 未捕获 `/rufus/cl/streaming` 时，也没有明确告诉用户执行 `opscli amazon-rufus init <country>`。
 
 ## 目标
 
-1. `opscli skills install ops-amazon-rufus` 成功后，在 JSON `data` 中提供 Amazon 登录前置提示。
+1. `opscli skills install ops-amazon-rufus-or-alexa` 成功后，在 JSON `data` 中提供 Amazon 登录前置提示。
 2. 安装提示必须包含 `opscli amazon-rufus init <country>`。
 3. `amazon-rufus get` 未捕获 `/rufus/cl/streaming` 时，错误信息必须提示执行 `opscli amazon-rufus init <country>` 并登录后重试。
 4. 保持现有顶层 JSON 契约、错误码和退出码不变。
@@ -30,7 +30,7 @@ def _with_post_install_guidance(data: dict, skill_name: str) -> dict:
     ...
 ```
 
-该 helper 只在 `skill_name == "ops-amazon-rufus"` 时追加：
+该 helper 只在 `skill_name == "ops-amazon-rufus-or-alexa"` 时追加：
 
 - `requires_amazon_login: true`
 - `next_steps: [...]`
@@ -49,8 +49,8 @@ def _with_post_install_guidance(data: dict, skill_name: str) -> dict:
 
 ## 验收标准
 
-1. 安装 `ops-amazon-rufus` 的 JSON `data.requires_amazon_login` 为 `true`。
-2. 安装 `ops-amazon-rufus` 的 `data.next_steps` 包含 `opscli amazon-rufus init <country>`。
+1. 安装 `ops-amazon-rufus-or-alexa` 的 JSON `data.requires_amazon_login` 为 `true`。
+2. 安装 `ops-amazon-rufus-or-alexa` 的 `data.next_steps` 包含 `opscli amazon-rufus init <country>`。
 3. 安装其他 Skill 不包含 `requires_amazon_login`。
 4. 交互安装结果同样包含 Rufus 登录提示。
 5. 未捕获 streaming 的错误信息包含 `opscli amazon-rufus init US`。

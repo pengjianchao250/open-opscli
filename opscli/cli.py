@@ -1,46 +1,153 @@
 ﻿"""opscli 顶级 CLI 入口。
 
 基于 Typer 框架，注册所有子模块命令组（auth、skills 等）。
+
+子命令懒加载：注册表只登记 (命令名, 模块路径, help)，懒加载代理在顶级
+Group 构造时放入 commands 字典（代理本身零导入），顶级 --help 渲染不触发
+任何子模块导入；子命令首次分发（执行/--help/补全）时代理才导入真实模块。
+动机：正式 wheel 为 Cython 编译，升级后每个 .so 首次 dlopen 需过 macOS
+安全评估（数百 ms/个），急切导入全部子命令会把 `opscli -V` 这类轻量命令
+拖到 30~90s。详见 docs/plans/CLI子命令懒加载方案.md。
 """
+import importlib
+import importlib.util
 import sys
 import time
 
 import typer
-from opscli.app.cli import app as apphub_app
-from opscli.amazon.cli import app as amazon_app
-from opscli.amazon_rufus.cli import app as amazon_rufus_app
-from opscli.api_credentials.cli import app as api_credentials_app
-from opscli.asin_data.cli import app as asin_data_app
-from opscli.auth.cli import app as auth_app
-from opscli.baiyi.cli import app as baiyi_app
-from opscli.calculator.cli import app as calculator_app
-from opscli.canopy.cli import app as canopy_app
-from opscli.canopy_debug.cli import app as canopy_debug_app
-from opscli.collector_monitor.cli import app as collector_monitor_app
-from opscli.feedback.cli import app as feedback_app
-from opscli.feedtask.cli import app as feedtask_app
-from opscli.google_trends.cli import app as google_trends_app
-from opscli.google_trends_debug.cli import app as google_trends_debug_app
-from opscli.keepa.cli import app as keepa_app
-from opscli.keepa_debug.cli import app as keepa_debug_app
-from opscli.mcp.cli import app as mcp_app
-# from opscli.methods_card.cli import app as methods_card_app
-from opscli.notify.cli import app as notify_app
-from opscli.query.cli import app as query_app
-from opscli.scrape_do.cli import app as scrape_do_app
-from opscli.shopify.cli import app as shopify_app
-from opscli.seller_sprite.cli import app as seller_sprite_app
-from opscli.seller_sprite_debug.cli import app as seller_sprite_debug_app
-from opscli.sif.cli import app as sif_app
-from opscli.skills.cli import app as skills_app
+from typer.core import TyperGroup
+
 from opscli.version import get_version
 
-try:
-    from opscli.asin_review.cli import app as asin_review_app
-except ModuleNotFoundError as exc:
-    if exc.name != "opscli.asin_review":
-        raise
-    asin_review_app = None
+# ============================================================================
+# 子命令注册表（铁律1：新增子模块只需在此追加一行）
+# 元组：(命令名, 子模块 cli 路径, help 文案)
+# - 顺序即 `opscli --help` 的 Commands 列表顺序（self-update 等直属命令排最前）
+# - help 必须与该子模块 typer.Typer(help=...) 逐字一致，
+#   由 tests/test_cli_lazy_loading.py 的注册表一致性测试守护
+# - 已停用命令保留注释备查（不进注册表）：canopy-debug / shopify /
+#   google-trends-debug / keepa-debug / seller-sprite-debug / sif / methods-card
+# ============================================================================
+_SUBCOMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("auth", "opscli.auth.cli", "认证授权管理"),
+    ("app", "opscli.app.cli", "管理 AppHub 应用、Git 仓库、本地开发预览和源码推送"),
+    ("api-credentials", "opscli.api_credentials.cli", "统一管理 SerpAPI、Canopy、scrape.do、Keepa 和西柚的多账号 API Key。"),
+    ("amazon", "opscli.amazon.cli", "Amazon 商品抓取与 ops 提交通道"),
+    ("amazon-rufus", "opscli.amazon_rufus.cli", "Amazon Rufus 自动问答采集"),
+    ("asin-data", "opscli.asin_data.cli", "ASIN 批量取数服务"),
+    ("calculator", "opscli.calculator.cli", "新品计算器"),
+    ("asin-review", "opscli.asin_review.cli", "复盘 ASIN 数据查询"),
+    ("canopy", "opscli.canopy.cli", "Canopy 远端 MCP 正式命令面。"),
+    ("collector-monitor", "opscli.collector_monitor.cli", "只读查看 Collector Monitor 状态。"),
+    ("query", "opscli.query.cli", "数据查询入口，统一转发远端查询请求"),
+    ("scrape-do", "opscli.scrape_do.cli", "Scrape.do Amazon Scraper 远端 MCP 正式命令面。"),
+    ("feedback", "opscli.feedback.cli", "用户反馈提交与查询"),
+    ("notify", "opscli.notify.cli", "发送企业微信等内部通知"),
+    ("feedtask", "opscli.feedtask.cli", "通用工单管理"),
+    ("google-trends", "opscli.google_trends.cli", "Google Trends 正式场景与本地运维命令。"),
+    ("keepa", "opscli.keepa.cli", "Keepa 远端 MCP 正式命令面。"),
+    ("seller-sprite", "opscli.seller_sprite.cli", "卖家精灵远端 MCP 正式命令面。"),
+    ("skills", "opscli.skills.cli", "Skill 生命周期管理"),
+    ("mcp", "opscli.mcp.cli", "MCP Server 管理"),
+    ("baiyi", "opscli.baiyi.cli", "佰易产品数据查询"),
+)
+
+_SUBCOMMAND_MAP: dict[str, tuple[str, str]] = {
+    name: (module_path, help_text) for name, module_path, help_text in _SUBCOMMANDS
+}
+
+
+def _is_subcommand_available(name: str) -> bool:
+    """可选子命令探测：asin-review 缺包时静默不注册（等价于旧 try/except 行为）。
+
+    find_spec 只查找不执行子模块；父包 opscli 此时已加载，无额外导入开销。
+    """
+    if name == "asin-review":
+        return importlib.util.find_spec("opscli.asin_review") is not None
+    return True
+
+
+class LazyGroupProxy(TyperGroup):
+    """子命令组的懒加载代理。
+
+    构造时零导入，只携带 name/help 供顶级 --help 的 Commands 面板渲染与
+    命令名建议；首次真正分发（make_context/invoke/子级 --help/参数补全等）
+    时导入真实子模块，交给 typer.main.get_group 转成 click Group 并全量委托。
+    子模块自身的定制（no_args_is_help 等）因委托真实对象而完整保留。
+    """
+
+    def __init__(self, name: str, module_path: str, help_text: str) -> None:
+        super().__init__(name=name, help=help_text)
+        self._module_path = module_path
+        self._real_group: TyperGroup | None = None
+
+    def _materialize(self) -> TyperGroup:
+        if self._real_group is None:
+            module = importlib.import_module(self._module_path)
+            self._real_group = typer.main.get_group(module.app)
+        return self._real_group
+
+    def __getattr__(self, item: str):
+        # 构造期/拷贝期的未知属性（含 dunder 探测）不得触发子模块导入
+        if item.startswith("__") or item in {"_real_group", "_module_path"}:
+            raise AttributeError(item)
+        return getattr(self._materialize(), item)
+
+    # ---- 以下覆写均为"先物化、再委托" ----
+    def make_context(self, info_name, args, **extra):
+        return self._materialize().make_context(info_name, args, **extra)
+
+    def invoke(self, ctx):
+        return self._materialize().invoke(ctx)
+
+    def get_command(self, ctx, cmd_name):
+        return self._materialize().get_command(ctx, cmd_name)
+
+    def list_commands(self, ctx):
+        return self._materialize().list_commands(ctx)
+
+    def get_params(self, ctx):
+        return self._materialize().get_params(ctx)
+
+    def get_help(self, ctx):
+        return self._materialize().get_help(ctx)
+
+    def format_help(self, ctx, formatter):
+        return self._materialize().format_help(ctx, formatter)
+
+    def get_usage(self, ctx):
+        return self._materialize().get_usage(ctx)
+
+    def shell_complete(self, ctx, incomplete):
+        return self._materialize().shell_complete(ctx, incomplete)
+
+
+_LAZY_PROXIES: dict[str, LazyGroupProxy] = {}
+
+
+def _get_lazy_proxy(name: str) -> LazyGroupProxy:
+    proxy = _LAZY_PROXIES.get(name)
+    if proxy is None:
+        module_path, help_text = _SUBCOMMAND_MAP[name]
+        proxy = LazyGroupProxy(name=name, module_path=module_path, help_text=help_text)
+        _LAZY_PROXIES[name] = proxy
+    return proxy
+
+
+class LazyTyperGroup(TyperGroup):
+    """顶级命令组：构造时把注册表的懒加载代理放入 commands 字典。
+
+    不覆写 list_commands/get_command/resolve_command——代理已注册进
+    commands，顶级 --help 的命令列表、"Did you mean" 建议、补全等全部
+    复用 click/typer 原生实现，避免耦合不同 typer 版本（真实 click 与
+    内置 _click 后端）的内部类层次。
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        for name in _SUBCOMMAND_MAP:
+            if _is_subcommand_available(name):
+                self.commands[name] = _get_lazy_proxy(name)
 
 
 def _version_callback(value: bool):
@@ -50,38 +157,7 @@ def _version_callback(value: bool):
         raise typer.Exit()
 
 
-app = typer.Typer(help="Aukeys 运营 CLI 工具集")
-
-# 模块注册：每新增一个子模块只需在此追加一行（铁律1）
-app.add_typer(auth_app, name="auth")
-app.add_typer(apphub_app, name="app")
-app.add_typer(api_credentials_app, name="api-credentials")
-app.add_typer(amazon_app, name="amazon")
-app.add_typer(amazon_rufus_app, name="amazon-rufus")
-app.add_typer(asin_data_app, name="asin-data")
-app.add_typer(calculator_app, name="calculator")
-if asin_review_app is not None:
-    app.add_typer(asin_review_app, name="asin-review")
-app.add_typer(canopy_app, name="canopy")
-# app.add_typer(canopy_debug_app, name="canopy-debug")
-app.add_typer(collector_monitor_app, name="collector-monitor")
-app.add_typer(query_app, name="query")
-app.add_typer(scrape_do_app, name="scrape-do")
-# app.add_typer(shopify_app, name="shopify")
-app.add_typer(feedback_app, name="feedback")
-app.add_typer(notify_app, name="notify")
-app.add_typer(feedtask_app, name="feedtask")
-app.add_typer(google_trends_app, name="google-trends")
-# app.add_typer(google_trends_debug_app, name="google-trends-debug")
-app.add_typer(keepa_app, name="keepa")
-# app.add_typer(keepa_debug_app, name="keepa-debug")
-app.add_typer(seller_sprite_app, name="seller-sprite")
-# app.add_typer(seller_sprite_debug_app, name="seller-sprite-debug")
-# app.add_typer(sif_app, name="sif")
-# app.add_typer(methods_card_app, name="methods-card")
-app.add_typer(skills_app, name="skills")
-app.add_typer(mcp_app, name="mcp")
-app.add_typer(baiyi_app, name="baiyi")
+app = typer.Typer(help="Aukeys 运营 CLI 工具集", cls=LazyTyperGroup)
 
 
 @app.command("self-update")

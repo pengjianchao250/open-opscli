@@ -162,7 +162,7 @@
 <rect x="1104.5125000000003" y="3954.4500000000007" width="511.05" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
 <rect x="2417.0000000000005" y="132.22500000000002" width="67.75" height="36" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
 <text x="570.2000000000004" y="2314.9500000000003" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">用户提出 Rufus / Listing 问答需求</text>
-<text x="570.2000000000004" y="2390.9500000000003" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;读取 ops-amazon-rufus/SKILL.md 与 reference&quot;</text>
+<text x="570.2000000000004" y="2390.9500000000003" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;读取 ops-amazon-rufus-or-alexa/SKILL.md 与 reference&quot;</text>
 <text x="570.2000000000004" y="2519.8500000000004" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;解析 ASIN、country、question/questions&quot;</text>
 <text x="570.2000000000004" y="2665.7500000000005" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;初始化本轮状态&lt;br/&gt;login_recovery_attempted = false&quot;</text>
 <text x="570.2000000000004" y="2994.8500000000004" text-anchor="middle" dy="0.35em" font-size="13" font-weight="500" fill="var(--_text)">&quot;问题来源？&quot;</text>

@@ -1,20 +1,20 @@
 ---
 name: ops-app-build-spec
-description: AppHub 模板看板项目的开发规范。创建、开发、排错、评审、模板迁移重构或推送源码时使用，约束前端维护、项目边界和源码交付；按任务读取相关后端与数据规范。
+description: AppHub 模板看板项目的开发规范。创建、开发、排错、评审、源码复制迁移或推送源码时使用，约束前端维护、项目边界和源码交付；按任务读取相关后端与数据规范。
 ---
 
 # OPS 应用模板开发
 
 统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`master`。模板提供应用代码和发布资产，Skill 维护跨项目开发规则；不另建脚手架。
 
-本 Skill 中“站点”和“看板”含义相同，均指完整的 AppHub 应用项目；正文统一优先使用“看板”。“迁移”统一指基于当前统一模板审计旧看板业务能力，并在目标看板中按现行规范重新实现，即模板基础上的迁移重构，不指复制源码、搬运目录或继续扩建旧框架。
+本 Skill 中“站点”和“看板”含义相同，均指完整的 AppHub 应用项目；正文统一优先使用“看板”。“新建”继续使用模板克隆流程；“迁移”专指源码复制迁移流程，不复制模板、不执行完整重构、不在源目录修改业务源码。迁移目标必须是与源目录隔离的新目录，迁移后的源码尽可能保持原样，仅新增迁移标识、AppHub/Git 元数据、启动脚本和必要的本地忽略规则。
 
 ## Git 基础门禁
 
 调用本 Skill 后第一步执行 `opscli app ensure-git --check --json`，在读取、创建或修改业务项目之前确认 Git 路径、版本、系统和原生架构。Git 正常时静默继续。
 
 - 纯规范咨询、方案讨论和不访问本地项目的任务只检测，不安装软件或申请权限。
-- 新建、迁移重构、模板克隆、仓库初始化、Git 状态或历史读取、提交和推送任务在 `ready=false` 时读取 [Git 环境规范](references/git-environment-standard.md)，执行 `opscli app ensure-git --install --json`。
+- 新建、源码复制迁移、模板克隆、仓库初始化、Git 状态或历史读取、提交和推送任务在 `ready=false` 时读取 [Git 环境规范](references/git-environment-standard.md)，执行 `opscli app ensure-git --install --json`。
 - `elevation_required` 时由当前宿主申请权限后重试；`user_confirmation_required` 时等待用户完成系统安装界面后重新检测。不得由脚本绕过 UAC、Apple 系统许可或宿主审批。
 - Git 门禁未通过时停止，不创建目录、AppHub 应用或 binding，不修改业务源码。
 
@@ -33,7 +33,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 | 后端调用 opscli SDK 或 REST                | [opscli 接入规范](references/opscli-integration-standard.md)                             |
 | 页面需要真实业务数据                       | [数据访问规范](references/data-access-standard.md)，按其要求使用 `$ops-app-data-builder` |
 | Git 检测、安装、权限申请或环境排错         | [Git 环境规范](references/git-environment-standard.md)                                   |
-| 已有看板迁移重构或补齐后端规范             | [迁移规范](references/migration-standard.md)                                             |
+| 源码复制迁移或迁移后补齐运行规范             | [迁移规范](references/migration-standard.md)                                             |
 | 创建应用、绑定仓库、提交源码或检查交付条件 | [源码交付规范](references/deployment-standard.md)                                        |
 
 首次接手或相关文件变化时，读取项目 `AGENTS.md`、`README.md` 和 `docs/apphub-contract.md`；进入子目录时读取适用的项目规则。后端改动与接口变化再核对 `backend/CLAUDE.md`、受影响路由、Pydantic Schema 和 OpenAPI；纯样式改动不额外读取后端全文。普通开发不读取 `assets/backend/` 中的全文规范。
@@ -42,21 +42,16 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 
 - **新建看板**：目标目录不存在或为空，按“新项目”流程完成模板拉取、Git 脱离、应用创建和业务仓库初始化，之后再开发业务。
 - **已有合规模板看板开发**：项目已满足当前模板合同，直接在现有项目开发，不重复拉取模板、创建应用或初始化仓库。
-- **已有看板迁移重构**：旧看板源码只读，目标看板必须是已核验或按“新项目”流程准备完成的模板项目；读取迁移规范，先建立业务能力基线，再在模板架构内重新实现。
+- **源码复制迁移**：用户表达迁移、搬迁或复制已有项目意图时，必须读取 [迁移规范](references/migration-standard.md)，使用独立目标目录执行源码复制迁移；不得自动切换到新建模板流程，也不得在源目录或目标目录执行完整重构。
 
-### 迁移状态机门禁
+### 源码复制迁移门禁
 
-明确执行已有看板迁移重构时，必须使用 `opscli app migrate` 保存机器可读状态，不能只在对话或临时 Markdown 中维护步骤：
-
-1. 执行 `opscli app migrate init --source "<legacy-project>" --target "<target-project>" --json`，校验旧项目只读边界和目标模板合同，并生成审计快照、覆盖矩阵、UI 蓝图和迁移文档。
-2. 读取 `.opscli/migration/current.json` 指向的 `coverage-matrix.json`、`ui-blueprint.json` 和 `audit-snapshot.json`，把候选证据整理成逐页逐模块覆盖项；候选文件数量不能当作迁移完成度。
-3. 先一比一还原导航、路由、页面区域、模块顺序、父子层级、栅格与页面状态。执行 `opscli app migrate verify-ui --target "<target-project>" --json` 通过前，不开始真实数据接入。
-4. UI 门禁通过后，使用 `$ops-app-data-builder` 逐个处理 `dynamic=true` 的模块，并把数据合同状态和证据回写覆盖矩阵。
-5. 数据接入完成后依次执行 `opscli app migrate verify-data --target "<target-project>" --json` 和 `opscli app migrate verify-release --target "<target-project>" --json`；任一门禁失败时按 `detail.problems` 补齐，不绕过状态机宣布完成。
-6. 最终回复前执行 `opscli app migrate status --target "<target-project>" --json`；只有 `phase=complete` 且 `delivery_ready=true` 才能使用“迁移完成”或“已交付”。其他阶段第一段必须明确写“当前为阶段性预览，尚未交付”，并报告 `next_required_gate`、未完成动态项和阻塞项。
-
-迁移状态统一使用 `待实施`、`部分完成`、`已完成`、`blocked`、`deferred_attachment`。一个模块只有在 UI 布局、真实数据合同、业务交互、页面状态和验收证据全部完成后才能标记为 `已完成`。每完成一个模块立即更新覆盖矩阵并执行 `opscli app migrate export --target "<target-project>" --json`，不要在任务末尾一次性补写。
-
+1. 明确源项目目录和迁移目标根目录；目标未明确时由 `opscli app migrate start` 在当前对话目录创建 `app-hub-source-时间戳`。
+2. 执行 `opscli app migrate start --source "<source-project>" [--target-root "<target-root>"] --json`，命令完成源码复制、迁移标识、AppHub create 和 Git init。
+3. 通过 `opscli app migrate status --target "<target-project>" --json` 查看状态；通过 `opscli app migrate verify --target "<target-project>" --json` 验证源目录未变更、目标隔离、复制清单、启动清单、Git 和绑定状态。
+4. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；未知启动方式允许完成迁移，但必须标记 `startup_manual_required`。
+5. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
+6. 迁移项目推送仍使用 `opscli app push`，但只走迁移专用门禁；普通新建项目继续使用原有 `app create/init/push` 逻辑。
 ### AppHub 真实取数交付门禁
 
 页面需要 OPS、Keepa 或 SellerSprite 数据时，必须委托 `$ops-app-data-builder` 完成“需求识别 → 正式查询尝试 → 合同固化 → 业务 API/页面接入”的闭环。业务范围已经足够明确时，不得因为用户没有提供 dataset、field、scenario 或轮询参数而停止；这些技术细节由对应查询 Skill 验证并回填。
@@ -138,7 +133,7 @@ Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功�
 - 只修改当前业务需要的代码，保留用户已有修改和模板基础能力。
 - 不读取、输出或提交真实密钥、本地数据库和业务数据文件。
 - 用户未授权时，不安装依赖、启动服务、执行数据库写入、提交、推送或部署。
-- 迁移重构开始前按迁移规范记录项目身份、模板合同、业务能力基线、迁移风险、未识别项和预计文件变更。
+- 源码复制迁移开始前按迁移规范确认源/目标目录、迁移标识、复制清单、启动扫描和预计元数据变更；不建立模板重构覆盖矩阵。
 - 涉及真实数据时记录数据用途、现有数据源、调用路径、前端直连或凭证风险，以及第三方原始数据、异步任务和用户私有加工结果的分层情况。
 ## 验证与源码交付
 
@@ -166,11 +161,11 @@ Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功�
 
 ## 错误与输出
 
-模板克隆或 Git 清理失败时保留原始错误并停止后续初始化；合同无法核实时保留已验证部分，不伪造实现。迁移重构无法确认业务行为或目标看板不满足模板门禁时保持旧看板只读并停止目标实现。
+模板克隆或 Git 清理失败时保留原始错误并停止新建流程；合同无法核实时保留已验证部分，不伪造实现。源码复制迁移无法完成复制、身份、启动或 Git 门禁时保留源目录只读，报告失败状态，不改写业务源码。
 
 `opscli` CLI 或相关 MCP 工具失败时，立即按 `ops-feedback` 规范提交结构化反馈并返回 `feedback_uuid`；认证未授权、用户取消和五分钟内已反馈的同一错误除外。
 
-先判断目标是否已经符合模板合同。需要迁移重构时读取唯一的迁移规范，在独立模板项目中重新实现业务能力；旧看板保持只读和可回退，不复制旧源码或旧架构。
+先判断用户意图是新建、已有项目开发还是源码复制迁移。源码复制迁移时读取唯一的迁移规范，在独立目标目录复制源码并最小适配；源目录保持只读，不自动重构业务源码。
 
 ## 提交与部署
 
@@ -222,7 +217,7 @@ database:
 
 首次源码交付前确认根目录存在 schema v4 的 `.opscli/app.json`，binding 和 `app.yaml` 中的 `app_id` 均严格匹配 `^[0-9A-Za-z]{5}$`、大小写完全一致，`default_branch` 固定为 `master`，且 `app.yaml` 不含顶层 `name`。slug、仓库、Owner 和 Git 信息只保留在本地 binding；`.gitignore` 必须忽略 `.opscli/`。
 
-已有看板迁移重构时按计划补齐目标项目的根级资产；全新模板缺少这些必需资产时报告模板问题，不静默复制另一套基线：
+新建或标准模板项目缺少以下根级资产时报告模板问题，不静默复制另一套基线；源码复制迁移不因该模板资产清单改写原业务源码：
 
 - `assets/nixpacks.toml` → `nixpacks.toml`
 - `assets/Dockerfile` → `Dockerfile`

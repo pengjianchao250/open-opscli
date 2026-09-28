@@ -5,7 +5,7 @@
 - [x] 增加 CLI `get` 报告文件落地的失败测试。
 - [x] 实现报告文件命名、目录创建和 UTF-8 写入。
 - [x] 调整旧 CLI stdout 断言，确保 stdout 只输出保存路径。
-- [x] 更新 `ops-amazon-rufus` Skill 文档与 README。
+- [x] 更新 `ops-amazon-rufus-or-alexa` Skill 文档与 README。
 - [x] 运行 `tests/amazon_rufus/test_core.py` 验证。
 
 ## 质量约束
