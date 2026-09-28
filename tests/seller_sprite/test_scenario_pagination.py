@@ -1,10 +1,14 @@
 """卖家精灵普通 JSON 场景分页合同测试。"""
 
+import asyncio
+import time
+
 import pytest
 
 from opscli.seller_sprite.api.scenarios import get_scenario
-from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError, SellerSpriteTaskTimeoutError
 from opscli.seller_sprite.services.scenario_pagination import (
+    ScenarioPagination,
     get_pagination_contract,
 )
 
@@ -82,13 +86,157 @@ def test_traffic_source_accepts_pager_total_without_page_validation() -> None:
 def test_unknown_scenario_is_rejected() -> None:
     """未核验场景不能静默套用普通 JSON 合同。"""
     with pytest.raises(SellerSpriteConfigError, match="尚未注册分页合同"):
-        get_pagination_contract("market-research")
+        get_pagination_contract("listing-analysis")
 
 
 def test_invalid_rows_are_rejected() -> None:
     """缺少场景 rows 路径时必须失败。"""
     with pytest.raises(SellerSpriteConfigError, match="data.items"):
         get_pagination_contract("keyword-miner").parse({"data": {"items": None}})
+
+
+def test_scenario_pagination_caps_at_2000_and_writes_pages(tmp_path) -> None:
+    contract = get_pagination_contract("keyword-miner")
+    saved = []
+    collector = ScenarioPagination(
+        root=tmp_path,
+        task_root=tmp_path,
+        account_key="account-a",
+        request_identity={"q": "x"},
+        payload={"keyword": "x"},
+        contract=contract,
+        page_size=100,
+        timeout_seconds=30,
+        save_checkpoint=lambda value: saved.append(value.copy()),
+    )
+
+    async def fetch(payload, page_root):
+        page = payload["pageNum"]
+        return {
+            "data": {
+                "items": [
+                    {"keyword": f"kw-{index}"}
+                    for index in range((page - 1) * 100, page * 100)
+                ],
+                "total": 2500,
+            }
+        }
+
+    asyncio.run(collector.collect(fetch))
+    summary = collector.summary()
+    assert summary["pages_completed"] == 20
+    assert summary["rows_written"] == 2000
+    assert summary["coverage"] == "source_limited"
+    assert summary["stop_reason"] == "access_limit"
+    assert len(list(collector.iter_rows())) == 2000
+    assert (tmp_path / "pages" / "page-020.json").exists()
+    assert saved[-1]["collection"]["rows_written"] == 2000
+
+
+def test_scenario_pagination_never_exports_more_than_2000_with_partial_last_page(tmp_path) -> None:
+    contract = get_pagination_contract("keyword-miner")
+    collector = ScenarioPagination(
+        root=tmp_path,
+        task_root=tmp_path,
+        account_key="account-a",
+        request_identity={"q": "x"},
+        payload={"keyword": "x"},
+        contract=contract,
+        page_size=60,
+        timeout_seconds=30,
+    )
+
+    async def fetch(payload, page_root):
+        page = payload["pageNum"]
+        return {
+            "data": {
+                "items": [{"keyword": f"kw-{index}"} for index in range((page - 1) * 60, page * 60)],
+                "total": 2500,
+            }
+        }
+
+    asyncio.run(collector.collect(fetch))
+    assert collector.summary()["rows_written"] == 2000
+    assert len(list(collector.iter_rows())) == 2000
+
+
+def test_scenario_pagination_resume_rejects_changed_account(tmp_path) -> None:
+    contract = get_pagination_contract("keyword-miner")
+    collector = ScenarioPagination(
+        root=tmp_path,
+        task_root=tmp_path,
+        account_key="account-a",
+        request_identity={"q": "x"},
+        payload={"keyword": "x"},
+        contract=contract,
+        page_size=100,
+        timeout_seconds=30,
+    )
+    checkpoint = collector.state
+    checkpoint["pages"] = [{"page": 1, "path": "pages/page-001.json", "sha256": "bad", "row_count": 1}]
+    with pytest.raises(SellerSpriteConfigError, match="不能切换账号"):
+        ScenarioPagination(
+            root=tmp_path,
+            task_root=tmp_path,
+            account_key="account-b",
+            request_identity={"q": "x"},
+            payload={"keyword": "x"},
+            contract=contract,
+            page_size=100,
+            timeout_seconds=30,
+            checkpoint=checkpoint,
+        )
+
+
+def test_scenario_pagination_timeout_persists_checkpoint(tmp_path) -> None:
+    contract = get_pagination_contract("keyword-miner")
+    collector = ScenarioPagination(
+        root=tmp_path,
+        task_root=tmp_path,
+        account_key="account-a",
+        request_identity={"q": "x"},
+        payload={"keyword": "x"},
+        contract=contract,
+        page_size=100,
+        timeout_seconds=1,
+    )
+
+    async def fetch(payload, page_root):
+        await asyncio.sleep(0.05)
+        return {"data": {"items": [], "total": 0}}
+
+    collector.state["deadline"] = time.time() + 0.01
+    with pytest.raises(SellerSpriteTaskTimeoutError):
+        asyncio.run(collector.collect(fetch))
+
+
+def test_scenario_pagination_detects_total_drift(tmp_path) -> None:
+    contract = get_pagination_contract("keyword-miner")
+    collector = ScenarioPagination(
+        root=tmp_path,
+        task_root=tmp_path,
+        account_key="account-a",
+        request_identity={"q": "x"},
+        payload={"keyword": "x"},
+        contract=contract,
+        page_size=2,
+        timeout_seconds=30,
+    )
+    totals = iter([4, 5])
+
+    async def fetch(payload, page_root):
+        page = payload["pageNum"]
+        return {
+            "data": {
+                "items": [{"keyword": f"kw-{page}-{index}"} for index in range(2)],
+                "total": next(totals),
+            }
+        }
+
+    asyncio.run(collector.collect(fetch))
+    summary = collector.summary()
+    assert summary["coverage"] == "unverified"
+    assert summary["stop_reason"] == "total_drift"
 
 
 @pytest.mark.parametrize(

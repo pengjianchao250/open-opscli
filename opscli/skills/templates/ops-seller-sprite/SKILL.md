@@ -23,7 +23,7 @@ metadata:
    - `site=US`
    - `period=30d`
    - `page_size=100`
-   - 选产品默认单页；用户明确要求全部时使用 `collection_scope=all` 和 `xls/xlsx`，网页最多2,000条。执行前读取 [选产品分页与获取全部](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部)，按 `collection.coverage` 披露完整性，不把10行预览当作全量。
+   - 列表场景默认单页；用户明确要求全部时对已核验列表场景使用 `collection_scope=all` 和 `xls/xlsx`，最多采集2,000行。执行前读取 [选产品分页与获取全部](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部)，按 `collection.coverage` 披露完整性，不把10行预览当作全量。
    - 未明确导出用途时保留兼容默认 `export_format=xls`；需要由 AI 直接读取、分析或生成结果时优先显式传 `export_format=json`，用户需要人工查看或留档表格时使用 `xls` / `xlsx`。
    - `keyword-research` 例外：`period` 使用数据月份（`YYYY-MM`），不把 `30d` 当作月份；默认 `page=1/page_size=100`，只获取第一页。
    - `association-traffic` 使用公共默认 `page_size=100`，查询固定使用全部变体，不允许改成当前变体。

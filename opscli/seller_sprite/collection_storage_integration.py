@@ -54,7 +54,11 @@ def build_seller_sprite_cache_identity(
         else {}
     )
     if request.collection_scope == "all":
-        contract.update(collection_scope="all", pagination_contract="product-accessible-v1")
+        contract.update(
+            collection_scope="all",
+            pagination_contract=f"{str(request.scenario).strip().lower()}-accessible-v1",
+            access_limit=2000,
+        )
     cache_key = build_cache_key(
         "seller_sprite",
         {

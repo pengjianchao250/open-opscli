@@ -19,6 +19,18 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+def test_html_pagination_total_parser_distinguishes_unknown_counter():
+    assert api_manager_module._html_pagination_total(
+        "<span>1 - 50 / 21329</span>", method="GET_PAGE"
+    ) == {"total": 21329}
+    assert api_manager_module._html_pagination_total(
+        "<span>1 - 50 / 1000+</span>", method="GET_PAGE"
+    ) == {}
+    assert api_manager_module._html_pagination_total(
+        "找到的细分行业: 21,329", method="FORM"
+    ) == {"total": 21329}
+
+
 @pytest.fixture(autouse=True)
 def disable_export_upload(monkeypatch):
     """Manager 测试不得读取真实认证或访问文件上传服务。"""
@@ -341,6 +353,51 @@ def test_manager_reports_browser_wait_without_payloads(monkeypatch, tmp_path: Pa
     assert len(calls) == 1
     assert "B0PRIVATE123" not in json.dumps(stages)
     assert str(tmp_path) not in json.dumps(stages)
+
+
+def test_manager_collects_keyword_miner_all_with_2000_cap(monkeypatch, tmp_path: Path):
+    calls = []
+
+    async def fake_browser_route_request(**kwargs):
+        calls.append(kwargs)
+        page = kwargs["payload"]["pageNum"]
+        return api_manager_module.BrowserRouteResult(
+            login={"mode": "browser-route"},
+            response={
+                "code": "OK",
+                "data": {
+                    "total": 250,
+                    "items": [{"keyword": f"kw-{index}"} for index in range((page - 1) * 100, min(page * 100, 250))],
+                },
+            },
+        )
+
+    monkeypatch.setattr(api_manager_module, "SellerSpriteApiClient", DummyApiClient)
+    monkeypatch.setattr(api_manager_module, "_run_browser_route_request", fake_browser_route_request)
+    manager = SellerSpriteApiManager(
+        settings=SellerSpriteSettings(output_dir=tmp_path, default_mode="browser-route"),
+        account_provider=DummyAccountProvider(),
+    )
+    result = _run(
+        manager.run(
+            SellerSpriteScenarioRequest(
+                scenario="keyword-miner",
+                site="US",
+                period="30d",
+                params={"keyword": "loft bed"},
+                page_size=100,
+                collection_scope="all",
+                job_id="job-keyword-miner-all",
+                export_format="xlsx",
+            )
+        )
+    )
+    assert [call["payload"]["pageNum"] for call in calls] == [1, 2, 3]
+    assert result.row_count == 250
+    assert result.collection["coverage"] == "matched_range"
+    assert result.collection["pages_completed"] == 3
+    assert sum(call["high_frequency_endpoint"] is not None for call in calls) == 1
+    assert Path(result.export.path).exists()
 
 
 def test_manager_throttles_remote_poll_progress(monkeypatch, tmp_path: Path):

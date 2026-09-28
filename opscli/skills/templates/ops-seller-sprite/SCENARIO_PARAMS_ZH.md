@@ -44,13 +44,13 @@
 
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
-- `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
-- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换；请求合同支持 `pageNum/pageSize`，默认仍只请求第一页。
+- `keyword-research` 默认使用 `page=1/page_size=100`；用户明确要求“全部/全量”时可使用 `collection_scope=all`，按页面实际分页合同采集。
+- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换；请求合同支持 `pageNum/pageSize`，默认仍只请求第一页，全量模式才自动续页。
 - `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
 - `real-time-bidding` 仅支持 `browser-route` 和单个 ASIN；普通历史已完成/失败时自动“再次查询”，无历史时弹窗新建默认推荐关键词任务，进行中任务只等待，官网示例只读；完成后分别读取 SP、SB 第一页并严格合并为 100 条完整竞价数据，不调用官网导出。
-- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；默认请求第一页 100 条，可用 `page`/`size`（或公共别名 `page_size`）指定单页，网页已确认可翻到第 2 页；本地生成 `.xlsx`。
+- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；默认请求第一页 100 条，可用 `page`/`size`（或公共别名 `page_size`）指定单页，网页已确认可翻到第 2 页；全量模式最多采集 2,000 条；本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
@@ -92,10 +92,10 @@
 | `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | 指定商品筛选或关键词候选；`asins` 不代表竞品发现；`page=1`，按销量倒序，`lowPrice=N` |
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
-| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
+| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认第一页 100 条，`collection_scope=all` 最多 2,000 条 |
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；默认第一页 100 条，可指定 `page`/`size`；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
-| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc`、`pageNum`、`pageSize` | 全部变体固定开启；默认第一页，可按合同请求指定页；`page_size=100` |
+| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc`、`pageNum`、`pageSize` | 全部变体固定开启；默认第一页，`collection_scope=all` 自动按 `pageNum/pageSize` 续页，最多 2,000 条；`page_size=100` |
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
@@ -172,7 +172,8 @@
 ### 分页与结果范围
 
 - 默认传 `page=1`、`page_size=100`，映射为页面查询参数 `page=1`、`size=100`。
-- 每个任务只保留当前页结果；默认任务返回第一页，最多 100 条，不自动请求或合并后续页。
+- `collection_scope=page` 只请求当前页；`collection_scope=all` 才自动续页，并统一最多采集 2,000 条可访问结果。逐页原始响应和检查点由后端保管，最终导出在本地生成 XLSX。
+- HTML 页面若没有可靠的总数，会在短页或 2,000 条处停止并标记 `coverage=unverified`；完整性未确认时任务失败并保留检查点，不把部分结果报告为完整结果。
 
 ### 范围校验
 
@@ -513,17 +514,17 @@ seller_sprite_run(
 }
 ```
 
-### 选产品分页与获取全部
+### 列表场景分页与获取全部
 
 - 默认 `collection_scope=page`，请求一页，`page_size=100`。用户明确要求“全部”“全量”时，传顶层 `collection_scope=all`，不要放进 `params`。
 - 官网只允许查看前 **2,000 条**；all 表示取完网页可访问范围，不能承诺取完所有匹配商品。总匹配数可能大于2,000，例如4,830条只采集20页共2,000条；更大范围应由用户缩小条件，禁止自动拆条件或切账号绕过上限。
-- all 首期只支持 `product-research`、`page_size=100`、从第一页开始、`export_format=xls/xlsx`。`xls` 最终生成 `.xlsx`。不要给 all 传 JSON 导出，或为其他场景复用该分页逻辑。
+- all 支持已核验的 9 个列表场景：`product-research`、`competitor-lookup`、`keyword-miner`、`keyword-reverse`、`traffic-source`、`association-traffic`、`aba-research`、`keyword-research`、`market-research`。每个场景使用网页确认过的独立页字段、响应路径和唯一性检查；统一从第一页开始、单页 `page_size=1-100`、`export_format=xls/xlsx`，`product-research` 仍要求 `page_size=100`。`xls` 最终生成 `.xlsx`。不要给 all 传 JSON 导出，或为其他场景复用该分页逻辑。
 - 返回 `collection.source_total`（匹配数）、`access_limit`（2,000）、`rows_written`、`pages_completed`、`collection_complete` 与 `coverage`。`source_limited` 表示已取完可访问范围但来源受限；`matched_range` 表示本次所有匹配结果均已采集；`partial/unverified` 不能报告为完整结果。动态排序不提供数据库快照保证。
 - 全量结果的 `data=[]`，`preview` 最多10行，仅用于预览；后续分析必须读取 XLSX，不能把预览当成全部商品。逐页原始文件与检查点由后端保管。
 - 处理中继续查询同一个 `job_id`。调度器中断可恢复已完成页面；任务已终态失败时不会自动续跑。重复ASIN、总数漂移、异常短页会停止并返回失败，保留已采集页；不要擅自反复提交。
 - 首期全量模式不复用共享结果缓存。MCP 及 Collector 均需部署支持 `collection_scope` 的版本；线上未暴露该参数时如实说明，不用多次单页提交冒充全量任务。AppHub REST 当前尚未开放该参数。
 
-CLI 示例：
+CLI 示例（选产品）：
 
 ```bash
 opscli seller-sprite run product-research --site US --period 30d --collection-scope all --export-format xlsx --params '{"keywords":"LOFT","selectType":"2"}'
@@ -533,10 +534,10 @@ MCP 使用同样的顶层 `collection_scope="all"`、`export_format="xlsx"`，�
 
 ### 其他场景分页合同状态
 
-- 选竞品使用 `page/size`，网页已确认每页 100 条时最多读取前 2,000 条；当前代码已登记独立合同，尚未开放 `collection_scope=all`。
-- 关键词挖掘使用 `pageNum/pageSize`，页面可读取超过 2,000 条，不能套用选产品上限；当前默认仍只请求一页，高频词是查询级附加结果，只请求一次。
-- 关键词反查使用 `limit/skip`，查流量来源使用 `pageNo/pageSize`；两者的响应路径和页字段不同，当前默认仍只请求一页，未完成完整性门禁前不能通过重复单页请求冒充全量。
-- ABA 选品、流量词对比、拓展流量词、关键词转化率和实时查竞价涉及固定首页、动态列或远程任务；关联流量已确认接口支持 `pageNum/pageSize`，但仍需完成连续页和导出完整性门禁；关键词选品和选市场是 HTML 表单；出单词反查和全球商标库是官方文件；Listing Analysis 是单报告。这些场景必须等各自合同验证完成后再开放 all。
+- 选竞品使用 `page/size`，关键词挖掘和关联流量使用 `pageNum/pageSize`，关键词反查使用 `limit/skip`，查流量来源使用 `pageNo/pageSize`；这些场景均已登记独立合同并支持 `collection_scope=all`，统一最多采集前 2,000 条。
+- ABA 选品使用 `page/size`，也支持 `collection_scope=all`；高频词是查询级附加结果，只在第一页请求一次，不随分页重复请求。
+- 关键词选品和选市场是 HTML 页面；页面无可靠 total 时只能在短页或 2,000 条处停止，结果必须经过完整性门禁，否则返回 `unverified` 并保留检查点。
+- `aba-reverse`、`branddb` 使用官方 XLSX；`listing-analysis` 是单报告；`keyword-comparison`、`traffic-extend`、`keyword-conversion-rate`、`real-time-bidding` 涉及 prepare、远程任务、动态列或合并结果。这些场景继续拒绝 `collection_scope=all`，不能用重复首页请求冒充全量。
 
 ### 推荐模式
 

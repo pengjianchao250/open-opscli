@@ -42,7 +42,7 @@ def run_scenario(
     export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
-    collection_scope: str = typer.Option("page", "--collection-scope", help="page 单页；all 选产品可访问结果（最多2000条）"),
+    collection_scope: str = typer.Option("page", "--collection-scope", help="page 单页；all 获取已核验列表场景的前2000条可访问结果"),
 ) -> None:
     """按正式公共命令契约执行卖家精灵场景。"""
     payload = SellerSpriteRemoteAdapter().run(

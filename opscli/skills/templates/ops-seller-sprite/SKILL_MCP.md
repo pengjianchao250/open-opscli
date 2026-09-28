@@ -151,4 +151,4 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 
 ## 选产品全量采集合同
 
-`seller_sprite_run` 新增顶层 `collection_scope`，默认 `page`；显式 `all` 只支持选产品、每页100、第一页起、XLSX文件。网页最多2,000条，匹配数更大时必须披露来源限制。读取 [分页参数及结果解释](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部) 后构造请求并解释 `collection`；不要将该参数推广到其他场景。
+`seller_sprite_run` 新增顶层 `collection_scope`，默认 `page`；显式 `all` 支持已核验列表场景（选产品、选竞品、关键词挖掘、关键词反查、查流量来源、关联流量、ABA 数据选品、关键词选品、选市场），从第一页开始、使用 XLSX 文件。opscli 统一最多采集 2,000 行；匹配数更大时必须披露 `source_limited`。读取 [分页参数及结果解释](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部) 后构造请求并解释 `collection`。官方 XLSX、单报告和远程任务场景仍拒绝 `all`。

@@ -197,7 +197,7 @@ def test_does_not_guess_other_scenario_response(data):
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"scenario": "keyword-reverse"},
+        {"scenario": "listing-analysis"},
         {"export_format": "json"},
         {"page_size": 20},
         {"params": {"size": 60}},
@@ -219,6 +219,55 @@ def test_all_request_validation(overrides):
                 "collection_scope": "all",
                 **overrides,
             }
+        )
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "product-research",
+        "competitor-lookup",
+        "keyword-miner",
+        "keyword-reverse",
+        "traffic-source",
+        "association-traffic",
+        "aba-research",
+        "keyword-research",
+        "market-research",
+    ],
+)
+def test_all_request_validation_allows_verified_list_scenarios(scenario):
+    request = SellerSpriteScenarioRequest(
+        scenario=scenario,
+        site="US",
+        period="30d",
+        collection_scope="all",
+        mode="browser-route",
+        export_format="xlsx",
+        page_size=100,
+    )
+    assert request.collection_scope == "all"
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    [
+        "aba-reverse",
+        "branddb",
+        "listing-analysis",
+        "keyword-comparison",
+        "traffic-extend",
+        "keyword-conversion-rate",
+        "real-time-bidding",
+    ],
+)
+def test_all_request_validation_rejects_non_list_scenarios(scenario):
+    with pytest.raises(SellerSpriteConfigError, match="已核验的列表场景"):
+        SellerSpriteScenarioRequest(
+            scenario=scenario,
+            site="US",
+            period="30d",
+            collection_scope="all",
         )
 
 

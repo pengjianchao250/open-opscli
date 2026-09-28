@@ -1706,8 +1706,11 @@ class SellerSpriteTaskScheduler:
         generation: int, task_root: Path,
     ) -> None:
         """为选产品注入恢复清单，以及受当前任务租约保护的提交函数。"""
-        manager.product_checkpoint = self.store.load_product_checkpoint(job_id)
+        checkpoint = self.store.load_product_checkpoint(job_id)
+        manager.product_checkpoint = checkpoint
+        manager.pagination_checkpoint = checkpoint
         manager.product_task_root = task_root
+        manager.pagination_task_root = task_root
 
         def save(checkpoint: dict[str, Any]) -> None:
             if not self.store.save_product_checkpoint(
@@ -1717,6 +1720,7 @@ class SellerSpriteTaskScheduler:
                 raise SellerSpriteConfigError("选产品分页任务执行代际或租约已失效")
 
         manager.product_checkpoint_listener = save
+        manager.pagination_checkpoint_listener = save
 
     def _configure_listing_analysis_resume(
         self,
