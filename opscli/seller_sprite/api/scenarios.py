@@ -139,6 +139,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=(),
         required_any_params=("asin", "asins"),
         payload_builder=make_association_traffic_payload,
+        pagination_contract="association-traffic",
     ),
     "competitor-lookup": SellerSpriteScenario(
         scenario_id="competitor-lookup",

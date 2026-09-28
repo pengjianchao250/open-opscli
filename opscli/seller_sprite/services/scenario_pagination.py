@@ -78,6 +78,14 @@ PAGINATION_CONTRACTS: dict[str, ScenarioPaginationContract] = {
         response_total_paths=(("data", "total"),),
         notes="使用 limit/skip；page 仅为本地编排字段。",
     ),
+    "association-traffic": ScenarioPaginationContract(
+        scenario="association-traffic",
+        request_page_field="pageNum",
+        request_size_field="pageSize",
+        response_items_path=("data", "pagerDto", "items"),
+        response_total_paths=(("data", "pagerDto", "total"),),
+        notes="网页请求已确认支持 pageNum/pageSize；全部变体和排序条件必须跨页冻结。",
+    ),
     "traffic-source": ScenarioPaginationContract(
         scenario="traffic-source",
         request_page_field="pageNo",

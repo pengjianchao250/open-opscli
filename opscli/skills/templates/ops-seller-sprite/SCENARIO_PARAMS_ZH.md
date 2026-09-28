@@ -45,7 +45,7 @@
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
 - `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
-- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换；请求合同支持 `pageNum/pageSize`，默认仍只请求第一页。
 - `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
@@ -95,7 +95,7 @@
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
 | `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
-| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
+| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc`、`pageNum`、`pageSize` | 全部变体固定开启；默认第一页，可按合同请求指定页；`page_size=100` |
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
@@ -534,7 +534,7 @@ MCP 使用同样的顶层 `collection_scope="all"`、`export_format="xlsx"`，�
 - 选竞品使用 `page/size`，网页已确认每页 100 条时最多读取前 2,000 条；当前代码已登记独立合同，尚未开放 `collection_scope=all`。
 - 关键词挖掘使用 `pageNum/pageSize`，页面可读取超过 2,000 条，不能套用选产品上限；当前默认仍只请求一页，高频词是查询级附加结果，只请求一次。
 - 关键词反查使用 `limit/skip`，查流量来源使用 `pageNo/pageSize`；两者的响应路径和页字段不同，当前默认仍只请求一页，未完成完整性门禁前不能通过重复单页请求冒充全量。
-- 关联流量、ABA 选品、流量词对比、拓展流量词、关键词转化率和实时查竞价涉及固定首页、动态列或远程任务；关键词选品和选市场是 HTML 表单；出单词反查和全球商标库是官方文件；Listing Analysis 是单报告。这些场景必须等各自合同验证完成后再开放 all。
+- ABA 选品、流量词对比、拓展流量词、关键词转化率和实时查竞价涉及固定首页、动态列或远程任务；关联流量已确认接口支持 `pageNum/pageSize`，但仍需完成连续页和导出完整性门禁；关键词选品和选市场是 HTML 表单；出单词反查和全球商标库是官方文件；Listing Analysis 是单报告。这些场景必须等各自合同验证完成后再开放 all。
 
 ### 推荐模式
 

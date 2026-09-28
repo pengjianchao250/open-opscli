@@ -534,7 +534,7 @@ def test_association_traffic_payload_uses_all_variants_and_normalizes_pasted_asi
     assert scenario.method == "POST"
     assert payload == {
         "market": 1,
-        "pageNum": 1,
+        "pageNum": 3,
         "pageSize": 100,
         "desc": True,
         "orderField": "createdTime",

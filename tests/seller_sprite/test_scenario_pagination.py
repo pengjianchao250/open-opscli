@@ -45,6 +45,19 @@ def test_keyword_reverse_translates_page_to_skip() -> None:
     }
 
 
+def test_association_traffic_contract_uses_pager_dto() -> None:
+    """关联流量使用 pageNum/pageSize 和 pagerDto.items/total。"""
+    contract = get_pagination_contract("association-traffic")
+    assert contract.page_payload({"asinList": ["B1"]}, page=7, page_size=50) == {
+        "asinList": ["B1"],
+        "pageNum": 7,
+        "pageSize": 50,
+    }
+    assert contract.parse(
+        {"data": {"pagerDto": {"items": [{"asin": "B2"}], "total": 375}}}
+    ) == ([{"asin": "B2"}], 375)
+
+
 def test_traffic_source_accepts_pager_total_without_page_validation() -> None:
     """流量来源允许历史响应的非标准 pager 页字段。"""
     contract = get_pagination_contract("traffic-source")
@@ -75,6 +88,7 @@ def test_invalid_rows_are_rejected() -> None:
         ("keyword-miner", "keyword-miner"),
         ("keyword-reverse", "keyword-reverse"),
         ("traffic-source", "traffic-source"),
+        ("association-traffic", "association-traffic"),
     ],
 )
 def test_scenario_registry_points_to_independent_contracts(scenario: str, contract: str) -> None:

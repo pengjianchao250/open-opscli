@@ -619,11 +619,15 @@ def make_association_traffic_payload(input_data: dict[str, Any]) -> dict[str, An
         default=100,
         field="pageSize",
     )
+    page = _positive_int(
+        input_data.get("pageNum") or input_data.get("page") or input_data.get("startPage"),
+        default=1,
+        field="pageNum",
+    )
     # 关联流量与其他普通场景统一每页 100 条；全部变体是本场景固定业务语义。
     return {
         "market": _int(market, 1),
-        # 业务任务始终从第一页开始，Manager 只解析该页后完成任务。
-        "pageNum": 1,
+        "pageNum": page,
         "pageSize": requested_size,
         "desc": order_desc(input_data.get("desc")),
         "orderField": str(input_data.get("orderField") or "createdTime"),
