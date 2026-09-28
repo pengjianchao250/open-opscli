@@ -529,6 +529,13 @@ opscli seller-sprite run product-research --site US --period 30d --collection-sc
 
 MCP 使用同样的顶层 `collection_scope="all"`、`export_format="xlsx"`，筛选条件仍在 `params`。
 
+### 其他场景分页合同状态
+
+- 选竞品使用 `page/size`，网页已确认每页 100 条时最多读取前 2,000 条；当前代码已登记独立合同，尚未开放 `collection_scope=all`。
+- 关键词挖掘使用 `pageNum/pageSize`，页面可读取超过 2,000 条，不能套用选产品上限；当前默认仍只请求一页，高频词是查询级附加结果，只请求一次。
+- 关键词反查使用 `limit/skip`，查流量来源使用 `pageNo/pageSize`；两者的响应路径和页字段不同，当前默认仍只请求一页，未完成完整性门禁前不能通过重复单页请求冒充全量。
+- 关联流量、ABA 选品、流量词对比、拓展流量词、关键词转化率和实时查竞价涉及固定首页、动态列或远程任务；关键词选品和选市场是 HTML 表单；出单词反查和全球商标库是官方文件；Listing Analysis 是单报告。这些场景必须等各自合同验证完成后再开放 all。
+
 ### 推荐模式
 
 `recommendationMode` 可用值：

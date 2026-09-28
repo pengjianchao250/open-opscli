@@ -11760,3 +11760,9 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
 **回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---
+## 2026-09-28 SellerSprite - 固化普通 JSON 场景分页合同
+
+**变更原因**：网页实测确认选竞品、关键词挖掘、关键词反查和查流量来源的页字段、总数路径和上限语义不同，不能继续把选产品分页解析器当成通用逻辑。
+**改动点**：新增独立分页合同解析器，分别声明 `page/size`、`pageNum/pageSize`、`limit/skip` 和 `pageNo/pageSize`，并为来源接口保留 `pager.page=0,size=null` 的兼容性；场景注册表显式关联各自合同，注册选竞品 2,000 条已验证上限，关键词挖掘明确超过 2,000 条且其上限未知；Skill v0.0.25 增补其他场景的分页状态。该模块暂用于合同和回归测试，不改变其他场景的默认单页执行路径。
+**验证结果**：新增合同单元测试覆盖页参数转换、嵌套 rows/total 路径、非法响应和来源接口缺少标准页字段的情况；浏览器实测记录见 `docs/analysis/卖家精灵全部场景分页代码核查.md`。
+**影响范围**：普通 JSON 场景的分页合同基础设施；未开放其他场景 `collection_scope=all`，未改变现有任务执行和导出逻辑。

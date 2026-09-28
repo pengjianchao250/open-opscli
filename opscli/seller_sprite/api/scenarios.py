@@ -45,6 +45,7 @@ class SellerSpriteScenario:
     task_result_endpoint: str | None = None
     browser_context_only: bool = False
     replay_safe: bool = True
+    pagination_contract: str | None = None
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回 MCP 可公开的场景说明。"""
@@ -146,6 +147,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=(),
         required_any_params=("keyword", "brand", "sellerName", "asin", "asins"),
         payload_builder=make_competitor_payload,
+        pagination_contract="competitor-lookup",
     ),
     "product-research": SellerSpriteScenario(
         scenario_id="product-research",
@@ -180,6 +182,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         high_frequency_endpoint="/v3/api/keyword-miner/high/frequency-new",
         required_params=("keyword",),
         payload_builder=make_keyword_miner_payload,
+        pagination_contract="keyword-miner",
     ),
     "keyword-research": SellerSpriteScenario(
         scenario_id="keyword-research",
@@ -195,6 +198,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         endpoint="/v3/api/relation/reversing",
         required_params=("asin",),
         payload_builder=make_keyword_reverse_payload,
+        pagination_contract="keyword-reverse",
     ),
     "real-time-bidding": SellerSpriteScenario(
         scenario_id="real-time-bidding",
@@ -212,6 +216,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         method="GET",
         required_params=("keywordOrAsin",),
         payload_builder=make_traffic_source_payload,
+        pagination_contract="traffic-source",
     ),
     "traffic-extend": SellerSpriteScenario(
         scenario_id="traffic-extend",
