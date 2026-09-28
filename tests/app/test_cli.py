@@ -8,6 +8,13 @@ from typer.testing import CliRunner
 from opscli.cli import app
 
 
+def _json_output(output: str) -> dict:
+    start = output.find("{\n")
+    assert start >= 0
+    payload, _ = json.JSONDecoder().raw_decode(output[start:])
+    return payload
+
+
 def test_app_exposes_expected_commands() -> None:
     root_command = get_command(app)
     # 懒加载：顶级 commands 不再急切持有子命令组，经 get_command 按需物化
@@ -25,25 +32,29 @@ def test_app_exposes_expected_commands() -> None:
     }
     migrate_command = app_command.get_command(None, "migrate")
     assert set(migrate_command.commands) == {
-        "init",
-        "audit",
-        "plan",
+        "start",
         "status",
-        "check",
-        "verify-ui",
-        "verify-data",
-        "verify-release",
-        "export",
+        "scan-startup",
+        "verify",
+        "convert-legacy",
     }
 
 
-def test_migrate_init_forwards_paths_and_id(monkeypatch) -> None:
+def test_migrate_start_forwards_paths_and_id(monkeypatch) -> None:
     captured = {}
 
     class FakeMigrationService:
-        def initialize(self, source, target, *, migration_id=None):
-            captured.update(source=source, target=target, migration_id=migration_id)
-            return {"migration_id": migration_id, "phase": "audit"}
+        def start(self, source, target_root, *, app_name=None, migration_id=None):
+            captured.update(
+                source=source,
+                target_root=target_root,
+                app_name=app_name,
+                migration_id=migration_id,
+            )
+            return {"migration_id": migration_id, "phase": "initialized"}
+
+        def close(self):
+            return None
 
     monkeypatch.setattr("opscli.app.commands.cli.MigrationService", FakeMigrationService)
     result = CliRunner().invoke(
@@ -51,11 +62,13 @@ def test_migrate_init_forwards_paths_and_id(monkeypatch) -> None:
         [
             "app",
             "migrate",
-            "init",
+            "start",
             "--source",
             "legacy",
-            "--target",
+            "--target-root",
             "target",
+            "--app-name",
+            "项目十部-v31",
             "--migration-id",
             "migration-demo",
             "--json",
@@ -64,32 +77,36 @@ def test_migrate_init_forwards_paths_and_id(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert str(captured["source"]) == "legacy"
-    assert str(captured["target"]) == "target"
+    assert str(captured["target_root"]) == "target"
+    assert captured["app_name"] == "项目十部-v31"
     assert captured["migration_id"] == "migration-demo"
-    assert json.loads(result.output)["command"] == "app migrate init"
+    assert _json_output(result.output)["command"] == "app migrate start"
 
 
-def test_migrate_check_returns_stable_error_envelope(monkeypatch) -> None:
+def test_migrate_verify_returns_stable_error_envelope(monkeypatch) -> None:
     class FakeMigrationService:
-        def check(self, target, *, gate, migration_id=None):
+        def verify(self, target, *, migration_id=None):
             from opscli.app.domain.exceptions import AppProjectError
 
             raise AppProjectError(
                 "APP-MIGRATION-GATE",
-                "迁移门禁未通过：ui",
-                detail={"gate": gate, "problems": ["coverage empty"]},
+                "迁移复制校验未通过",
+                detail={"checks": {"source_unchanged": False}},
             )
+
+        def close(self):
+            return None
 
     monkeypatch.setattr("opscli.app.commands.cli.MigrationService", FakeMigrationService)
     result = CliRunner().invoke(
         app,
-        ["app", "migrate", "check", "--gate", "ui", "--target", ".", "--json"],
+        ["app", "migrate", "verify", "--target", ".", "--json"],
     )
 
     assert result.exit_code == 1
-    payload = json.loads(result.output)
+    payload = _json_output(result.output)
     assert payload["error"]["code"] == "APP-MIGRATION-GATE"
-    assert payload["error"]["detail"]["gate"] == "ui"
+    assert payload["error"]["detail"]["checks"]["source_unchanged"] is False
 
 
 def test_ensure_git_check_is_read_only(monkeypatch) -> None:
@@ -193,7 +210,7 @@ def test_dev_status_emits_project_identity_as_json(monkeypatch) -> None:
     result = CliRunner().invoke(app, ["app", "dev-status", "project", "--json"])
 
     assert result.exit_code == 0
-    payload = json.loads(result.output)
+    payload = _json_output(result.output)
     assert payload["command"] == "app dev-status"
     assert payload["data"]["running"] is True
     assert payload["data"]["identity_verified"] is True
@@ -228,7 +245,7 @@ def test_clone_template_forwards_options_and_emits_json(monkeypatch) -> None:
     assert str(captured["path"]) == "project"
     assert captured["repo_url"] == "https://example.test/template.git"
     assert captured["branch"] == "main"
-    assert json.loads(result.output)["command"] == "app clone-template"
+    assert _json_output(result.output)["command"] == "app clone-template"
 
 
 def test_init_forwards_explicit_id_without_reinterpreting_app(monkeypatch) -> None:
@@ -313,4 +330,4 @@ def test_push_json_keeps_unified_success_message(monkeypatch) -> None:
     )
 
     assert result.exit_code == 0
-    assert json.loads(result.output)["data"]["message"] == expected_message
+    assert _json_output(result.output)["data"]["message"] == expected_message

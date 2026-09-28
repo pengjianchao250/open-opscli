@@ -1,4 +1,4 @@
-"""AppHub 看板迁移状态、审计和门禁测试。"""
+"""源码复制迁移流程测试。"""
 
 from __future__ import annotations
 
@@ -11,446 +11,153 @@ from opscli.app.domain.exceptions import AppProjectError
 from opscli.app.services.migration import MigrationService
 
 
-def _target_project(root: Path) -> Path:
-    target = root / "target"
-    for relative in (
-        ".git/HEAD",
-        ".opscli/app.json",
-        "README.md",
-        "app.yaml",
-        "backend/app.py",
-        "backend/CLAUDE.md",
-        "docs/apphub-contract.md",
-        "frontend/package.json",
-    ):
-        path = target / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("placeholder\n", encoding="utf-8")
-    return target
+class FakeAppManager:
+    def __init__(self) -> None:
+        self.create_calls: list[dict] = []
+        self.init_calls: list[Path] = []
+
+    def create_app(self, app_name: str, *, path: Path, origin_type: str, migration_id: str) -> dict:
+        self.create_calls.append(
+            {
+                "app_name": app_name,
+                "path": path,
+                "origin_type": origin_type,
+                "migration_id": migration_id,
+            }
+        )
+        binding = path / ".opscli" / "app.json"
+        binding.parent.mkdir(parents=True, exist_ok=True)
+        binding.write_text("{}", encoding="utf-8")
+        return {"app_id": "Ab123", "app_name": app_name, "path": str(path)}
+
+    def init_git(self, path: Path) -> dict:
+        self.init_calls.append(path)
+        (path / ".git").mkdir()
+        return {"git_created": True}
+
+    def close(self) -> None:
+        return None
 
 
-def _source_project(root: Path) -> Path:
-    source = root / "legacy"
-    (source / "frontend/src/views").mkdir(parents=True)
-    (source / "frontend/src/router").mkdir(parents=True)
-    (source / "frontend/src/views/Sales.vue").write_text("<template />\n", encoding="utf-8")
-    (source / "frontend/src/router/index.ts").write_text("export default []\n", encoding="utf-8")
+def _source(root: Path, *, runnable: bool = True) -> Path:
+    source = root / "source"
+    (source / ".git").mkdir(parents=True)
+    (source / ".opscli").mkdir()
+    (source / "node_modules" / "pkg").mkdir(parents=True)
+    (source / ".venv").mkdir()
+    (source / "data").mkdir()
+    (source / "data" / "seed.db").write_text("seed", encoding="utf-8")
+    (source / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    (source / "README.md").write_text("project", encoding="utf-8")
+    (source / ".opscli" / "app.json").write_text("old", encoding="utf-8")
+    if runnable:
+        (source / "backend").mkdir()
+        (source / "backend" / "app.py").write_text("from fastapi import FastAPI\napp = FastAPI()\n", encoding="utf-8")
+        (source / "frontend").mkdir()
+        (source / "frontend" / "package.json").write_text(
+            json.dumps({"scripts": {"dev": "vite"}}), encoding="utf-8"
+        )
     return source
 
 
-def _state_path(target: Path, name: str) -> Path:
-    return target / ".opscli" / "migration" / "migration-demo" / name
+def test_start_copies_source_and_runs_create_and_init(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    before = sorted(path.relative_to(source).as_posix() for path in source.rglob("*"))
+    manager = FakeAppManager()
 
-
-def _load(path: Path):
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _write(path: Path, payload) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def _implementation_artifacts(target: Path, *, placeholder: bool = False) -> dict[str, list[str]]:
-    """创建数据门禁需要的最小项目工件。"""
-    artifacts = {
-        "backend_api": ["backend/api/v1/sales.py"],
-        "backend_service": ["backend/services/sales_service.py"],
-        "backend_schema": ["backend/schemas/sales.py"],
-        "frontend_consumer": ["frontend/src/views/SalesView.vue"],
-        "tests": ["tests/api/test_sales.py"],
-        "openapi": ["docs/openapi.json"],
-    }
-    for group, paths in artifacts.items():
-        for relative in paths:
-            path = target / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            content = "仅用于布局验证\n" if placeholder and group == "frontend_consumer" else "ok\n"
-            path.write_text(content, encoding="utf-8")
-    return artifacts
-
-
-def _write_verified_contract(
-    target: Path,
-    artifacts: dict[str, list[str]],
-    *,
-    implementation_status: str = "verified",
-) -> None:
-    """写入与迁移矩阵一致的 OPS 数据合同凭证。"""
-    contract_path = target / "docs/ops-app/data-contracts.json"
-    contract_path.parent.mkdir(parents=True, exist_ok=True)
-    _write(
-        contract_path,
-        {
-            "schema_version": "1.0",
-            "products": [
-                {
-                    "product_key": "sales",
-                    "source": "ops",
-                    "contract_status": "verified",
-                    "requires_real_data": True,
-                    "verification": {
-                        "attempted": True,
-                        "attempted_at": "2026-09-17T10:00:00+08:00",
-                        "method": "opscli query flow",
-                        "outcome": "success",
-                    },
-                    "technical_contract": {
-                        "dataset_alias": "sales_dataset",
-                        "table_id": "table-sales",
-                        "required_business_roles": ["orders"],
-                        "fields": {
-                            "orders": {
-                                "field_name": "orders",
-                                "role": "metric",
-                                "aggregation": "sum",
-                                "result_alias": "orders",
-                            }
-                        },
-                    },
-                    "implementation_status": implementation_status,
-                    "implementation_artifacts": artifacts,
-                }
-            ],
-        },
+    result = MigrationService(app_manager=manager).start(
+        source,
+        tmp_path / "dest",
+        app_name="项目十部-v31",
+        migration_id="migration-demo",
     )
 
-
-def _completed_page_item() -> dict:
-    """构造已经通过 UI 结构验收的页面覆盖项。"""
-    return {
-        "id": "PAGE-001",
-        "kind": "page",
-        "status": "已完成",
-        "dynamic": False,
-        "target": {"route": "/sales", "files": ["frontend/src/views/SalesView.vue"]},
-        "acceptance": {"checks": ["layout"], "evidence": ["evidence/ui/PAGE-001.png"]},
-        "remaining_issues": [],
-        "unblock_conditions": [],
-    }
-
-
-def test_initialize_creates_state_and_never_writes_source(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    data_spec = target / "docs/ops-app/data-spec.md"
-    data_spec.parent.mkdir(parents=True, exist_ok=True)
-    data_spec.write_text("# 真实数据规格\n\n业务口径必须保留。\n", encoding="utf-8")
-    before = sorted(path.relative_to(source).as_posix() for path in source.rglob("*"))
-
-    result = MigrationService().initialize(source, target, migration_id="migration-demo")
-
+    target = tmp_path / "dest"
     after = sorted(path.relative_to(source).as_posix() for path in source.rglob("*"))
     assert before == after
-    assert result["migration_id"] == "migration-demo"
-    assert result["audit"]["file_count"] == 2
-    assert _state_path(target, "migration.json").exists()
-    assert _state_path(target, "audit-snapshot.json").exists()
-    assert _state_path(target, "coverage-matrix.json").exists()
-    assert _state_path(target, "ui-blueprint.json").exists()
-    assert (target / "docs/ops-app/migration-plan.md").exists()
-    exported_data_spec = data_spec.read_text(encoding="utf-8")
-    assert "业务口径必须保留。" in exported_data_spec
-    assert "<!-- opscli:migration-data:start -->" in exported_data_spec
+    assert (target / "README.md").read_text(encoding="utf-8") == "project"
+    assert (target / ".env").is_file()
+    assert (target / "data" / "seed.db").is_file()
+    assert not (target / ".git" / "config").exists()
+    assert not (target / "node_modules").exists()
+    assert not (target / ".venv").exists()
+    assert not (target / ".opscli" / "app.json").read_text(encoding="utf-8") == "old"
+    assert manager.create_calls[0]["origin_type"] == "migration_copy"
+    assert manager.create_calls[0]["migration_id"] == "migration-demo"
+    assert manager.init_calls == [target]
+    assert result["phase"] == "initialized"
+    assert result["startup_status"] == "ready"
 
 
-@pytest.mark.parametrize("relation", ["same", "source-parent", "target-parent"])
-def test_initialize_rejects_same_or_nested_paths(tmp_path: Path, relation: str) -> None:
-    target = _target_project(tmp_path)
-    source = _source_project(tmp_path)
+def test_non_empty_requested_target_uses_timestamp_child(tmp_path: Path) -> None:
+    source = _source(tmp_path, runnable=False)
+    requested = tmp_path / "existing"
+    requested.mkdir()
+    (requested / "keep.txt").write_text("keep", encoding="utf-8")
+
+    result = MigrationService(app_manager=FakeAppManager()).start(source, requested)
+
+    target = Path(result["target_root"])
+    assert target.parent == requested
+    assert target.name.startswith("app-hub-source-")
+    assert "指定迁移目标目录非空" in result["target_notice"]
+    assert (requested / "keep.txt").read_text(encoding="utf-8") == "keep"
+    assert result["startup_status"] == "startup_manual_required"
+
+
+def test_default_target_is_created_under_current_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = _source(tmp_path, runnable=False)
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+
+    result = MigrationService(app_manager=FakeAppManager()).start(source)
+
+    target = Path(result["target_root"])
+    assert target.parent == workdir
+    assert target.name.startswith("app-hub-source-")
+
+
+@pytest.mark.parametrize("relation", ["same", "target-parent"])
+def test_start_rejects_same_or_nested_paths(tmp_path: Path, relation: str) -> None:
+    source = _source(tmp_path, runnable=False)
     if relation == "same":
-        source = target
-    elif relation == "source-parent":
-        source = tmp_path
+        target = source
     else:
-        nested = source / "target"
-        nested.mkdir()
-        target = nested
+        target = source / "target"
 
-    with pytest.raises(AppProjectError) as exc_info:
-        MigrationService().initialize(source, target, migration_id="migration-demo")
+    with pytest.raises(AppProjectError) as caught:
+        MigrationService(app_manager=FakeAppManager()).start(source, target)
 
-    assert exc_info.value.code == "APP-MIGRATION-PATH"
+    assert caught.value.code == "APP-MIGRATION-PATH"
 
 
-def test_initialize_rejects_non_template_target(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
+def test_verify_reports_source_and_target_contract(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    manager = FakeAppManager()
+    service = MigrationService(app_manager=manager)
+    result = service.start(source, tmp_path / "target", migration_id="migration-demo")
+
+    verified = service.verify(result["target_root"], migration_id="migration-demo")
+
+    assert verified["passed"] is True
+    assert verified["checks"]["source_unchanged"] is True
+    assert verified["checks"]["app_binding"] is True
+
+
+def test_convert_legacy_moves_old_state_to_backup(tmp_path: Path) -> None:
     target = tmp_path / "target"
-    target.mkdir()
-
-    with pytest.raises(AppProjectError) as exc_info:
-        MigrationService().initialize(source, target, migration_id="migration-demo")
-
-    assert exc_info.value.code == "APP-MIGRATION-TARGET"
-    assert "backend/app.py" in exc_info.value.detail["missing"]
-
-
-def test_inventory_gate_rejects_duplicate_ids(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        {
-            "id": "PAGE-001",
-            "kind": "page",
-            "status": "待实施",
-            "dynamic": False,
-            "target": {},
-            "acceptance": {},
-            "remaining_issues": [],
-            "unblock_conditions": [],
-        },
-        {
-            "id": "PAGE-001",
-            "kind": "page",
-            "status": "待实施",
-            "dynamic": False,
-            "target": {},
-            "acceptance": {},
-            "remaining_issues": [],
-            "unblock_conditions": [],
-        },
-    ]
-    _write(matrix_path, matrix)
-
-    with pytest.raises(AppProjectError) as exc_info:
-        service.check(target, gate="inventory")
-
-    assert "重复 ID" in "\n".join(exc_info.value.detail["problems"])
-
-
-def test_ui_gate_requires_matrix_blueprint_and_evidence(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-
-    with pytest.raises(AppProjectError) as exc_info:
-        service.check(target, gate="ui")
-
-    assert exc_info.value.code == "APP-MIGRATION-GATE"
-    assert "覆盖矩阵中没有 UI 项。" in exc_info.value.detail["problems"]
-
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        {
-            "id": "PAGE-001",
-            "kind": "page",
-            "status": "已完成",
-            "dynamic": False,
-            "target": {"route": "/sales", "files": ["frontend/src/views/SalesView.vue"]},
-            "acceptance": {"checks": ["layout"], "evidence": ["evidence/ui/PAGE-001.png"]},
-            "remaining_issues": [],
-            "unblock_conditions": [],
-        }
-    ]
-    _write(matrix_path, matrix)
-    blueprint_path = _state_path(target, "ui-blueprint.json")
-    blueprint = _load(blueprint_path)
-    blueprint["pages"] = [{"id": "PAGE-001", "route": "/sales", "modules": []}]
-    _write(blueprint_path, blueprint)
-
-    assert service.check(target, gate="ui")["passed"] is True
-
-
-def test_data_and_release_gates_require_verified_contract_and_acceptance(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        {
-            "id": "MODULE-001",
-            "kind": "module",
-            "status": "已完成",
-            "dynamic": True,
-            "target": {"route": "/sales", "files": ["frontend/src/views/SalesView.vue"]},
-            "acceptance": {"checks": ["layout", "data"], "evidence": ["tests/api/test_sales.py"]},
-            "data_contract": {
-                "product_key": "sales",
-                "status": "candidate",
-                "evidence": [],
-                "implementation_status": "not_started",
-            },
-            "remaining_issues": ["真实数据层尚未实现"],
-            "unblock_conditions": [],
-        }
-    ]
-    _write(matrix_path, matrix)
-    blueprint_path = _state_path(target, "ui-blueprint.json")
-    blueprint = _load(blueprint_path)
-    blueprint["pages"] = [{"id": "PAGE-001", "route": "/sales", "modules": ["MODULE-001"]}]
-    _write(blueprint_path, blueprint)
-
-    with pytest.raises(AppProjectError) as exc_info:
-        service.verify(target, gate="data")
-    assert "candidate" in " ".join(exc_info.value.detail["problems"])
-
-    matrix["items"][0]["data_contract"] = {
-        "product_key": "sales",
-        "status": "verified",
-        "evidence": ["docs/ops-app/data-contracts.json#sales"],
-        "implementation_status": "verified",
-    }
-    _write(matrix_path, matrix)
-    artifacts = _implementation_artifacts(target)
-    _write_verified_contract(target, artifacts)
-
-    assert service.verify(target, gate="data")["phase"] == "behavior_verification"
-    assert service.verify(target, gate="release")["phase"] == "complete"
-
-
-def test_blocked_dynamic_contract_requires_evidence_and_unblock_condition(tmp_path: Path) -> None:
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        {
-            "id": "MODULE-002",
-            "kind": "module",
-            "status": "blocked",
-            "dynamic": True,
-            "target": {"route": "/inventory", "files": []},
-            "acceptance": {"checks": [], "evidence": []},
-            "data_contract": {"product_key": "inventory", "status": "blocked", "evidence": []},
-            "remaining_issues": ["正式能力暂不可用"],
-            "unblock_conditions": [],
-        }
-    ]
-    _write(matrix_path, matrix)
-
-    with pytest.raises(AppProjectError) as exc_info:
-        service.check(target, gate="data")
-
-    problems = "\n".join(exc_info.value.detail["problems"])
-    assert "缺少证据" in problems
-    assert "缺少解除条件" in problems
-
-
-def test_verified_contract_without_implementation_fails_data_gate(tmp_path: Path) -> None:
-    """合同已验证但业务数据层未实现时不得通过数据门禁。"""
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        _completed_page_item(),
-        {
-            "id": "DATA-001",
-            "kind": "data",
-            "status": "部分完成",
-            "dynamic": True,
-            "target": {"route": "/sales", "files": ["frontend/src/views/SalesView.vue"]},
-            "acceptance": {"checks": ["data"], "evidence": ["contract-evidence"]},
-            "data_contract": {
-                "product_key": "sales",
-                "status": "verified",
-                "evidence": ["docs/ops-app/data-contracts.json#sales"],
-                "implementation_status": "contract_verified_only",
-            },
-            "remaining_issues": ["业务 API 和前端消费尚未实现"],
-            "unblock_conditions": ["完成数据层实现"],
-        }
-    ]
-    _write(matrix_path, matrix)
-    blueprint_path = _state_path(target, "ui-blueprint.json")
-    blueprint = _load(blueprint_path)
-    blueprint["pages"] = [{"id": "PAGE-001", "route": "/sales", "modules": ["MODULE-001"]}]
-    _write(blueprint_path, blueprint)
-    _write_verified_contract(
-        target,
-        _implementation_artifacts(target),
-        implementation_status="contract_verified_only",
+    legacy = target / ".opscli" / "migration" / "legacy-demo"
+    legacy.mkdir(parents=True)
+    (legacy / "migration.json").write_text(
+        json.dumps({"migration_id": "legacy-demo", "phase": "audit"}), encoding="utf-8"
     )
+    (legacy / "coverage-matrix.json").write_text("{}", encoding="utf-8")
+    current = legacy.parent / "current.json"
+    current.write_text(json.dumps({"migration_id": "legacy-demo"}), encoding="utf-8")
 
-    with pytest.raises(AppProjectError) as exc_info:
-        service.verify(target, gate="data")
+    result = MigrationService().convert_legacy(target)
 
-    assert "实现状态不是 verified" in "\n".join(exc_info.value.detail["problems"])
-    status = service.status(target)
-    assert status["delivery_ready"] is False
-    assert status["next_required_gate"] == "data"
-
-
-def test_frontend_placeholder_fails_delivery_validation(tmp_path: Path) -> None:
-    """前端仍保留布局占位文字时不得通过数据门禁。"""
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    matrix_path = _state_path(target, "coverage-matrix.json")
-    matrix = _load(matrix_path)
-    matrix["items"] = [
-        _completed_page_item(),
-        {
-            "id": "DATA-001",
-            "kind": "data",
-            "status": "已完成",
-            "dynamic": True,
-            "target": {"route": "/sales", "files": ["frontend/src/views/SalesView.vue"]},
-            "acceptance": {"checks": ["layout", "data"], "evidence": ["tests/api/test_sales.py"]},
-            "data_contract": {
-                "product_key": "sales",
-                "status": "verified",
-                "evidence": ["docs/ops-app/data-contracts.json#sales"],
-                "implementation_status": "verified",
-            },
-            "remaining_issues": [],
-            "unblock_conditions": [],
-        }
-    ]
-    _write(matrix_path, matrix)
-    blueprint_path = _state_path(target, "ui-blueprint.json")
-    blueprint = _load(blueprint_path)
-    blueprint["pages"] = [{"id": "PAGE-001", "route": "/sales", "modules": ["MODULE-001"]}]
-    _write(blueprint_path, blueprint)
-    artifacts = _implementation_artifacts(target, placeholder=True)
-    _write_verified_contract(target, artifacts)
-
-    with pytest.raises(AppProjectError) as exc_info:
-        service.verify(target, gate="data")
-
-    assert "前端仍包含未交付占位文本" in "\n".join(exc_info.value.detail["problems"])
-
-
-def test_failed_verify_does_not_advance_phase(tmp_path: Path) -> None:
-    """门禁失败时迁移阶段必须保持不变。"""
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-
-    with pytest.raises(AppProjectError):
-        service.verify(target, gate="ui")
-
-    assert service.status(target)["phase"] == "audit"
-
-
-def test_schema_v1_migration_state_remains_readable(tmp_path: Path) -> None:
-    """现有 Schema v1 状态应继续可读，并明确提示需要升级。"""
-    source = _source_project(tmp_path)
-    target = _target_project(tmp_path)
-    service = MigrationService()
-    service.initialize(source, target, migration_id="migration-demo")
-    migration_root = target / ".opscli/migration/migration-demo"
-    for name in ("migration.json", "coverage-matrix.json", "ui-blueprint.json"):
-        path = migration_root / name
-        payload = _load(path)
-        payload["schema_version"] = 1
-        _write(path, payload)
-
-    status = service.status(target)
-
-    assert status["schema_version"] == 1
-    assert status["schema_upgrade_required"] is True
-    assert status["delivery_ready"] is False
+    assert result["status"] == "legacy_converted"
+    assert not legacy.exists()
+    assert Path(result["legacy_backup"]).is_dir()
