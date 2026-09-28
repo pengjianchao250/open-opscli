@@ -39,6 +39,29 @@ class SellerSpriteScenarioRequest:
     page_prepare: bool | None = None
     task_interval_seconds: float | None = None
     cooldown_seconds: float | None = None
+    collection_scope: str = "page"
+
+    def __post_init__(self) -> None:
+        """在认证与入队前校验选产品全量采集边界。"""
+        from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+        if self.collection_scope not in {"page", "all"}:
+            raise SellerSpriteConfigError("collection_scope 仅支持 page/all")
+        if self.collection_scope == "page":
+            return
+        if self.scenario != "product-research":
+            raise SellerSpriteConfigError("collection_scope=all 仅支持 product-research")
+        if self.mode not in {None, "browser-route"}:
+            raise SellerSpriteConfigError("选产品全量采集仅支持 browser-route")
+        if self.export_format.lower() not in {"xls", "xlsx"}:
+            raise SellerSpriteConfigError("选产品全量采集仅支持 xls/xlsx 文件导出")
+        for name, value, expected in [
+            ("page_size", self.page_size, 100),
+            *[(name, self.params[name], 100) for name in ("size", "pageSize") if name in self.params],
+            *[(name, self.params[name], 1) for name in ("page", "startPage", "pageNum") if name in self.params],
+        ]:
+            if isinstance(value, bool) or str(value) != str(expected):
+                raise SellerSpriteConfigError(f"选产品全量采集要求 {name}={expected}")
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可序列化字典。"""
@@ -61,11 +84,16 @@ class SellerSpriteScenarioResult:
     export: SellerSpriteExportResult | None = None
     data: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    collection: dict[str, Any] | None = None
+    preview: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 MCP/CLI 返回结构。"""
         payload = asdict(self)
         payload["export"] = self.export.to_dict() if self.export else None
+        if self.collection is None:
+            payload.pop("collection")
+            payload.pop("preview")
         return payload
 
     @classmethod

@@ -53,6 +53,8 @@ def build_seller_sprite_cache_identity(
         if str(request.scenario or "").strip().lower() == "product-research"
         else {}
     )
+    if request.collection_scope == "all":
+        contract.update(collection_scope="all", pagination_contract="product-accessible-v1")
     cache_key = build_cache_key(
         "seller_sprite",
         {
@@ -116,8 +118,8 @@ class SellerSpriteCollectionSubmitter:
             completed_at=(
                 str(status["finished_at"]) if status.get("finished_at") else None
             ),
-            cache_key=cache_key,
-            cache_scope=cache_scope,
+            cache_key=cache_key if request.collection_scope == "page" else None,
+            cache_scope=cache_scope if request.collection_scope == "page" else None,
             result_metadata=safe_result_metadata(result.to_dict()),
         )
         return self.runtime.submit(submission)
@@ -178,8 +180,8 @@ class SellerSpriteCollectionReconciler:
                         if status.get("finished_at")
                         else None
                     ),
-                    cache_key=cache_key,
-                    cache_scope=cache_scope,
+                    cache_key=cache_key if request.collection_scope == "page" else None,
+                    cache_scope=cache_scope if request.collection_scope == "page" else None,
                     result_metadata=safe_result_metadata(status),
                 )
             )

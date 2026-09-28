@@ -138,7 +138,26 @@
       "exportAsins",
       "hideSellerInfo"
     ],
-    "response": {
+    "pagination_policy": {
+    "version": "product-accessible-v1",
+    "default_scope": "page",
+    "supported_scopes": [
+      "page",
+      "all"
+    ],
+    "all_page_size": 100,
+    "access_limit": 2000,
+    "all_max_pages": 20,
+    "all_export_formats": [
+      "xls",
+      "xlsx"
+    ],
+    "all_row_path": "data.items",
+    "all_total_path": "data.total",
+    "source": "2026-09-28 已登录网页第20/21页边界实测及官方分页组件 maxTotal:2e3",
+    "note": "total 是匹配数，不是可访问条数；其他场景不可复用本合同。"
+  },
+  "response": {
       "success_code": "OK",
       "data": null
     }

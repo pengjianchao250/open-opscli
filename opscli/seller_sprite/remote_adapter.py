@@ -57,6 +57,7 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
         export_format: str,
         output_dir: str | None,
         job_id: str | None,
+        collection_scope: str = "page",
     ) -> dict[str, Any]:
         """执行卖家精灵远端任务，认证由 MCP API Key 对应的隔离凭证提供。"""
         return self.call_tool(
@@ -69,6 +70,7 @@ class SellerSpriteRemoteAdapter(RemoteMcpAdapter):
                 "page_size": page_size,
                 "export_format": export_format,
                 "job_id": job_id,
+                **({"collection_scope": collection_scope} if collection_scope != "page" else {}),
             },
         )
 

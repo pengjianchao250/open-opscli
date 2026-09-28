@@ -42,6 +42,7 @@ def run_scenario(
     export_format: str = typer.Option("xls", "--export-format", help="导出格式：xls/xlsx/json"),
     output_dir: str | None = typer.Option(None, "--output-dir", help="输出目录"),
     job_id: str | None = typer.Option(None, "--job-id", help="指定任务 ID"),
+    collection_scope: str = typer.Option("page", "--collection-scope", help="page 单页；all 选产品可访问结果（最多2000条）"),
 ) -> None:
     """按正式公共命令契约执行卖家精灵场景。"""
     payload = SellerSpriteRemoteAdapter().run(
@@ -53,6 +54,7 @@ def run_scenario(
         job_id=job_id,
         output_dir=output_dir,
         export_format=export_format,
+        **({"collection_scope": collection_scope} if collection_scope != "page" else {}),
     )
     typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
 

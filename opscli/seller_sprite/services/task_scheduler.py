@@ -1028,6 +1028,11 @@ class SellerSpriteTaskScheduler:
                     account_key=account_key,
                     assignment_generation=generation,
                 )
+                if request.collection_scope == "all":
+                    self._configure_product_resume(
+                        manager=manager, job_id=job_id, account_key=account_key,
+                        generation=generation, task_root=Path(str(status["root_dir"])),
+                    )
                 if has_mcp_run and failover_count == 0:
                     self.store.mark_mcp_run_running(job_id)
                 result = await self._run_manager_with_session_reservation(
@@ -1054,6 +1059,10 @@ class SellerSpriteTaskScheduler:
                     replay_safe = bool(
                         request is None or get_scenario(request.scenario).replay_safe
                     )
+                    if request is not None and request.collection_scope == "all":
+                        checkpoint = self.store.load_product_checkpoint(job_id)
+                        if checkpoint and checkpoint.get("pages"):
+                            replay_safe = False
                 except Exception as scenario_error:
                     # 错误处理不能因请求场景本身无效而再次抛错，
                     # 否则 worker 会退出，当前任务只能等租约过期后循环重试。
@@ -1585,6 +1594,15 @@ class SellerSpriteTaskScheduler:
                     account_key=execution_account_key,
                     assignment_generation=assignment_generation,
                 )
+                if request.collection_scope == "all":
+                    task_root = Path(str(self.store.get_status(job_id)["root_dir"]))
+                    request = replace(request, attempt_output_dir=str(
+                        task_root / "attempts" / f"generation-{assignment_generation}"
+                    ))
+                    self._configure_product_resume(
+                        manager=manager, job_id=job_id, account_key=execution_account_key,
+                        generation=assignment_generation, task_root=task_root,
+                    )
             if isinstance(manager, SellerSpriteApiManager):
                 self._configure_listing_analysis_resume(
                     manager=manager,
@@ -1683,6 +1701,23 @@ class SellerSpriteTaskScheduler:
         if isinstance(manager, SellerSpriteApiManager) or hasattr(manager, "progress_listener"):
             manager.progress_listener = listener
 
+    def _configure_product_resume(
+        self, *, manager: Any, job_id: str, account_key: str,
+        generation: int, task_root: Path,
+    ) -> None:
+        """为选产品注入恢复清单，以及受当前任务租约保护的提交函数。"""
+        manager.product_checkpoint = self.store.load_product_checkpoint(job_id)
+        manager.product_task_root = task_root
+
+        def save(checkpoint: dict[str, Any]) -> None:
+            if not self.store.save_product_checkpoint(
+                job_id=job_id, account_key=account_key, assignment_generation=generation,
+                execution_owner=self._session_owner_id, checkpoint=checkpoint,
+            ):
+                raise SellerSpriteConfigError("选产品分页任务执行代际或租约已失效")
+
+        manager.product_checkpoint_listener = save
+
     def _configure_listing_analysis_resume(
         self,
         *,
@@ -1759,6 +1794,9 @@ class SellerSpriteTaskScheduler:
     ) -> SellerSpriteScenarioResult:
         """在统一时间上限内执行场景，超时时转换为稳定领域错误。"""
         timeout_seconds = max(0.01, float(self.settings.task_timeout_seconds))
+        checkpoint = getattr(manager, "product_checkpoint", None)
+        if request.collection_scope == "all" and checkpoint:
+            timeout_seconds = min(timeout_seconds, max(0.01, checkpoint["deadline"] - time.time()))
         try:
             return await asyncio.wait_for(
                 manager.run(request),

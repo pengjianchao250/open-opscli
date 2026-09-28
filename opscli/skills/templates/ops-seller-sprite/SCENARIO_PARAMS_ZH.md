@@ -511,6 +511,24 @@ seller_sprite_run(
 }
 ```
 
+### 选产品分页与获取全部
+
+- 默认 `collection_scope=page`，请求一页，`page_size=100`。用户明确要求“全部”“全量”时，传顶层 `collection_scope=all`，不要放进 `params`。
+- 官网只允许查看前 **2,000 条**；all 表示取完网页可访问范围，不能承诺取完所有匹配商品。总匹配数可能大于2,000，例如4,830条只采集20页共2,000条；更大范围应由用户缩小条件，禁止自动拆条件或切账号绕过上限。
+- all 首期只支持 `product-research`、`page_size=100`、从第一页开始、`export_format=xls/xlsx`。`xls` 最终生成 `.xlsx`。不要给 all 传 JSON 导出，或为其他场景复用该分页逻辑。
+- 返回 `collection.source_total`（匹配数）、`access_limit`（2,000）、`rows_written`、`pages_completed`、`collection_complete` 与 `coverage`。`source_limited` 表示已取完可访问范围但来源受限；`matched_range` 表示本次所有匹配结果均已采集；`partial/unverified` 不能报告为完整结果。动态排序不提供数据库快照保证。
+- 全量结果的 `data=[]`，`preview` 最多10行，仅用于预览；后续分析必须读取 XLSX，不能把预览当成全部商品。逐页原始文件与检查点由后端保管。
+- 处理中继续查询同一个 `job_id`。调度器中断可恢复已完成页面；任务已终态失败时不会自动续跑。重复ASIN、总数漂移、异常短页会停止并返回失败，保留已采集页；不要擅自反复提交。
+- 首期全量模式不复用共享结果缓存。MCP 及 Collector 均需部署支持 `collection_scope` 的版本；线上未暴露该参数时如实说明，不用多次单页提交冒充全量任务。AppHub REST 当前尚未开放该参数。
+
+CLI 示例：
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --collection-scope all --export-format xlsx --params '{"keywords":"LOFT","selectType":"2"}'
+```
+
+MCP 使用同样的顶层 `collection_scope="all"`、`export_format="xlsx"`，筛选条件仍在 `params`。
+
 ### 推荐模式
 
 `recommendationMode` 可用值：
