@@ -465,7 +465,7 @@ def test_manager_runs_keyword_research_as_get_page(monkeypatch, tmp_path: Path):
 
 
 @pytest.mark.parametrize("export_format", ["xlsx", "json"])
-def test_manager_returns_only_first_aba_research_page(
+def test_manager_preserves_aba_research_page(
     monkeypatch,
     tmp_path: Path,
     export_format: str,
@@ -499,8 +499,8 @@ def test_manager_returns_only_first_aba_research_page(
     assert len(AbaResearchApiClient.calls) == 1
     call = AbaResearchApiClient.calls[0]
     assert call["url"] == "/v3/api/aba-research"
-    assert call["payload"]["page"] == 1
-    assert call["payload"]["size"] == 100
+    assert call["payload"]["page"] == 4
+    assert call["payload"]["size"] == 20
     assert call["payload"]["market"] == "COM"
     assert call["payload"]["q"] == "paper towels"
     assert call["referer"] == "https://www.sellersprite.com/v3/aba-research"
@@ -510,7 +510,7 @@ def test_manager_returns_only_first_aba_research_page(
     assert len(raw["response"]["data"]["items"]) == 2
 
 
-def test_manager_returns_only_first_aba_research_page_in_browser_route_mode(
+def test_manager_preserves_aba_research_page_in_browser_route_mode(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -556,8 +556,8 @@ def test_manager_returns_only_first_aba_research_page_in_browser_route_mode(
     assert len(calls) == 1
     assert calls[0]["scenario_method"] == "POST"
     assert calls[0]["endpoint"] == "/v3/api/aba-research"
-    assert calls[0]["payload"]["page"] == 1
-    assert calls[0]["payload"]["size"] == 100
+    assert calls[0]["payload"]["page"] == 2
+    assert calls[0]["payload"]["size"] == 10
     assert calls[0]["payload"]["q"] == "obsession"
 
 

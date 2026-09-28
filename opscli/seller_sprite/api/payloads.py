@@ -1085,11 +1085,20 @@ def make_aba_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
         order_desc_value = order_payload.get("desc", False)
 
     _validate_aba_research_ranges(input_data)
+    page = _positive_int(
+        input_data.get("page") or input_data.get("startPage"),
+        default=1,
+        field="page",
+    )
+    size = _positive_int(
+        input_data.get("size") or input_data.get("pageSize"),
+        default=100,
+        field="size",
+    )
     payload: dict[str, Any] = {
         "rankGrowthType": rank_growth_type,
-        # 本场景固定只取第一页 100 条，忽略公共分页参数和调用方覆盖值。
-        "size": 100,
-        "page": 1,
+        "size": size,
+        "page": page,
         "market": market,
         "q": _query_text(
             input_data.get("q")

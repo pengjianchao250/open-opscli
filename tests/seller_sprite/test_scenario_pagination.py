@@ -24,6 +24,16 @@ def test_competitor_contract_uses_page_and_size() -> None:
     assert contract.verified_access_limit == 2000
 
 
+def test_aba_research_contract_uses_page_and_size() -> None:
+    """ABA 数据选品使用 page/size。"""
+    contract = get_pagination_contract("aba-research")
+    assert contract.page_payload({"q": "screen protector"}, page=2, page_size=50) == {
+        "q": "screen protector",
+        "page": 2,
+        "size": 50,
+    }
+
+
 def test_keyword_miner_contract_uses_page_num_and_page_size() -> None:
     """关键词挖掘使用 pageNum/pageSize，不能继承产品的 2000 上限。"""
     contract = get_pagination_contract("keyword-miner")

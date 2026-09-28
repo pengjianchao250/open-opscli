@@ -52,6 +52,14 @@ class ScenarioPaginationContract:
 
 
 PAGINATION_CONTRACTS: dict[str, ScenarioPaginationContract] = {
+    "aba-research": ScenarioPaginationContract(
+        scenario="aba-research",
+        request_page_field="page",
+        request_size_field="size",
+        response_items_path=("data", "items"),
+        response_total_paths=(("data", "total"),),
+        notes="网页已确认 page/size 可翻页；周期、排序和筛选条件必须冻结。",
+    ),
     "competitor-lookup": ScenarioPaginationContract(
         scenario="competitor-lookup",
         request_page_field="page",

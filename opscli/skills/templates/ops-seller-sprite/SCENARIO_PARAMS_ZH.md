@@ -50,7 +50,7 @@
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
 - `real-time-bidding` 仅支持 `browser-route` 和单个 ASIN；普通历史已完成/失败时自动“再次查询”，无历史时弹窗新建默认推荐关键词任务，进行中任务只等待，官网示例只读；完成后分别读取 SP、SB 第一页并严格合并为 100 条完整竞价数据，不调用官网导出。
-- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
+- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；默认请求第一页 100 条，可用 `page`/`size`（或公共别名 `page_size`）指定单页，网页已确认可翻到第 2 页；本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
@@ -93,7 +93,7 @@
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
 | `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
-| `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
+| `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；默认第一页 100 条，可指定 `page`/`size`；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
 | `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc`、`pageNum`、`pageSize` | 全部变体固定开启；默认第一页，可按合同请求指定页；`page_size=100` |
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
@@ -253,8 +253,9 @@
 
 ### 分页与导出
 
-- 后端固定提交一次 `POST /v3/api/aba-research`，强制使用 `page=1`、`size=100`；调用方传入的 `page`、`size` 或顶层 `page_size` 不会改变这一约束。
-- 只保存第一页实际返回的数据，不请求或合并后续页；`row_count` 等于第一页 `data.items` 的实际数量。
+- 后端提交 `POST /v3/api/aba-research`，使用 `page`/`size`；默认值为 `page=1`、`size=100`。调用方可以用 `page`、`size` 或顶层 `page_size` 指定单页大小，翻页时必须冻结周期、排序和筛选条件。
+- 网页实测可以从第 1 页翻到第 2 页；本轮只确认分页可用，不承诺超过页面可见范围的全量采集。
+- 只保存调用方指定页实际返回的数据，不自动循环或合并后续页；`row_count` 等于该页 `data.items` 的实际数量。
 - 不调用官网导出接口，不消耗官网有限导出次数；根据查询 JSON 在本地生成 `ABAKeywordTrend-{站点}-{周期}.xlsx`。
 - 本地工作簿对齐官方 19 列业务主表、橙色表头、冻结窗格、列宽和数字格式；不生成官网 `Notes` 页及二维码图片。
 
@@ -275,9 +276,10 @@
 | 关联类型 | `relations` | 可省略；省略表示全部类型；可传下表 code 数组或分隔文本 |
 | 排序字段 | `orderField` | 默认 `createdTime`；可用 `relationCount` |
 | 倒序 | `desc` | 默认 `true` |
-| 每页数量 | 顶层 `page_size` | 固定按公共默认 `100` 执行；只返回第一页，最多 100 条 |
+| 页码 | `params.pageNum` | 默认 `1`；页面请求支持指定页码，翻页时冻结 ASIN、关联类型和排序 |
+| 每页数量 | 顶层 `page_size` / `params.pageSize` | 默认 `100`；页面请求实际使用 `pageSize` |
 
-若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次；登录成功后仍只获取第一页 100 条。
+若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次；本轮已用真实请求确认 `pageNum=7,pageSize=50` 可访问指定页，但仍只执行调用方指定的单页请求。
 
 ### 关联类型枚举
 

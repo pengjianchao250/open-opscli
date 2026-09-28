@@ -112,6 +112,7 @@ SCENARIOS: dict[str, SellerSpriteScenario] = {
         required_params=(),
         required_any_params=("q", "keywordOrAsin", "keyword", "asin"),
         payload_builder=make_aba_research_payload,
+        pagination_contract="aba-research",
     ),
     "aba-reverse": SellerSpriteScenario(
         scenario_id="aba-reverse",
