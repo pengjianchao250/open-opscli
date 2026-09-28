@@ -470,6 +470,47 @@ seller_sprite_run(
 
 ## `product-research` 重点参数
 
+### 页面请求合同
+
+以下字段以 `/v3/product-research` 页面实际 POST `/v3/api/product-research` 为准，不能套用关键词挖掘、ABA 或其他场景的参数语义。
+
+| 业务含义 | 正式参数 | 说明 |
+| --- | --- | --- |
+| 包含关键词 | `params.keywords` | 字符串；多个关键词按页面提示用英文逗号分隔，例如 `loft bed,bunk bed`；兼容单数 `keyword`，同时传入时以 `keywords` 为准；数组会报错 |
+| 匹配模式 | `params.selectType` | `"2"` 模糊、`"3"` 词组、`"4"` 精准，默认 `"2"`；这是关键词匹配模式 |
+| 展示所有变体 | `params.symbolFlag` | 使用 **POST 请求体**语义：`false` 展示所有变体，`true` 不展示所有变体；默认 `false` |
+| 数据周期 | 顶层 `period` | `30d` 映射为 `monthName=bsr_sales_nearly`；`YYYY-MM` 映射为对应月份 |
+| 销量增长率比较 | `params.salesGrowthType` | `30d` 环比、`yoy` 同比，默认 `30d`；独立于数据周期，不能据此声称查询的是最近 30 天 |
+| 排序 | `params.order` | 如 `{"field":"price","desc":false}`；兼容 `orderField/orderDesc`，页面对象里的同名值优先；增长率排序字段随环比/同比切换 |
+
+旧 `matchType=0/1/2` 只作为兼容别名，转换为 `selectType="2"/"3"/"4"` 后发送；若同时传 `selectType`，以它为准。接口不会再收到 `matchType`。旧 `loadVariations=true/false` 分别转为 POST 的 `symbolFlag=false/true`，显式 `symbolFlag` 优先。
+
+页面 URL 的 `symbolFlag` 是复选框状态，和 POST 请求体相反。复制网页请求时读取请求体，不要直接把地址栏参数原样当作 POST；opscli 会自动生成正确的页面 URL。`filterSub` 仅控制子类目排名，与变体无关。
+
+本轮未增加自动分页或多页合并。`page_size` 仍表示单页大小，不代表总采集条数。
+
+原 LOFT 条件的调用参数示例：
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "page_size": 100,
+  "params": {
+    "keywords": "LOFT",
+    "selectType": "2",
+    "symbolFlag": false,
+    "salesGrowthType": "30d",
+    "order": {"field": "total_units", "desc": true},
+    "nodeIdPaths": [
+      "1055398:1063306:1063308:3733101:3248801011",
+      "1055398:1063306:1063308:3733101:3248804011"
+    ]
+  }
+}
+```
+
 ### 推荐模式
 
 `recommendationMode` 可用值：
@@ -512,11 +553,11 @@ seller_sprite_run(
 - `sellerTypes`：`AMZ`、`FBA`、`FBM`
 - `pkgDimensionTypeList`：`SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
 - `sellerNationList`：如 `CN`、`US`、`JP`、`GB`、`DE`
-- `video`：`Y` / `N`
+- `video`：POST 使用 `Y` / `N`；也接受页面控件布尔值 `true` / `false`，空字符串或不传表示不限
 - `lowPrice`：`Y` / `N`
 - `smallAndLight`：常用 `N` 或 `lowPrice`
 - `filterSub`：是否只看所选子类目排名
-- `matchType`：`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
+- `selectType`：`"2"` 模糊匹配、`"3"` 词组匹配、`"4"` 精准匹配；旧 `matchType` 仅作兼容转换，详见上方页面请求合同
 
 关于 `A+` / `NonA+`：
 

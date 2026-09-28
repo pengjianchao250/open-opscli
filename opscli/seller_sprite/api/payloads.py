@@ -442,18 +442,26 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     input_data = normalize_product_research_input(input_data)
     month = input_data.get("month") or input_data.get("period") or "2026-03"
     preset = product_research_recommendation_preset(input_data)
+    # 选产品网页提交嵌套 order；旧 CLI 的扁平别名只在页面字段缺省时补齐。
+    order = input_data.get("order") or {}
+    if not isinstance(order, dict):
+        raise SellerSpriteConfigError("product-research 的 order 必须是包含 field/desc 的对象")
+    order_field = order.get("field") or input_data.get("orderField") or "total_units"
+    if order_field in {"total_units_growth", "total_units_growth_yoy"}:
+        # 页面切换环比/同比时同步切换增长率排序字段，与数据月份无关。
+        order_field = "total_units_growth_yoy" if input_data["salesGrowthType"] == "yoy" else "total_units_growth"
     payload: dict[str, Any] = {
         "market": _market(input_data, default="JP"),
         "page": _int(input_data.get("page") or input_data.get("startPage"), 1),
         "size": _int(input_data.get("size") or input_data.get("pageSize"), 100),
-        "symbolFlag": False,
+        "symbolFlag": input_data["symbolFlag"],
         "monthName": input_data.get("monthName") or month_name(month),
-        "selectType": str(input_data.get("selectType") or "2"),
+        "selectType": input_data["selectType"],
         "filterSub": truthy(input_data.get("filterSub")) if input_data.get("filterSub") is not None else False,
         "weightUnit": input_data.get("weightUnit") or "g",
         "order": {
-            "field": input_data.get("orderField") or "total_units",
-            "desc": order_desc(input_data.get("orderDesc")),
+            "field": order_field,
+            "desc": order_desc(order.get("desc", input_data.get("orderDesc"))),
         },
         "productTags": [],
         "nodeIdPaths": csv(
@@ -474,7 +482,6 @@ def make_product_research_payload(input_data: dict[str, Any]) -> dict[str, Any]:
     _append_product_range_filters(payload, input_data)
     _append_product_extra_filters(payload, input_data)
     for key in [
-        "keyword",
         "keywords",
         "includeBrands",
         "excludeBrands",
@@ -1294,10 +1301,21 @@ def build_referer(payload: dict[str, Any], scenario: str) -> str:
     if scenario == "market-research":
         query = _flatten_query(payload)
         return f"https://www.sellersprite.com/v2/market-research?{urlencode(query)}"
+    if scenario == "product-research":
+        # 本页面 URL 保存控件状态，POST 前会取反 symbolFlag 并将视频布尔值转为 Y/N。
+        page_params = dict(payload)
+        page_params["symbolFlag"] = not payload["symbolFlag"]
+        if payload.get("video") in {"Y", "N"}:
+            page_params["video"] = payload["video"] == "Y"
+        # 页面按 JavaScript 布尔字面量解析 URL，Python 的 True/False 会使页面初始化失败。
+        query = _flatten_query(page_params)
+        for field in ("symbolFlag", "filterSub", "order[desc]", "video"):
+            if field in query:
+                query[field] = query[field].lower()
+        return f"https://www.sellersprite.com/v3/product-research?{urlencode(query)}"
 
-    path = "product-research" if scenario == "product-research" else "competitor-lookup"
     query = _flatten_query(payload)
-    return f"https://www.sellersprite.com/v3/{path}?{urlencode(query)}"
+    return f"https://www.sellersprite.com/v3/competitor-lookup?{urlencode(query)}"
 
 
 def month_name(value: Any) -> str:
@@ -1844,8 +1862,41 @@ def product_research_recommendation_preset(input_data: dict[str, Any]) -> dict[s
 
 
 def normalize_product_research_input(input_data: dict[str, Any]) -> dict[str, Any]:
-    """兼容 SellerSprite 官方开放 API 的选产品入参命名。"""
+    """按选产品 Web 页面合同归一化控制参数，并兼容旧调用别名。"""
     normalized = dict(input_data)
+    # 本场景网页用 keywords 字符串，不能沿用关键词挖掘的 keyword 或批量数组合同。
+    if "keywords" not in normalized and "keyword" in normalized:
+        normalized["keywords"] = normalized["keyword"]
+    if normalized.get("keywords") is not None and not isinstance(normalized["keywords"], str):
+        raise SellerSpriteConfigError(
+            "product-research 的 keywords 必须为字符串，请按选产品页面填写关键词，不能传数组"
+        )
+    # 官网本页的匹配单选框使用 selectType=2/3/4；matchType 仅作为旧调用别名。
+    select_type = normalized.get("selectType")
+    if select_type is None:
+        legacy_match = str(normalized.get("matchType", 0))
+        if legacy_match not in {"0", "1", "2"}:
+            raise SellerSpriteConfigError("product-research 的 matchType 兼容值只能为 0/1/2")
+        select_type = {"0": "2", "1": "3", "2": "4"}[legacy_match]
+    if str(select_type) not in {"2", "3", "4"}:
+        raise SellerSpriteConfigError("product-research 的 selectType 只能为 2（模糊）/3（词组）/4（精准）")
+    normalized["selectType"] = str(select_type)
+    if normalized.get("symbolFlag") is not None:
+        normalized["symbolFlag"] = _product_research_bool(normalized["symbolFlag"], "symbolFlag")
+    elif normalized.get("loadVariations") is not None:
+        normalized["symbolFlag"] = not _product_research_bool(normalized["loadVariations"], "loadVariations")
+    else:
+        normalized["symbolFlag"] = False
+    # salesGrowthType 是增长率环比/同比选择，不是 monthName 数据周期的别名。
+    normalized["salesGrowthType"] = normalized.get("salesGrowthType") or "30d"
+    if normalized["salesGrowthType"] not in {"30d", "yoy"}:
+        raise SellerSpriteConfigError("product-research 的 salesGrowthType 只能为 30d（环比）/yoy（同比）")
+    video = normalized.get("video")
+    if video is not None and video != "":
+        if isinstance(video, bool):
+            normalized["video"] = "Y" if video else "N"
+        elif video not in {"Y", "N"}:
+            raise SellerSpriteConfigError("product-research 的 video 只能为 Y/N、布尔值或空字符串")
     for source, target in PRODUCT_RESEARCH_OFFICIAL_FIELD_ALIASES.items():
         if source in normalized and target not in normalized:
             normalized[target] = normalized[source]
@@ -1864,6 +1915,14 @@ def normalize_product_research_input(input_data: dict[str, Any]) -> dict[str, An
     if tags:
         normalized["productTags"] = tags
     return normalized
+
+
+def _product_research_bool(value: Any, field: str) -> bool:
+    """校验本场景开关，避免未知文本被静默解释成关闭。"""
+    text = str(value).lower()
+    if text not in {"true", "false", "1", "0"}:
+        raise SellerSpriteConfigError(f"product-research 的 {field} 必须为布尔值")
+    return text in {"true", "1"}
 
 
 def _market(input_data: dict[str, Any], *, default: str = "DE") -> str:
@@ -1934,9 +1993,9 @@ def _append_product_extra_filters(payload: dict[str, Any], input_data: dict[str,
         "smallAndLight",
         "lowPrice",
         "video",
-        "matchType",
+        "salesGrowthType",
     ]:
-        if input_data.get(key) is not None:
+        if input_data.get(key) is not None and input_data.get(key) != "":
             if key == "putawayMonth":
                 payload[key] = _validate_putaway_month(input_data[key])
             else:

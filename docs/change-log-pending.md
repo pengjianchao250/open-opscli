@@ -1,3 +1,13 @@
+## 2026-09-28 SellerSprite - 对齐选产品页面请求参数
+
+**变更原因**：选产品查询的关键词别名、排序和销量增长周期字段未完整映射到官网请求，用户要求按本场景网页请求核实并修复，分页保持现状。
+**改动点**：增加脱敏页面请求 fixture 和选产品独立回归；keywords 字符串统一别名，order 优先于扁平别名；按本页 DOM/JS 将 matchType 旧别名转为 selectType=2/3/4，symbolFlag 使用 POST 语义并在 referer 取反，loadVariations 兼容映射；增长率环比/同比独立于数据月份，增长率排序随之切换；视频布尔值转换为 POST 的 Y/N。
+**验证结果**：首批修复前 4 项测试稳定失败，本页 DOM/JS 补充用例修复前 22 failed，缓存隔离用例修复前 1 failed；新增 36 项选产品回归，含 route.continue_ 发出的 POST 请求体对照。相关回归 306 passed、1 failed；唯一失败为既有关键词反查导出文件名断言，使用修改前运行模块复现。登录官网用修复后 referer 复现 LOFT 床类目结果，并实际核对词组/精准匹配、变体和视频控件 URL；请求证据与验证边界见 `docs/analysis/卖家精灵选产品页面参数核对.md`。
+**影响范围**：仅 product-research 参数合同、页面 referer 的布尔序列化和对应缓存合同，不扩展分页；新增测试保证其他场景缓存身份不变。场景 manifest 和 Skill 参数手册同步修正，ops-seller-sprite 升至 v0.0.23。
+**回滚方式**：回滚本条对应的选产品实现、缓存合同版本、测试、fixture 和参数文档；旧缓存未删除。
+
+---
+
 ## 2026-09-22 SellerSprite - 修正流量词对比自身 ASIN 导出合同
 
 **变更原因**：官网流量词对比主请求使用独立 `asin` 传自己的 ASIN，页面生成的 `asinList` 可以只包含竞品或变体。原 browser-route 将 `asinList` 直接作为导出列顺序，导致请求成功后误报“流量词对比导出缺少自己的 ASIN”；Skill 也未明确该字段合同和错误归因。

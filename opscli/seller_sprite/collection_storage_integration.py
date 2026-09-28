@@ -47,6 +47,12 @@ def build_seller_sprite_cache_identity(
     requested_account_key: str | None,
 ) -> tuple[str, str]:
     """返回 SellerSprite 规范请求缓存键和公共结果作用域。"""
+    # 选产品参数映射修正后，同一旧入参已不再代表同一请求；隔离旧缓存避免继续返回错口径结果。
+    contract = (
+        {"request_contract": "product-research-web-20260928"}
+        if str(request.scenario or "").strip().lower() == "product-research"
+        else {}
+    )
     cache_key = build_cache_key(
         "seller_sprite",
         {
@@ -58,6 +64,7 @@ def build_seller_sprite_cache_identity(
             "export_format": _canonical_export_format(request.export_format),
             "mode": str(request.mode or "browser-route").strip().lower(),
             "page_prepare": request.page_prepare,
+            **contract,
         },
     )
     return cache_key, seller_sprite_cache_scope(
