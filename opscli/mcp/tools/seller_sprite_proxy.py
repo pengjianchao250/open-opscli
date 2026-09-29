@@ -53,9 +53,13 @@ async def seller_sprite_run(
     job_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    collection_scope: str = "page",
 ) -> dict:
     """通过 Collector 执行卖家精灵场景。"""
-    return await _call_collector("seller_sprite_run", locals())
+    arguments = dict(locals())
+    if collection_scope == "page":
+        arguments.pop("collection_scope")
+    return await _call_collector("seller_sprite_run", arguments)
 
 
 @_mark_proxy_tool

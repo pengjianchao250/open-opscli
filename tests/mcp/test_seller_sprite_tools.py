@@ -473,7 +473,7 @@ def test_seller_sprite_skill_documents_define_formatted_json_v2_contract():
         assert "官方文件导出场景仍只支持 `xls` / `xlsx`" in content
 
     version = json.loads((skill_dir / "data" / "VERSION.json").read_text(encoding="utf-8"))
-    assert version["version"] == "v0.0.22"
+    assert version["version"] == "v0.0.25"
 
 
 def test_listing_analysis_tools_require_explicit_user_trigger():

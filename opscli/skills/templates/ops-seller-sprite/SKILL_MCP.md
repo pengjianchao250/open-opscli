@@ -148,3 +148,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 ```md
 任务仍在后台执行，本次等待窗口到期但任务未失败。我已保留全部未完成任务编号；你可以直接说“继续”或“查结果”，我会续查完整 pending 集合，不会重新提交或再次消耗额度。
 ```
+
+## 选产品全量采集合同
+
+`seller_sprite_run` 新增顶层 `collection_scope`，默认 `page`；显式 `all` 支持已核验列表场景（选产品、选竞品、关键词挖掘、关键词反查、查流量来源、关联流量、ABA 数据选品、关键词选品、选市场），从第一页开始、使用 XLSX 文件。opscli 统一最多采集 2,000 行；匹配数更大时必须披露 `source_limited`。读取 [分页参数及结果解释](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部) 后构造请求并解释 `collection`。官方 XLSX、单报告和远程任务场景仍拒绝 `all`。

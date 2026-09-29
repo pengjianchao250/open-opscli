@@ -534,7 +534,7 @@ def test_association_traffic_payload_uses_all_variants_and_normalizes_pasted_asi
     assert scenario.method == "POST"
     assert payload == {
         "market": 1,
-        "pageNum": 1,
+        "pageNum": 3,
         "pageSize": 100,
         "desc": True,
         "orderField": "createdTime",
@@ -567,7 +567,7 @@ def test_association_traffic_payload_rejects_unknown_relation_type():
         )
 
 
-def test_aba_research_payload_maps_week_filters_and_forces_first_page():
+def test_aba_research_payload_maps_week_filters_and_page():
     scenario = get_scenario("aba-research")
 
     payload = scenario.build_payload(
@@ -593,8 +593,8 @@ def test_aba_research_payload_maps_week_filters_and_forces_first_page():
     assert scenario.method == "POST"
     assert payload == {
         "rankGrowthType": "W2",
-        "size": 100,
-        "page": 1,
+        "size": 20,
+        "page": 3,
         "market": "COM",
         "q": "B06XZTZ7GB",
         "table": "ara_20260718",

@@ -20,8 +20,8 @@ TASK_KIND_GENERIC = "generic"
 TASK_KIND_LISTING_ANALYSIS = "listing_analysis"
 ACCOUNT_ROUTE_SHARED_POOL = "shared_pool"
 ACCOUNT_ROUTE_USER_BINDING = "user_binding"
-# 版本 8 增加成功事件单调序号，保证数据沉淀对账不受任务乱序完成影响。
-QUEUE_SCHEMA_VERSION = 8
+# 版本 9 增加选产品分页检查点；保留版本 8 的成功事件单调序号。
+QUEUE_SCHEMA_VERSION = 9
 TASK_PROGRESS_STAGES = {
     "claimed",
     "resolving",
@@ -42,6 +42,8 @@ TASK_PROGRESS_METADATA_FIELDS = (
     "poll_total",
     "poll_status",
     "outcome",
+    "current_page",
+    "rows_received",
 )
 TASK_PROGRESS_POLL_STATUSES = {
     "PENDING",
@@ -366,6 +368,13 @@ class SellerSpriteTaskQueueStore:
                   AND queued.status = 'queued'
                   AND queued.account_route = 'shared_pool'
                   AND NOT EXISTS (
+                      SELECT 1 FROM seller_sprite_product_checkpoints AS checkpoint
+                      WHERE checkpoint.job_id = queued.job_id
+                        AND json_array_length(json_extract(checkpoint.checkpoint_json, '$.pages')) > 0
+                        AND json_extract(checkpoint.checkpoint_json, '$.account_key') <> ?
+                        AND json_extract(checkpoint.checkpoint_json, '$.deadline') > CAST(strftime('%s', 'now') AS REAL)
+                  )
+                  AND NOT EXISTS (
                       SELECT 1
                       FROM seller_sprite_task_queue AS legacy_running
                       WHERE legacy_running.queue_scope = queued.queue_scope
@@ -383,7 +392,7 @@ class SellerSpriteTaskQueueStore:
                 ORDER BY queued.id ASC
                 LIMIT 1
                 """,
-                (queue_scope, TASK_KIND_GENERIC, TASK_KIND_GENERIC, account_key),
+                (queue_scope, TASK_KIND_GENERIC, account_key, TASK_KIND_GENERIC, account_key),
             ).fetchone()
             if row is None:
                 conn.commit()
@@ -1216,6 +1225,40 @@ class SellerSpriteTaskQueueStore:
             status = self._status_from_connection(conn, job_id)
             conn.commit()
         return FailoverReassignmentResult("reassigned", status=status)
+
+    def load_product_checkpoint(self, job_id: str) -> dict[str, Any] | None:
+        """读取选产品分页的小型恢复清单，不读取业务行。"""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT checkpoint_json FROM seller_sprite_product_checkpoints WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return json.loads(row["checkpoint_json"]) if row else None
+
+    def save_product_checkpoint(
+        self, *, job_id: str, account_key: str, assignment_generation: int,
+        execution_owner: str, checkpoint: dict[str, Any],
+    ) -> bool:
+        """只有持有有效租约的当前账号、代际和执行者可以提交分页清单。"""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute(
+                """SELECT 1 FROM seller_sprite_task_queue
+                   WHERE job_id = ? AND status = 'running' AND assigned_account_key = ?
+                     AND assignment_generation = ? AND execution_owner = ?
+                     AND lease_expires_at > ?""",
+                (job_id, account_key, assignment_generation, execution_owner, _now_iso()),
+            ).fetchone()
+            if not current:
+                conn.rollback()
+                return False
+            conn.execute(
+                """INSERT INTO seller_sprite_product_checkpoints (job_id, checkpoint_json)
+                   VALUES (?, ?) ON CONFLICT(job_id) DO UPDATE SET checkpoint_json = excluded.checkpoint_json""",
+                (job_id, json.dumps(checkpoint, ensure_ascii=False)),
+            )
+            conn.commit()
+        return True
 
     def update_task_progress(
         self,
@@ -2617,6 +2660,9 @@ class SellerSpriteTaskQueueStore:
                 "CREATE INDEX IF NOT EXISTS ix_seller_sprite_runtime_heartbeat_at "
                 "ON seller_sprite_runtime_heartbeats(heartbeat_at)"
             )
+            conn.execute("""CREATE TABLE IF NOT EXISTS seller_sprite_product_checkpoints (
+                job_id TEXT PRIMARY KEY, checkpoint_json TEXT NOT NULL
+            )""")
             conn.execute(f"PRAGMA user_version = {QUEUE_SCHEMA_VERSION}")
             conn.commit()
 
@@ -2668,7 +2714,9 @@ class SellerSpriteTaskQueueStore:
         status = str(row["status"])
         payload = json.loads(str(row["request_json"]))
         position = self._queue_position(int(row["id"])) if status == "queued" else None
+        checkpoint = self.load_product_checkpoint(str(row["job_id"])) if payload.get("collection_scope") == "all" else None
         return {
+            **({"collection": checkpoint["collection"]} if checkpoint and "collection" in checkpoint else {}),
             "job_id": str(row["job_id"]),
             "scenario": payload["scenario"],
             "site": payload["site"],
@@ -2807,7 +2855,7 @@ def _sanitize_task_progress_metadata(metadata: dict[str, Any] | None) -> dict[st
     safe: dict[str, Any] = {}
     for key in TASK_PROGRESS_METADATA_FIELDS:
         value = metadata.get(key)
-        if key in {"poll_attempt", "poll_total"}:
+        if key in {"poll_attempt", "poll_total", "current_page", "rows_received"}:
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 safe[key] = value
         elif key == "poll_status":

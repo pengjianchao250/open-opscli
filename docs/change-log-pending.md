@@ -1,3 +1,42 @@
+## 2026-09-28 SellerSprite - 明确全量分页上限与异常恢复规则
+
+**变更原因**：需要判断是否能为全部场景开放获取全部分页，并统一处理网页访问上限、异常退出和恢复。
+**改动点**：方案明确普通网页列表的 opscli 安全上限为累计 2,000 行，按场景实际页大小换算页数；`total>2000` 返回 `source_limited`，缺失可靠 total 返回 `unverified`。补充原始页原子落盘、检查点、同账号同查询恢复、认证刷新、可重试错误、取消/崩溃/超时和导出中断规则；明确官方 XLSX、单报告及动态任务场景暂不进入通用 all。
+**验证结果**：本条为设计规则固化，不改变当前 `collection_scope` 可用范围；当前代码仍仅对选产品开放 all，其他场景继续 page 单页模式。
+**影响范围**：分页实施方案和网页实测边界说明；不改变现有运行时请求或导出行为。
+
+---
+
+## 2026-09-28 SellerSprite - 完成全部场景分页可用性核查
+
+**变更原因**：用户要求逐场景确认卖家精灵页面或真实接口是否能从第 1 页进入第 2 页；验收标准是分页参数和结果发生变化，不要求测试超过 2,000 条。
+**改动点**：修正 ABA 数据选品 payload，保留调用方 `page`/`size`（默认 1/100），新增 ABA 分页合同和回归；补充关键词选品、选市场真实页面第 2 页证据；记录关键词反查 `limit/skip` 与关联流量 `pageNum/pageSize` 的真实请求；新增全场景分页网页实测矩阵，更新分页设计、代码核查和 SellerSprite Skill 说明。
+**验证结果**：payload/分页合同定向回归 `107 passed`；关键词选品页面从 `page=1` 点击“下一页”后为 `page=2&size=50` 且结果从第 51 条开始；选市场点击页码 2 后为 `page=2&size=50` 且细分市场从第 51 个开始；既有 SellerSprite 全量回归保持排除一个修改前已存在的 `test_manager_generates_camel_case_job_id` 基线失败。
+**影响范围**：仅 ABA 单页请求的页码映射、场景分页合同、文档和测试；除已有选产品 all 外，不新增其他场景全量循环，不改变 2,000 条页面限制。
+**回滚方式**：回滚 ABA payload/测试/合同及本条文档更新；保留此前已提交的选产品分页实现和关联流量页码修复。
+
+---
+
+## 2026-09-28 SellerSprite - 选产品可访问范围分页采集
+
+**变更原因**：默认保留单页100条，用户要求显式获取全部可访问结果，并在Skill说明官网最多2,000条。
+**改动点**：CLI/MCP及通用代理新增collection_scope；all仅限选产品、100条/页、第一页起、XLSX、最多20页。独立解析data.items/total，冻结请求、逐页原子落盘、SQLite v9账号/代际/执行者/租约检查点、哈希恢复、累计时限及有限重试；已有页后禁止跨账号拼接。流式XLSX复用现有列格式，结果仅摘要和10行预览；异常覆盖不报成功；all禁用共享缓存但保留成功文件沉淀。Skill v0.0.24与manifest补充2,000条合同。
+**验证结果**：42项新增专项回归；最终相关回归682 passed、1 deselected，排除项为已在修改前基线复现的关键词反查文件名断言。本轮不排除时也仅该项失败。源码wheel构建、compileall和diff检查通过；新增文件Ruff通过，既有文件lint与HEAD均107项、无新增。合成100/1000/2000行基准中峰值RSS为69.55/70.43/71.11MiB，2000相对100增加1.56MiB。详见`docs/analysis/卖家精灵选产品分页开发验证.md`。
+**影响范围**：选产品显式all路径；page缓存和其他场景保持兼容。真实HTTP样本、连续20页网络采集、生产数据库及浏览器内存验证仍为发布门禁，本轮未部署。
+**回滚方式**：先暂停/排空all任务，再回滚代码与文档；新增检查点表可保留，不删除旧任务和页文件。
+
+---
+
+## 2026-09-28 SellerSprite - 对齐选产品页面请求参数
+
+**变更原因**：选产品查询的关键词别名、排序和销量增长周期字段未完整映射到官网请求，用户要求按本场景网页请求核实并修复，分页保持现状。
+**改动点**：增加脱敏页面请求 fixture 和选产品独立回归；keywords 字符串统一别名，order 优先于扁平别名；按本页 DOM/JS 将 matchType 旧别名转为 selectType=2/3/4，symbolFlag 使用 POST 语义并在 referer 取反，loadVariations 兼容映射；增长率环比/同比独立于数据月份，增长率排序随之切换；视频布尔值转换为 POST 的 Y/N。
+**验证结果**：首批修复前 4 项测试稳定失败，本页 DOM/JS 补充用例修复前 22 failed，缓存隔离用例修复前 1 failed；新增 36 项选产品回归，含 route.continue_ 发出的 POST 请求体对照。相关回归 306 passed、1 failed；唯一失败为既有关键词反查导出文件名断言，使用修改前运行模块复现。登录官网用修复后 referer 复现 LOFT 床类目结果，并实际核对词组/精准匹配、变体和视频控件 URL；请求证据与验证边界见 `docs/analysis/卖家精灵选产品页面参数核对.md`。
+**影响范围**：仅 product-research 参数合同、页面 referer 的布尔序列化和对应缓存合同，不扩展分页；新增测试保证其他场景缓存身份不变。场景 manifest 和 Skill 参数手册同步修正，ops-seller-sprite 升至 v0.0.23。
+**回滚方式**：回滚本条对应的选产品实现、缓存合同版本、测试、fixture 和参数文档；旧缓存未删除。
+
+---
+
 ## 2026-09-22 SellerSprite - 修正流量词对比自身 ASIN 导出合同
 
 **变更原因**：官网流量词对比主请求使用独立 `asin` 传自己的 ASIN，页面生成的 `asinList` 可以只包含竞品或变体。原 browser-route 将 `asinList` 直接作为导出列顺序，导致请求成功后误报“流量词对比导出缺少自己的 ASIN”；Skill 也未明确该字段合同和错误归因。
@@ -11783,7 +11822,6 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
 **回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---
-
 ## 2026-09-27 Skills - 修复 Codex 用户级 Hook 双表示告警
 
 **变更原因**：旧迁移只把 opscli Hook 写入 `~/.codex/config.toml`，同时保留 `~/.codex/hooks.json` 中的第三方 Hook；Codex 会把这两个文件视为同一用户层的两种有效表示，因此启动时仍提示 `prefer a single representation for this layer`。
@@ -11792,3 +11830,9 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅影响 Skill 使用上报 Hook 的用户级 Codex 配置选择、状态和迁移；不搬运或改写 Orca、Codex BI 等第三方 Hook 命令。
 **回滚方式**：回退 `settings_injector.py`、Hook 回归测试与说明文档；真实配置可使用迁移备份目录执行 `opscli skills hooks rollback <backup_dir>`。
 ---
+## 2026-09-28 SellerSprite - 固化普通 JSON 场景分页合同
+
+**变更原因**：用户提供的真实请求确认关联流量可以发送第 7 页，原构造器固定 `pageNum=1` 会丢失页面分页参数；同时各普通 JSON 场景的页字段、总数路径和上限语义不同，不能继续把选产品分页解析器当成通用逻辑。
+**改动点**：新增独立分页合同解析器，分别声明 `page/size`、`pageNum/pageSize`、`limit/skip` 和 `pageNo/pageSize`，并为来源接口保留 `pager.page=0,size=null` 的兼容性；场景注册表显式关联各自合同；关联流量构造器现在保留传入 `pageNum`，新增 `pagerDto.items/total` 合同；注册选竞品 2,000 条已验证上限，关键词挖掘明确超过 2,000 条且其上限未知；Skill v0.0.25 增补其他场景的分页状态。普通场景默认单页执行保持不变。
+**验证结果**：新增合同单元测试覆盖页参数转换、嵌套 rows/total 路径、非法响应和来源接口缺少标准页字段的情况；浏览器实测记录见 `docs/analysis/卖家精灵全部场景分页代码核查.md`。
+**影响范围**：普通 JSON 场景的分页合同基础设施；未开放其他场景 `collection_scope=all`，未改变现有任务执行和导出逻辑。

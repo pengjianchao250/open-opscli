@@ -242,6 +242,7 @@ def _build_request(
     cooldown_seconds: float | None,
     output_dir: str | None,
     job_id: str | None,
+    collection_scope: str = "page",
 ):
     """构造卖家精灵场景请求对象。"""
     from opscli.seller_sprite.domain.models import SellerSpriteScenarioRequest
@@ -260,6 +261,7 @@ def _build_request(
         page_prepare=page_prepare,
         task_interval_seconds=task_interval_seconds,
         cooldown_seconds=cooldown_seconds,
+        collection_scope=collection_scope,
     )
 
 
@@ -1020,6 +1022,7 @@ async def seller_sprite_run(
     job_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    collection_scope: str = "page",
 ) -> dict:
     """执行卖家精灵场景并导出 XLS/JSON。
 
@@ -1027,6 +1030,7 @@ async def seller_sprite_run(
     session_id / jwt 仅保留参数兼容并会被忽略。stdio 模式继续兼容本机凭证。
     """
     return await _seller_sprite_run_impl(
+        collection_scope=collection_scope,
         scenario=scenario,
         params=params,
         site=site,
@@ -1057,6 +1061,7 @@ async def _seller_sprite_run_impl(
     job_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    collection_scope: str = "page",
     cache_mode: CacheMode = "prefer_cache",
 ) -> dict:
     """执行 SellerSprite，并允许内部调用强制绕过共享结果缓存。"""
@@ -1082,6 +1087,7 @@ async def _seller_sprite_run_impl(
 
     try:
         raw_request = _build_request(
+            collection_scope=collection_scope,
             scenario=scenario,
             params=params,
             site=site,
@@ -1109,7 +1115,7 @@ async def _seller_sprite_run_impl(
         cache_repository, cache_environment = get_result_cache_context()
         cached = None
         current_user_email = str(_get_current_mcp_user_email() or "").strip().lower()
-        if cache_repository is not None and cache_environment and current_user_email:
+        if request.collection_scope == "page" and cache_repository is not None and cache_environment and current_user_email:
             cached = await find_cached_result(
                 cache_repository,
                 source_system="seller_sprite",
@@ -1186,9 +1192,24 @@ async def seller_sprite_start(
     job_id: str | None = None,
     session_id: str | None = None,
     jwt: str | None = None,
+    collection_scope: str = "page",
 ) -> dict:
     """创建卖家精灵异步任务并立即返回 job_id。"""
     try:
+        request = _build_request(
+            collection_scope=collection_scope,
+            scenario=scenario,
+            params=params,
+            site=site,
+            period=period,
+            page_size=page_size,
+            export_format=export_format,
+            page_prepare=page_prepare,
+            task_interval_seconds=task_interval_seconds,
+            cooldown_seconds=cooldown_seconds,
+            output_dir=output_dir,
+            job_id=job_id,
+        )
         binding = await ensure_ops_credentials(
             provided_session=session_id,
             provided_jwt=jwt,
@@ -1208,19 +1229,6 @@ async def seller_sprite_start(
         )
 
     try:
-        request = _build_request(
-            scenario=scenario,
-            params=params,
-            site=site,
-            period=period,
-            page_size=page_size,
-            export_format=export_format,
-            page_prepare=page_prepare,
-            task_interval_seconds=task_interval_seconds,
-            cooldown_seconds=cooldown_seconds,
-            output_dir=output_dir,
-            job_id=job_id,
-        )
         scheduler = _get_task_scheduler()
         return _ok(
             await _enqueue_task_with_auth(

@@ -17,6 +17,7 @@ def test_collection_storage_is_disabled_without_explicit_enablement(tmp_path):
         "mysql_configured": False,
         "auto_create_schema": False,
         "batch_size": 500,
+        "cleanup_transient_files": True,
     }
 
 
@@ -46,6 +47,7 @@ def test_enabled_collection_storage_requires_and_loads_mysql_configuration(tmp_p
     assert settings.mysql.password == "secret"
     assert settings.mysql.ssl_ca == str(ssl_ca)
     assert settings.to_public_dict()["mysql_configured"] is True
+    assert settings.cleanup_transient_files is True
     assert "password" not in str(settings.to_public_dict()).lower()
 
 
@@ -94,3 +96,15 @@ def test_collector_runtime_accepts_legacy_environment_names(tmp_path):
     assert settings.enabled is True
     assert settings.runtime_id == "collector"
     assert settings.mysql.user == "collector_writer"
+
+
+def test_collection_storage_can_keep_transient_files_for_debugging(tmp_path):
+    settings = load_storage_settings(
+        "mcp",
+        {
+            "OPSCLI_COLLECTION_STORAGE_CLEANUP_TRANSIENT_FILES": "false",
+        },
+        config_dir=tmp_path,
+    )
+
+    assert settings.cleanup_transient_files is False
