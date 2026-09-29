@@ -141,12 +141,15 @@ class ProductPagination:
         """只公开计数与完整性，不暴露账号、条件、文件路径。"""
         state = self.state
         total = state["source_total"]
+        last_total = state.get("source_total_last", total)
+        total_changed = state.get("total_changed", False)
         complete = bool(
             state["finished"] and not state["drift"] and not state["duplicate_count"]
+            and not total_changed
         )
         coverage = (
             "unverified"
-            if state["drift"] or state["duplicate_count"]
+            if state["drift"] or state["duplicate_count"] or total_changed
             else "partial"
             if not complete
             else "source_limited"
@@ -156,13 +159,14 @@ class ProductPagination:
         return {
             "scope": "all",
             "source_total": total,
-            "source_total_last": state.get("source_total_last", total),
+            "source_total_last": last_total,
+            "total_changed": total_changed,
             "access_limit": ACCESS_LIMIT,
-            "target_rows": min(total, ACCESS_LIMIT) if total is not None else None,
+            "target_rows": min(last_total, ACCESS_LIMIT) if last_total is not None else None,
             "page_size": PAGE_SIZE,
             "current_page": max((int(page) for page in state["attempts"]), default=0),
             "planned_pages": max(
-                1, (min(total, ACCESS_LIMIT) + PAGE_SIZE - 1) // PAGE_SIZE
+                1, (min(last_total, ACCESS_LIMIT) + PAGE_SIZE - 1) // PAGE_SIZE
             )
             if total is not None
             else None,
@@ -256,11 +260,15 @@ class ProductPagination:
             if self.state["source_total"] is None:
                 self.state["source_total"] = total
             self.state["source_total_last"] = total
-            target = min(self.state["source_total"], ACCESS_LIMIT)
-            expected = min(PAGE_SIZE, max(0, target - (page_number - 1) * PAGE_SIZE))
-            self.state["drift"] |= (
-                total != self.state["source_total"] or len(rows) != expected
+            # 总数可能实时波动；保留发生过变化的事实，按最新总数判断自然末页。
+            # 行数异常仍停止，不能因放宽总数检查而接受漏页；最多请求 20 页。
+            self.state["total_changed"] = (
+                self.state.get("total_changed", False)
+                or total != self.state["source_total"]
             )
+            target = min(total, ACCESS_LIMIT)
+            expected = min(PAGE_SIZE, max(0, target - (page_number - 1) * PAGE_SIZE))
+            self.state["drift"] |= len(rows) != expected
             for row in rows:
                 asin = self._asin(row)
                 if asin in self.seen:

@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -86,7 +87,7 @@ def test_accessible_range(tmp_path, total, pages, rows, coverage):
     assert "items" not in json.dumps(manifest)
 
 
-@pytest.mark.parametrize("change", ["duplicate", "total", "short"])
+@pytest.mark.parametrize("change", ["duplicate", "short"])
 def test_inconsistent_pages_not_complete(tmp_path, change):
     instance = collector(tmp_path)
 
@@ -95,8 +96,6 @@ def test_inconsistent_pages_not_complete(tmp_path, change):
         if payload["page"] == 2:
             if change == "duplicate":
                 result["data"]["items"][0]["asin"] = "B000000000"
-            elif change == "total":
-                result["data"]["total"] = 249
             else:
                 result["data"]["items"] = []
         return result
@@ -105,6 +104,61 @@ def test_inconsistent_pages_not_complete(tmp_path, change):
     assert instance.summary()["coverage"] == "unverified"
     assert instance.summary()["collection_complete"] is False
     assert instance.summary()["pages_completed"] == 2
+
+
+@pytest.mark.parametrize(
+    "totals,rows",
+    [([4796, 4796, 4793], 2000), ([250, 249], 249), ([199, 201], 201),
+     ([250, 249, 250], 250), ([201, 199], 199), ([1999, 2001], 2000)],
+)
+def test_total_changes_continue_with_unverified_coverage(tmp_path, totals, rows):
+    """总数涨跌及回到原值均保留告警，按最新末页有界采集。"""
+    instance = collector(tmp_path)
+    calls = []
+
+    async def fetch(payload, root):
+        page = payload["page"]
+        calls.append(page)
+        return response(totals[min(page - 1, len(totals) - 1)], page)
+
+    asyncio.run(instance.collect(fetch))
+    summary = instance.summary()
+    assert calls == list(range(1, (rows + 99) // 100 + 1))
+    assert summary["rows_written"] == rows
+    assert summary["total_changed"] is True
+    assert summary["coverage"] == "unverified"
+    assert summary["collection_complete"] is False
+    assert summary["stop_reason"] == ("access_limit" if rows == 2000 else "total_reached")
+    assert summary["target_rows"] == min(totals[-1], 2000)
+
+
+@pytest.mark.parametrize("fault", [None, "short", "duplicate"])
+def test_total_change_survives_resume_and_still_rejects_bad_page(tmp_path, fault):
+    """中断恢复不能丢失总数波动记录，也不能放行行异常。"""
+    first = collector(tmp_path)
+
+    async def interrupted(payload, root):
+        if payload["page"] == 3:
+            raise RuntimeError("模拟中断")
+        return response(350 if payload["page"] == 1 else 349, payload["page"])
+
+    with pytest.raises(RuntimeError, match="模拟中断"):
+        asyncio.run(first.collect(interrupted))
+    resumed = collector(tmp_path, checkpoint=first.state)
+
+    async def resume(payload, root):
+        result = response(350, payload["page"])
+        if fault == "short":
+            result["data"]["items"].pop()
+        elif fault == "duplicate":
+            result["data"]["items"][0]["asin"] = "B000000000"
+        return result
+
+    asyncio.run(resumed.collect(resume))
+    assert resumed.summary()["total_changed"] is True
+    assert resumed.summary()["stop_reason"] == ("inconsistent_pages" if fault else "total_reached")
+    assert resumed.summary()["collection_complete"] is False
+    assert resumed.summary()["pages_completed"] == (3 if fault else 4)
 
 
 def test_resume_skips_committed_pages_and_validates_files(tmp_path):
@@ -302,7 +356,8 @@ def test_streaming_export_matches_single_page(tmp_path):
         after.close()
 
 
-def test_manager_all_result_is_bounded_and_can_be_ingested(tmp_path, monkeypatch):
+@pytest.mark.parametrize("first_total,last_total", [(121, 121), (250, 249), (4796, 4793)])
+def test_manager_all_result_is_bounded_and_can_be_ingested(tmp_path, monkeypatch, first_total, last_total):
     from opscli.seller_sprite.collection_storage_parser import (
         SellerSpriteCollectionParser,
     )
@@ -321,7 +376,7 @@ def test_manager_all_result_is_bounded_and_can_be_ingested(tmp_path, monkeypatch
     async def browser(**kwargs):
         calls.append(kwargs)
         return SimpleNamespace(
-            response=response(121, kwargs["payload"]["page"]), warnings=[]
+            response=response(first_total if kwargs["payload"]["page"] == 1 else last_total, kwargs["payload"]["page"]), warnings=[]
         )
 
     monkeypatch.setattr(module, "_run_browser_route_request", browser)
@@ -342,11 +397,27 @@ def test_manager_all_result_is_bounded_and_can_be_ingested(tmp_path, monkeypatch
             )
         )
     )
-    assert result.row_count == 121
+    expected_rows = min(last_total, 2000)
+    changed = first_total != last_total
+    assert result.row_count == expected_rows
     assert result.data == []
     assert len(result.preview) == 10
-    assert result.collection["collection_complete"] is True
-    assert [call["payload"]["page"] for call in calls] == [1, 2]
+    assert result.collection["collection_complete"] is (not changed)
+    assert result.collection["coverage"] == ("unverified" if changed else "matched_range")
+    assert [call["payload"]["page"] for call in calls] == list(range(1, (expected_rows + 99) // 100 + 1))
+    workbook = load_workbook(result.export.path, read_only=True)
+    try:
+        assert sum(1 for _ in workbook.active.values) == expected_rows + 1
+        if changed:
+            assert any("完整性未验证" in warning["message"] for warning in result.warnings)
+            assert "完整性未验证" in str(list(workbook["采集说明"].values))
+            assert json.loads(Path(result.result_path).read_text(encoding="utf-8"))["collection"]["collection_complete"] is False
+        else:
+            assert "采集说明" not in workbook.sheetnames
+        if last_total > 2000:
+            assert any("2000" in warning["message"] for warning in result.warnings)
+    finally:
+        workbook.close()
     parsed = SellerSpriteCollectionParser().parse(
         CollectionSubmission(
             source_system="seller_sprite",
@@ -359,7 +430,7 @@ def test_manager_all_result_is_bounded_and_can_be_ingested(tmp_path, monkeypatch
             result_path=result.result_path,
         )
     )
-    assert len(list(parsed.datasets[0].records)) == 121
+    assert len(list(parsed.datasets[0].records)) == expected_rows
 
 
 def test_queue_checkpoint_requires_live_owner_generation_account(tmp_path):
@@ -499,10 +570,12 @@ def test_recovery_claim_keeps_page_account_and_rejects_old_writer(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "dedicated,fail_page_two", [(False, False), (True, False), (False, True)]
+    "dedicated,fail_page_two,total_changes",
+    [(False, False, False), (True, False, False), (False, True, False),
+     (False, False, True), (True, False, True)],
 )
 def test_scheduler_collects_pages_or_preserves_partial_without_failover(
-    tmp_path, monkeypatch, dedicated, fail_page_two
+    tmp_path, monkeypatch, dedicated, fail_page_two, total_changes
 ):
     from opscli.seller_sprite.config import SellerSpriteSettings
     from opscli.seller_sprite.domain.exceptions import SellerSpriteAuthenticationError
@@ -525,11 +598,12 @@ def test_scheduler_collects_pages_or_preserves_partial_without_failover(
     calls = []
 
     async def browser(**kwargs):
-        calls.append(kwargs["payload"]["page"])
+        calls.append((kwargs["payload"]["page"], kwargs["reuse_page_session"]))
         if fail_page_two and kwargs["payload"]["page"] == 2:
             raise SellerSpriteAuthenticationError("模拟第二页登录失效")
+        total = 120 if total_changes and kwargs["payload"]["page"] == 2 else 121
         return SimpleNamespace(
-            response=response(121, kwargs["payload"]["page"]), warnings=[]
+            response=response(total, kwargs["payload"]["page"]), warnings=[]
         )
 
     monkeypatch.setattr(api_module, "_run_browser_route_request", browser)
@@ -577,12 +651,15 @@ def test_scheduler_collects_pages_or_preserves_partial_without_failover(
             )
 
     asyncio.run(run())
-    assert calls == [1, 2]
+    assert calls == [(1, True), (2, True)]
     status = store.get_status("job")
     assert status["state"] == ("failed" if fail_page_two else "succeeded")
     assert status["failover_count"] == 0
     assert status["collection"]["pages_completed"] == (1 if fail_page_two else 2)
-    assert status["collection"]["collection_complete"] is (not fail_page_two)
+    assert status["collection"]["collection_complete"] is (not fail_page_two and not total_changes)
+    if total_changes:
+        assert status["collection"]["coverage"] == "unverified"
+        assert status["collection"]["total_changed"] is True
     assert len(store.load_product_checkpoint("job")["pages"]) == (
         1 if fail_page_two else 2
     )

@@ -21,6 +21,7 @@ from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
 def export_product_pages_to_xlsx(
     *, rows: Iterable[dict[str, Any]], output_path: Path,
     site: str, period: str, params: dict[str, Any],
+    collection: dict[str, Any] | None = None,
 ) -> SellerSpriteExportResult:
     """逐行生成选产品表格，沿用单页列映射、数值格式及标题。"""
     from openpyxl import Workbook
@@ -59,6 +60,16 @@ def export_product_pages_to_xlsx(
                     _apply_number_format(cell)
                 cells.append(cell)
             sheet.append(cells)
+        # 文件被单独分享时也必须披露波动，主表及其列映射保持原样。
+        if collection and collection.get("total_changed"):
+            note = workbook.create_sheet("采集说明")
+            note.column_dimensions["A"].width = 24
+            note.column_dimensions["B"].width = 90
+            note.append(["完整性", "完整性未验证：采集期间匹配总数发生变化，不能视为全部匹配结果"])
+            note.append(["首次匹配总数", collection["source_total"]])
+            note.append(["末次匹配总数", collection["source_total_last"]])
+            note.append(["实际导出条数", collection["rows_written"]])
+            note.append(["单次访问上限", collection["access_limit"]])
         workbook.save(temporary)
         temporary.replace(output_path)
     finally:

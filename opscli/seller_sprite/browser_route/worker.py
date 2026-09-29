@@ -132,6 +132,8 @@ class BrowserRouteRequest:
     task_interval_seconds: float = 5.0
     cooldown_seconds: float = 10.0
     replay_safe: bool = True
+    # 同一分页任务的后续页复用已准备好的页面和登录态，只发上下文请求。
+    reuse_page_session: bool = False
     # 流量词对比页面弹窗的变体选择，默认使用畅销变体拓词。
     keyword_comparison_variant: str = "sell_well"
     # 拓展流量词页面弹窗的变体选择，默认使用全部变体拓词。
@@ -157,6 +159,26 @@ class _QueuedTask:
 
 class BrowserRouteWorkerClosedError(RuntimeError):
     """表示任务提交时目标 browser worker 已进入关闭流程。"""
+
+
+def _page_session_key(request: BrowserRouteRequest) -> tuple[str, str, str]:
+    """生成可复用页面的稳定键，避免跨查询复用错误页面状态。"""
+    payload = dict(request.payload)
+    payload.pop("page", None)
+    return (
+        request.scenario,
+        _absolute_url(request.endpoint),
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def _request_page_number(request: BrowserRouteRequest) -> int:
+    """读取分页页码；非分页请求按首页处理。"""
+    value = request.payload.get("page")
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _record_timing(
@@ -229,6 +251,7 @@ class SellerSpriteBrowserRouteWorker:
         self._playwright = None
         self._context = None
         self._page = None
+        self._page_session_key: tuple[str, str, str] | None = None
         self._auto_xvfb_attached = False
         self._automatic_reap_task: asyncio.Task | None = None
         self._notify_state_change(
@@ -330,6 +353,7 @@ class SellerSpriteBrowserRouteWorker:
                 finally:
                     self._context = None
                     self._page = None
+                    self._page_session_key = None
             if self._playwright:
                 try:
                     await self._playwright.stop()
@@ -562,28 +586,57 @@ class SellerSpriteBrowserRouteWorker:
             reused=had_page,
             url=getattr(page, "url", ""),
         )
-        stage_started_at = time.monotonic()
-        login = await self._open_referer_and_login(page, request, timings=timings)
-        _record_timing(
-            timings,
-            request,
-            "open_referer_and_login",
-            stage_started_at,
-            current_url=getattr(page, "url", ""),
+        session_key = _page_session_key(request) if request.reuse_page_session else None
+        reuse_page = bool(
+            request.reuse_page_session
+            and _request_page_number(request) > 1
+            and had_page
+            and self._page_session_key == session_key
         )
-        await self._handle_robot_captcha_if_enabled(
-            page,
-            request,
-            warnings,
-            timings,
-            stage="after_open_referer",
-        )
-        if request.page_prepare:
-            stage_started_at = time.monotonic()
-            await _prepare_page(page)
-            _record_timing(timings, request, "page_prepare", stage_started_at)
+        if reuse_page:
+            login = self._login_snapshot(page, request, logged_in=True)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                time.monotonic(),
+                skipped=True,
+                reason="reuse_page_session",
+                current_url=getattr(page, "url", ""),
+            )
+            _record_timing(
+                timings,
+                request,
+                "page_prepare",
+                time.monotonic(),
+                skipped=True,
+                reason="reuse_page_session",
+            )
         else:
-            _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
+            stage_started_at = time.monotonic()
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                stage_started_at,
+                current_url=getattr(page, "url", ""),
+            )
+            await self._handle_robot_captcha_if_enabled(
+                page,
+                request,
+                warnings,
+                timings,
+                stage="after_open_referer",
+            )
+            if request.page_prepare:
+                stage_started_at = time.monotonic()
+                await _prepare_page(page)
+                _record_timing(timings, request, "page_prepare", stage_started_at)
+            else:
+                _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
+            if request.reuse_page_session and session_key is not None:
+                self._page_session_key = session_key
         # 每次重试都从页面真实主请求重新取得畅销变体顺序，禁止复用上次交互状态。
         effective_asin_list: list[str] | None = None
         # 额度型导出没有幂等键；请求发出后结果不明时禁止在当前 worker 内重放。
@@ -598,6 +651,17 @@ class SellerSpriteBrowserRouteWorker:
                         page=page,
                         request=request,
                         timings=timings,
+                    )
+                elif reuse_page:
+                    response = await self._execute_context_fetch(
+                        page=page,
+                        method=request.method,
+                        endpoint=request.endpoint,
+                        payload=request.payload,
+                        root_dir=request.root_dir,
+                        section="main",
+                        timings=timings,
+                        request=request,
                     )
                 else:
                     response = await self._execute_route_fetch(
@@ -661,6 +725,8 @@ class SellerSpriteBrowserRouteWorker:
                         stage_started_at = time.monotonic()
                         await _prepare_page(page)
                         _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
+                    if request.reuse_page_session and session_key is not None:
+                        self._page_session_key = session_key
                     continue
                 if exc.api_code in {
                     "ERR_KEYWORD_COMPARISON_REQUEST_MISSED",

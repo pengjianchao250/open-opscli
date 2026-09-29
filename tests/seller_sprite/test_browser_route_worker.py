@@ -4359,6 +4359,75 @@ def test_run_one_relogs_and_retries_main_request_once(monkeypatch, tmp_path):
     _run(scenario())
 
 
+def test_run_one_reuses_prepared_page_for_product_pagination(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(
+            url="https://www.sellersprite.com/v3/product-research",
+            is_closed=lambda: False,
+        )
+        events = []
+
+        async def fake_ensure_page(current_account):
+            events.append("ensure_page")
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            events.append(("open", request.payload["page"]))
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_captcha(*args, **kwargs):
+            events.append("captcha")
+
+        async def fake_route(**kwargs):
+            events.append(("route", kwargs["payload"]["page"]))
+            return {"code": "OK", "data": {"items": [], "total": 200}}
+
+        async def fake_context(**kwargs):
+            events.append(("context", kwargs["payload"]["page"], kwargs["payload"]["keyword"]))
+            return {"code": "OK", "data": {"items": [], "total": 200}}
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_route)
+        monkeypatch.setattr(worker, "_execute_context_fetch", fake_context)
+
+        def request(page_number):
+            return worker_module.BrowserRouteRequest(
+                scenario="product-research",
+                method="POST",
+                endpoint="/v3/api/product-research",
+                payload={"page": page_number, "size": 100, "keyword": "loft"},
+                referer=(
+                    "https://www.sellersprite.com/v3/product-research"
+                    f"?page={page_number}&size=100"
+                ),
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+                reuse_page_session=True,
+            )
+
+        await worker._run_one(request(1))
+        await worker._run_one(request(2))
+
+        assert events == [
+            "ensure_page",
+            ("open", 1),
+            "captcha",
+            ("route", 1),
+            "ensure_page",
+            ("context", 2, "loft"),
+        ]
+
+    _run(scenario())
+
+
 def test_run_one_relogs_and_retries_guest_limited_association_response(monkeypatch, tmp_path):
     async def scenario():
         account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")

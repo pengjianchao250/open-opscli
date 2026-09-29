@@ -563,6 +563,8 @@ class SellerSpriteApiManager:
         async def fetch(page_payload: dict[str, Any], page_root: Path) -> dict[str, Any]:
             """每页仅更改 page，沿用本场景冻结的 POST 和 referer 合同。"""
             page_root.mkdir(parents=True, exist_ok=True)
+            # 第 1 页负责打开并准备页面；后续页复用同一 worker 的页面和登录态，
+            # 直接通过浏览器上下文发送带 page/size 的原始 POST，避免重复 goto。
             result = await _run_browser_route_request(
                 settings=self.settings, account=account, request=request,
                 scenario_method=scenario.method, endpoint=scenario.endpoint_for(page_payload),
@@ -570,15 +572,23 @@ class SellerSpriteApiManager:
                 root_dir=page_root, high_frequency_endpoint=None, high_frequency_payload=None,
                 session_state_listener=self.session_state_listener,
                 session_owner_id=self.session_owner_id, replay_safe=scenario.replay_safe,
+                reuse_page_session=True,
             )
             warnings.extend(result.warnings)
             return result.response
 
         await collector.collect(fetch, cooldown_seconds=self.settings.browser_cooldown_seconds)
         collection = collector.summary()
-        if not collection["collection_complete"]:
-            raise SellerSpriteConfigError("选产品分页出现总数变化、短页或重复ASIN，结果完整性未确认；已保留页面检查点")
-        if collection["coverage"] == "source_limited":
+        # 仅总数波动允许带告警导出；必须确实到达自然末页或访问边界。
+        if collection["stop_reason"] not in {"total_reached", "access_limit"}:
+            raise SellerSpriteConfigError("选产品分页出现异常行数或重复ASIN，结果完整性未确认；已保留页面检查点")
+        if collection["total_changed"]:
+            warnings.append({"stage": "collection", "message": (
+                f"采集期间匹配总数发生变化（首次 {collection['source_total']}，"
+                f"末次 {collection['source_total_last']}）；已导出获取到的数据，"
+                "完整性未验证，不能视为全部匹配结果"
+            )})
+        if collection["stop_reason"] == "access_limit":
             warnings.append({"stage": "collection", "message": "匹配总数超过网页上限，仅采集前2000条可访问结果；可缩小筛选范围继续查询"})
         self._emit_progress("exporting")
         collector.remaining()
@@ -587,7 +597,7 @@ class SellerSpriteApiManager:
             output_path=_scenario_export_output_path(
                 root_dir, job_id=job_id, scenario=request.scenario, site=site,
                 payload=collector.state["payload"], extension="xlsx", own_asin=None,
-            ), site=site, period=period, params=request.params,
+            ), site=site, period=period, params=request.params, collection=collection,
         )
         self._emit_progress("uploading")
         collector.remaining()
@@ -874,6 +884,7 @@ async def _run_browser_route_request(
     replay_safe: bool = True,
     keyword_comparison_variant: str = "sell_well",
     traffic_extend_variant: str = "all",
+    reuse_page_session: bool = False,
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -902,6 +913,7 @@ async def _run_browser_route_request(
         replay_safe=replay_safe,
         keyword_comparison_variant=keyword_comparison_variant,
         traffic_extend_variant=traffic_extend_variant,
+        reuse_page_session=reuse_page_session,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(
