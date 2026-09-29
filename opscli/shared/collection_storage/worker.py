@@ -6,6 +6,9 @@ import asyncio
 from typing import Protocol
 from uuid import uuid4
 
+from opscli.shared.collection_storage.cleanup import (
+    cleanup_transient_files as _cleanup_transient_files,
+)
 from opscli.shared.collection_storage.models import (
     ParsedCollection,
     PermanentCollectionError,
@@ -40,6 +43,7 @@ class CollectionPersistenceWorker:
         registry: CollectionParserRegistry,
         repository: CollectionRepository,
         lease_seconds: float,
+        cleanup_transient_files: bool = True,
         owner: str | None = None,
     ) -> None:
         self.outbox = outbox
@@ -47,6 +51,7 @@ class CollectionPersistenceWorker:
         self.repository = repository
         self.lease_seconds = max(1.0, float(lease_seconds))
         self.owner = owner or f"collection-worker-{uuid4().hex}"
+        self.cleanup_transient_files = bool(cleanup_transient_files)
         self.last_error_code: str | None = None
 
     async def process_once(self) -> bool:
@@ -93,5 +98,7 @@ class CollectionPersistenceWorker:
         )
         if not completed:
             raise RuntimeError("Collection Outbox 完成确认失败，租约可能已失效")
+        if self.cleanup_transient_files:
+            _cleanup_transient_files(document)
         self.last_error_code = None
         return True
