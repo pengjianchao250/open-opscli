@@ -342,32 +342,7 @@ class SellerSpriteBrowserRouteWorker:
         errors: list[Exception] = []
         # close 与 drain 使用同一把锁：显式关闭会等待已入队任务完成，周期回收则只会选择非忙 worker。
         async with self._drain_lock:
-            # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
-            closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
-            self._transition_state(closing_state, reason=reason)
-            if self._context:
-                try:
-                    await self._context.close()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._context = None
-                    self._page = None
-                    self._page_session_key = None
-            if self._playwright:
-                try:
-                    await self._playwright.stop()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._playwright = None
-            if self._auto_xvfb_attached:
-                try:
-                    _release_auto_xvfb()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._auto_xvfb_attached = False
+            errors = await self._close_resources_locked(reason=reason)
         self._closed = True
         if errors:
             first_error = errors[0]
@@ -380,6 +355,85 @@ class SellerSpriteBrowserRouteWorker:
             raise first_error
         self._transition_state("closed", reason=reason)
         self._opened_at = 0.0
+
+    async def _close_resources_locked(self, *, reason: str) -> list[Exception]:
+        """在已持有 drain 锁时关闭浏览器资源。"""
+        # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
+        closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
+        self._transition_state(closing_state, reason=reason)
+        errors: list[Exception] = []
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._context = None
+                self._page = None
+                self._page_session_key = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._playwright = None
+        if self._auto_xvfb_attached:
+            try:
+                _release_auto_xvfb()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._auto_xvfb_attached = False
+        return errors
+
+    async def _invalidate_after_browser_failure(self, error: Exception) -> None:
+        """在任务边界销毁已失效的 browser 会话。"""
+        async with self._drain_lock:
+            await self._invalidate_after_browser_failure_locked(error)
+
+    async def _invalidate_after_browser_failure_locked(self, error: Exception) -> None:
+        """页面/协议级故障后销毁会话，避免把坏页面交给下一条任务。"""
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+        if self._automatic_reap_task is not None:
+            current_task = asyncio.current_task()
+            if self._automatic_reap_task is not current_task:
+                self._automatic_reap_task.cancel()
+            self._automatic_reap_task = None
+        errors = await self._close_resources_locked(reason="browser_failure")
+        self._closed = True
+        self._opened_at = 0.0
+        if errors:
+            self._transition_state(
+                "close_failed",
+                reason="browser_failure",
+                error_code=type(errors[0]).__name__,
+            )
+            logger.warning(
+                "卖家精灵 browser 会话故障后清理失败：error=%s",
+                type(errors[0]).__name__,
+            )
+            return
+        self._transition_state("closed", reason="browser_failure")
+        logger.warning(
+            "卖家精灵 browser 会话因页面/协议故障重建：error=%s",
+            type(error).__name__,
+        )
+
+    def _reject_queued_tasks(self) -> None:
+        """会话失效后拒绝尚未执行的旧任务，让调用方从新 worker 重试。"""
+        error = BrowserRouteWorkerClosedError("browser worker 因页面/协议故障已重建")
+        while True:
+            try:
+                task = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if not task.future.done():
+                task.future.set_exception(error)
+            self._queue.task_done()
 
     async def _drain_queue(self) -> None:
         async with self._drain_lock:
@@ -401,6 +455,10 @@ class SellerSpriteBrowserRouteWorker:
                         )
                     if not task.future.done():
                         task.future.set_exception(exc)
+                    if _is_browser_session_failure(exc):
+                        await self._invalidate_after_browser_failure_locked(exc)
+                        self._reject_queued_tasks()
+                        break
                 else:
                     if not task.future.done():
                         task.future.set_result(result)
@@ -846,6 +904,10 @@ class SellerSpriteBrowserRouteWorker:
                 task_interval_seconds=task_interval_seconds,
                 cooldown_seconds=cooldown_seconds,
             )
+        except Exception as exc:
+            if _is_browser_session_failure(exc):
+                await self._invalidate_after_browser_failure(exc)
+            raise
         finally:
             # 成功和失败都形成任务边界，避免异常路径永久停在 busy 且没有自回收计时器。
             self._last_finished_at = self._clock()
@@ -2018,6 +2080,21 @@ def _traffic_extend_route_payload(
 def _is_target_closed_error(exc: Exception) -> bool:
     """判断异常是否为 Playwright/Patchright 明确的目标关闭错误。"""
     return type(exc).__name__ == "TargetClosedError"
+
+
+def _is_browser_session_failure(exc: Exception) -> bool:
+    """判断是否应销毁当前 Playwright/Patchright 会话。"""
+    details = f"{type(exc).__name__} {exc}".lower()
+    if _is_target_closed_error(exc):
+        return True
+    return any(
+        marker in details
+        for marker in (
+            "page crashed",
+            "target page, context or browser has been closed",
+            "no resource with given identifier found",
+        )
+    )
 
 
 def build_default_session_state_listener(
