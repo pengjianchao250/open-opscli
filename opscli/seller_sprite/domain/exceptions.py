@@ -83,7 +83,10 @@ class SellerSpriteApiError(SellerSpriteError):
 
     def is_session_expired(self) -> bool:
         """判断是否为卖家精灵会话过期类错误。"""
-        return self.api_code in {"ERR_GLOBAL_SESSION_EXPIRED"}
+        # 官网在登录态失效时有两种等价返回：明确的 session expired，
+        # 以及 HTTP 200 下返回的业务码 ERR_GLOBAL_403。后者也必须走
+        # 重新登录路径，否则浏览器会话会继续带着失效状态执行后续任务。
+        return self.api_code in {"ERR_GLOBAL_SESSION_EXPIRED", "ERR_GLOBAL_403"}
 
     def to_dict(self) -> dict[str, object]:
         """转换为 MCP `_err` 可识别的错误结构。"""

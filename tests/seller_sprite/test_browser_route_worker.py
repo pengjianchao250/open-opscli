@@ -61,6 +61,76 @@ def test_close_browser_route_worker_closes_and_removes_account_session():
     _run(scenario())
 
 
+def test_browser_session_failure_closes_worker_before_next_task(monkeypatch, tmp_path):
+    """页面崩溃后不得把同一坏会话交给下一条任务。"""
+
+    assert worker_module._is_browser_session_failure(
+        RuntimeError("Page.goto: Page crashed")
+    )
+    assert worker_module._is_browser_session_failure(
+        RuntimeError(
+            "Response.text: Protocol error (Network.getResponseBody): "
+            "No resource with given identifier found"
+        )
+    )
+    assert not worker_module._is_browser_session_failure(RuntimeError("业务参数错误"))
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        account = SellerSpriteAccount(
+            name="account-1", username="user@example.com", password="secret"
+        )
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        worker = worker_module.get_browser_route_worker(settings=settings, account=account)
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class PlaywrightProbe:
+            def __init__(self):
+                self.stopped = False
+
+            async def stop(self):
+                self.stopped = True
+
+        context = CloseProbe()
+        playwright = PlaywrightProbe()
+        worker._context = context
+        worker._playwright = playwright
+        worker._opened_at = 1.0
+
+        async def crashed(_request):
+            raise RuntimeError("Page.goto: Page crashed")
+
+        monkeypatch.setattr(worker, "_run_one", crashed)
+        request = worker_module.BrowserRouteRequest(
+            scenario="keyword-reverse",
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            referer=worker_module.DEFAULT_PAGE_URL,
+            account=account,
+            root_dir=tmp_path,
+        )
+
+        with pytest.raises(RuntimeError, match="Page.goto: Page crashed"):
+            await worker.submit(request)
+
+        assert context.closed is True
+        assert playwright.stopped is True
+        assert worker.accepts_tasks is False
+        replacement = worker_module.get_browser_route_worker(
+            settings=settings, account=account
+        )
+        assert replacement is not worker
+
+    _run(scenario())
+
+
 def test_authentication_failure_close_quarantines_persistent_profile(tmp_path):
     async def scenario():
         worker_module._WORKERS.clear()
@@ -4246,6 +4316,7 @@ def test_failure_cooldown_skips_session_config_and_unknown_errors(monkeypatch):
     assert worker_module._failure_cooldown_seconds(
         SellerSpriteApiError("expired", api_code="ERR_GLOBAL_SESSION_EXPIRED")
     ) == 0.0
+    assert SellerSpriteApiError("forbidden", api_code="ERR_GLOBAL_403").is_session_expired()
     assert worker_module._failure_cooldown_seconds(
         SellerSpriteApiError("参数不对", status_code=400, api_message="参数错误")
     ) == 0.0
