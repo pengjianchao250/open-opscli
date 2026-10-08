@@ -27,6 +27,8 @@ ENV_POLL_INTERVAL = "OPSCLI_COLLECTION_STORAGE_POLL_INTERVAL_SECONDS"
 ENV_RECONCILE_INTERVAL = "OPSCLI_COLLECTION_STORAGE_RECONCILE_INTERVAL_SECONDS"
 # 控制 Outbox processing 状态的持有期限。
 ENV_LEASE_SECONDS = "OPSCLI_COLLECTION_STORAGE_LEASE_SECONDS"
+# 控制 MySQL 成功入库后是否清理任务目录中的临时请求文件。
+ENV_CLEANUP_TRANSIENT_FILES = "OPSCLI_COLLECTION_STORAGE_CLEANUP_TRANSIENT_FILES"
 # 配置 MCP 宿主可访问的 MySQL 主机。
 ENV_MYSQL_HOST = "OPSCLI_COLLECTION_MYSQL_HOST"
 # 配置 MySQL TCP 端口。
@@ -101,6 +103,7 @@ class CollectionStorageSettings:
     poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS
     reconcile_interval_seconds: float = DEFAULT_RECONCILE_INTERVAL_SECONDS
     lease_seconds: float = DEFAULT_LEASE_SECONDS
+    cleanup_transient_files: bool = True
 
     def to_public_dict(self) -> dict[str, Any]:
         """返回不包含主机、账号、密码和本地路径的配置摘要。"""
@@ -110,6 +113,7 @@ class CollectionStorageSettings:
             "mysql_configured": self.mysql.configured,
             "auto_create_schema": self.auto_create_schema,
             "batch_size": self.batch_size,
+            "cleanup_transient_files": self.cleanup_transient_files,
         }
 
 
@@ -179,6 +183,10 @@ def load_storage_settings(
         ),
         lease_seconds=_parse_float(
             _setting(values, ENV_LEASE_SECONDS), DEFAULT_LEASE_SECONDS
+        ),
+        cleanup_transient_files=_parse_bool(
+            _setting(values, ENV_CLEANUP_TRANSIENT_FILES),
+            True,
         ),
     )
 

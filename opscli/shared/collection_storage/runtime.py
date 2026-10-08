@@ -88,6 +88,7 @@ class CollectionStorageRuntime:
             registry=self.registry,
             repository=self.repository,
             lease_seconds=self.settings.lease_seconds,
+            cleanup_transient_files=self.settings.cleanup_transient_files,
         )
         self._stop_requested = False
         await self._ensure_schema()

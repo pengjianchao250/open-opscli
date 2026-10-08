@@ -1,0 +1,23 @@
+{
+  "market": "US",
+  "page": 1,
+  "size": 60,
+  "symbolFlag": false,
+  "monthName": "bsr_sales_nearly",
+  "selectType": "2",
+  "filterSub": false,
+  "weightUnit": "g",
+  "order": {"field": "total_units", "desc": true},
+  "productTags": [],
+  "nodeIdPaths": [
+    "1055398:1063306:1063308:3733101:3248801011",
+    "1055398:1063306:1063308:3733101:3248804011"
+  ],
+  "sellerTypes": [],
+  "eligibility": [],
+  "pkgDimensionTypeList": [],
+  "sellerNationList": [],
+  "keywords": "LOFT",
+  "lowPrice": "N",
+  "salesGrowthType": "30d"
+}

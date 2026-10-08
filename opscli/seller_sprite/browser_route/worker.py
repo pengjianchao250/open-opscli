@@ -132,6 +132,8 @@ class BrowserRouteRequest:
     task_interval_seconds: float = 5.0
     cooldown_seconds: float = 10.0
     replay_safe: bool = True
+    # 同一分页任务的后续页复用已准备好的页面和登录态，只发上下文请求。
+    reuse_page_session: bool = False
     # 流量词对比页面弹窗的变体选择，默认使用畅销变体拓词。
     keyword_comparison_variant: str = "sell_well"
     # 拓展流量词页面弹窗的变体选择，默认使用全部变体拓词。
@@ -157,6 +159,26 @@ class _QueuedTask:
 
 class BrowserRouteWorkerClosedError(RuntimeError):
     """表示任务提交时目标 browser worker 已进入关闭流程。"""
+
+
+def _page_session_key(request: BrowserRouteRequest) -> tuple[str, str, str]:
+    """生成可复用页面的稳定键，避免跨查询复用错误页面状态。"""
+    payload = dict(request.payload)
+    payload.pop("page", None)
+    return (
+        request.scenario,
+        _absolute_url(request.endpoint),
+        json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")),
+    )
+
+
+def _request_page_number(request: BrowserRouteRequest) -> int:
+    """读取分页页码；非分页请求按首页处理。"""
+    value = request.payload.get("page")
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
 
 
 def _record_timing(
@@ -229,6 +251,7 @@ class SellerSpriteBrowserRouteWorker:
         self._playwright = None
         self._context = None
         self._page = None
+        self._page_session_key: tuple[str, str, str] | None = None
         self._auto_xvfb_attached = False
         self._automatic_reap_task: asyncio.Task | None = None
         self._notify_state_change(
@@ -319,31 +342,7 @@ class SellerSpriteBrowserRouteWorker:
         errors: list[Exception] = []
         # close 与 drain 使用同一把锁：显式关闭会等待已入队任务完成，周期回收则只会选择非忙 worker。
         async with self._drain_lock:
-            # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
-            closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
-            self._transition_state(closing_state, reason=reason)
-            if self._context:
-                try:
-                    await self._context.close()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._context = None
-                    self._page = None
-            if self._playwright:
-                try:
-                    await self._playwright.stop()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._playwright = None
-            if self._auto_xvfb_attached:
-                try:
-                    _release_auto_xvfb()
-                except Exception as exc:
-                    errors.append(exc)
-                finally:
-                    self._auto_xvfb_attached = False
+            errors = await self._close_resources_locked(reason=reason)
         self._closed = True
         if errors:
             first_error = errors[0]
@@ -356,6 +355,85 @@ class SellerSpriteBrowserRouteWorker:
             raise first_error
         self._transition_state("closed", reason=reason)
         self._opened_at = 0.0
+
+    async def _close_resources_locked(self, *, reason: str) -> list[Exception]:
+        """在已持有 drain 锁时关闭浏览器资源。"""
+        # 必须在队列排空后再进入 closing，避免任务收尾把状态从 closing 错误覆盖为 idle。
+        closing_state = "recycling" if reason in {"idle_timeout", "max_lifetime"} else "closing"
+        self._transition_state(closing_state, reason=reason)
+        errors: list[Exception] = []
+        if self._context:
+            try:
+                await self._context.close()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._context = None
+                self._page = None
+                self._page_session_key = None
+        if self._playwright:
+            try:
+                await self._playwright.stop()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._playwright = None
+        if self._auto_xvfb_attached:
+            try:
+                _release_auto_xvfb()
+            except Exception as exc:
+                errors.append(exc)
+            finally:
+                self._auto_xvfb_attached = False
+        return errors
+
+    async def _invalidate_after_browser_failure(self, error: Exception) -> None:
+        """在任务边界销毁已失效的 browser 会话。"""
+        async with self._drain_lock:
+            await self._invalidate_after_browser_failure_locked(error)
+
+    async def _invalidate_after_browser_failure_locked(self, error: Exception) -> None:
+        """页面/协议级故障后销毁会话，避免把坏页面交给下一条任务。"""
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+        if self._automatic_reap_task is not None:
+            current_task = asyncio.current_task()
+            if self._automatic_reap_task is not current_task:
+                self._automatic_reap_task.cancel()
+            self._automatic_reap_task = None
+        errors = await self._close_resources_locked(reason="browser_failure")
+        self._closed = True
+        self._opened_at = 0.0
+        if errors:
+            self._transition_state(
+                "close_failed",
+                reason="browser_failure",
+                error_code=type(errors[0]).__name__,
+            )
+            logger.warning(
+                "卖家精灵 browser 会话故障后清理失败：error=%s",
+                type(errors[0]).__name__,
+            )
+            return
+        self._transition_state("closed", reason="browser_failure")
+        logger.warning(
+            "卖家精灵 browser 会话因页面/协议故障重建：error=%s",
+            type(error).__name__,
+        )
+
+    def _reject_queued_tasks(self) -> None:
+        """会话失效后拒绝尚未执行的旧任务，让调用方从新 worker 重试。"""
+        error = BrowserRouteWorkerClosedError("browser worker 因页面/协议故障已重建")
+        while True:
+            try:
+                task = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            if not task.future.done():
+                task.future.set_exception(error)
+            self._queue.task_done()
 
     async def _drain_queue(self) -> None:
         async with self._drain_lock:
@@ -377,6 +455,10 @@ class SellerSpriteBrowserRouteWorker:
                         )
                     if not task.future.done():
                         task.future.set_exception(exc)
+                    if _is_browser_session_failure(exc):
+                        await self._invalidate_after_browser_failure_locked(exc)
+                        self._reject_queued_tasks()
+                        break
                 else:
                     if not task.future.done():
                         task.future.set_result(result)
@@ -562,28 +644,57 @@ class SellerSpriteBrowserRouteWorker:
             reused=had_page,
             url=getattr(page, "url", ""),
         )
-        stage_started_at = time.monotonic()
-        login = await self._open_referer_and_login(page, request, timings=timings)
-        _record_timing(
-            timings,
-            request,
-            "open_referer_and_login",
-            stage_started_at,
-            current_url=getattr(page, "url", ""),
+        session_key = _page_session_key(request) if request.reuse_page_session else None
+        reuse_page = bool(
+            request.reuse_page_session
+            and _request_page_number(request) > 1
+            and had_page
+            and self._page_session_key == session_key
         )
-        await self._handle_robot_captcha_if_enabled(
-            page,
-            request,
-            warnings,
-            timings,
-            stage="after_open_referer",
-        )
-        if request.page_prepare:
-            stage_started_at = time.monotonic()
-            await _prepare_page(page)
-            _record_timing(timings, request, "page_prepare", stage_started_at)
+        if reuse_page:
+            login = self._login_snapshot(page, request, logged_in=True)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                time.monotonic(),
+                skipped=True,
+                reason="reuse_page_session",
+                current_url=getattr(page, "url", ""),
+            )
+            _record_timing(
+                timings,
+                request,
+                "page_prepare",
+                time.monotonic(),
+                skipped=True,
+                reason="reuse_page_session",
+            )
         else:
-            _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
+            stage_started_at = time.monotonic()
+            login = await self._open_referer_and_login(page, request, timings=timings)
+            _record_timing(
+                timings,
+                request,
+                "open_referer_and_login",
+                stage_started_at,
+                current_url=getattr(page, "url", ""),
+            )
+            await self._handle_robot_captcha_if_enabled(
+                page,
+                request,
+                warnings,
+                timings,
+                stage="after_open_referer",
+            )
+            if request.page_prepare:
+                stage_started_at = time.monotonic()
+                await _prepare_page(page)
+                _record_timing(timings, request, "page_prepare", stage_started_at)
+            else:
+                _record_timing(timings, request, "page_prepare", time.monotonic(), skipped=True)
+            if request.reuse_page_session and session_key is not None:
+                self._page_session_key = session_key
         # 每次重试都从页面真实主请求重新取得畅销变体顺序，禁止复用上次交互状态。
         effective_asin_list: list[str] | None = None
         # 额度型导出没有幂等键；请求发出后结果不明时禁止在当前 worker 内重放。
@@ -598,6 +709,17 @@ class SellerSpriteBrowserRouteWorker:
                         page=page,
                         request=request,
                         timings=timings,
+                    )
+                elif reuse_page:
+                    response = await self._execute_context_fetch(
+                        page=page,
+                        method=request.method,
+                        endpoint=request.endpoint,
+                        payload=request.payload,
+                        root_dir=request.root_dir,
+                        section="main",
+                        timings=timings,
+                        request=request,
                     )
                 else:
                     response = await self._execute_route_fetch(
@@ -661,6 +783,8 @@ class SellerSpriteBrowserRouteWorker:
                         stage_started_at = time.monotonic()
                         await _prepare_page(page)
                         _record_timing(timings, request, "session_expired_page_prepare", stage_started_at)
+                    if request.reuse_page_session and session_key is not None:
+                        self._page_session_key = session_key
                     continue
                 if exc.api_code in {
                     "ERR_KEYWORD_COMPARISON_REQUEST_MISSED",
@@ -780,6 +904,10 @@ class SellerSpriteBrowserRouteWorker:
                 task_interval_seconds=task_interval_seconds,
                 cooldown_seconds=cooldown_seconds,
             )
+        except Exception as exc:
+            if _is_browser_session_failure(exc):
+                await self._invalidate_after_browser_failure(exc)
+            raise
         finally:
             # 成功和失败都形成任务边界，避免异常路径永久停在 busy 且没有自回收计时器。
             self._last_finished_at = self._clock()
@@ -1538,7 +1666,9 @@ class SellerSpriteBrowserRouteWorker:
                     await route.abort("blockedbyclient")
                     return
                 if route_metadata is not None:
-                    route_metadata["asinList"] = list(effective_payload["asinList"])
+                    route_metadata["asinList"] = _keyword_comparison_export_asin_list(
+                        effective_payload
+                    )
             elif request and request.scenario == "traffic-extend":
                 try:
                     effective_payload = _traffic_extend_route_payload(
@@ -1658,10 +1788,17 @@ def _keyword_comparison_route_payload(
             api_code="ERR_KEYWORD_COMPARISON_ASIN_LIST",
         )
     asin_list = [str(value).strip().upper() for value in asin_values]
+    own_asin = str(payload.get("asin") or "").strip().upper()
+    export_asin_list = [
+        own_asin,
+        *[asin for asin in asin_list if asin != own_asin],
+    ]
     if (
-        not 2 <= len(asin_list) <= 11
+        not 1 <= len(asin_list) <= 11
         or len(set(asin_list)) != len(asin_list)
         or any(not re.fullmatch(r"[A-Z0-9]{10}", asin) for asin in asin_list)
+        or not re.fullmatch(r"[A-Z0-9]{10}", own_asin)
+        or not 2 <= len(export_asin_list) <= 11
     ):
         raise SellerSpriteApiError(
             "卖家精灵流量词对比畅销变体列表无效",
@@ -1669,6 +1806,21 @@ def _keyword_comparison_route_payload(
         )
     # 页面只能覆盖 prepare 生成的 asinList，其他筛选和分页继续以后端校验结果为准。
     return {**payload, "asinList": asin_list, "page": 1, "size": 100}
+
+
+def _keyword_comparison_export_asin_list(payload: dict[str, Any]) -> list[str]:
+    """生成导出列顺序：自身 ASIN 在前，页面变体列表去重保序。"""
+    own_asin = str(payload.get("asin") or "").strip().upper()
+    asin_values = payload.get("asinList")
+    page_asins = asin_values if isinstance(asin_values, list) else []
+    return [
+        own_asin,
+        *[
+            str(value).strip().upper()
+            for value in page_asins
+            if str(value).strip().upper() != own_asin
+        ],
+    ]
 
 
 def _real_time_bidding_task_items(
@@ -1928,6 +2080,21 @@ def _traffic_extend_route_payload(
 def _is_target_closed_error(exc: Exception) -> bool:
     """判断异常是否为 Playwright/Patchright 明确的目标关闭错误。"""
     return type(exc).__name__ == "TargetClosedError"
+
+
+def _is_browser_session_failure(exc: Exception) -> bool:
+    """判断是否应销毁当前 Playwright/Patchright 会话。"""
+    details = f"{type(exc).__name__} {exc}".lower()
+    if _is_target_closed_error(exc):
+        return True
+    return any(
+        marker in details
+        for marker in (
+            "page crashed",
+            "target page, context or browser has been closed",
+            "no resource with given identifier found",
+        )
+    )
 
 
 def build_default_session_state_listener(

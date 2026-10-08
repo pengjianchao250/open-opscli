@@ -1,6 +1,7 @@
 import asyncio
 
 from opscli.shared.collection_storage.models import (
+    CollectionArtifact,
     CollectionSubmission,
     ParsedCollection,
 )
@@ -17,6 +18,15 @@ def _run(coro):
 def test_worker_parses_persists_and_completes_one_outbox_record(tmp_path):
     result_path = tmp_path / "result.json"
     result_path.write_text("{}", encoding="utf-8")
+    params_path = tmp_path / "params.json"
+    params_path.write_text("{}", encoding="utf-8")
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "attempts" / "generation-1").mkdir(parents=True)
+    (tmp_path / "attempts" / "generation-1" / "raw.json").write_text(
+        "{}", encoding="utf-8"
+    )
+    (tmp_path / "response.html").write_text("<html />", encoding="utf-8")
     submission = CollectionSubmission(
         source_system="future_source",
         source_job_id="job-1",
@@ -31,7 +41,17 @@ def test_worker_parses_persists_and_completes_one_outbox_record(tmp_path):
         submission=submission,
         parser_version="future-v1",
         request_params={},
-        artifacts=(),
+        artifacts=(
+            CollectionArtifact(
+                "params", params_path, "params.json", "application/json", 2, "a" * 64
+            ),
+            CollectionArtifact(
+                "raw", raw_path, "raw.json", "application/json", 2, "b" * 64
+            ),
+            CollectionArtifact(
+                "result", result_path, "result.json", "application/json", 2, "c" * 64
+            ),
+        ),
         datasets=(),
     )
 
@@ -66,6 +86,11 @@ def test_worker_parses_persists_and_completes_one_outbox_record(tmp_path):
     assert processed is True
     assert repository.documents == [document]
     assert outbox.get(record_id).status == "completed"
+    assert not params_path.exists()
+    assert not raw_path.exists()
+    assert not (tmp_path / "attempts").exists()
+    assert not (tmp_path / "response.html").exists()
+    assert result_path.exists()
     assert _run(worker.process_once()) is False
 
 
@@ -112,6 +137,64 @@ def test_worker_retries_repository_failure_without_losing_successful_collection(
     assert processed is True
     assert record.status == "retrying"
     assert record.last_error_code == "ConnectionError"
+
+
+def test_worker_can_disable_transient_file_cleanup(tmp_path):
+    result_path = tmp_path / "result.json"
+    result_path.write_text("{}", encoding="utf-8")
+    params_path = tmp_path / "params.json"
+    params_path.write_text("{}", encoding="utf-8")
+    raw_path = tmp_path / "raw.json"
+    raw_path.write_text("{}", encoding="utf-8")
+    submission = CollectionSubmission(
+        source_system="future_source",
+        source_job_id="job-keep-files",
+        producer_service="collector_mcp",
+        scenario="example",
+        site="US",
+        data_environment="debug",
+        ingestion_mode="live",
+        result_path=result_path,
+    )
+
+    class FakeParser:
+        source_system = "future_source"
+
+        def parse(self, value):
+            return ParsedCollection(
+                value,
+                "future-v1",
+                {},
+                (
+                    CollectionArtifact(
+                        "params", params_path, "params.json", "application/json", 2, "a" * 64
+                    ),
+                    CollectionArtifact(
+                        "raw", raw_path, "raw.json", "application/json", 2, "b" * 64
+                    ),
+                ),
+                (),
+            )
+
+    class FakeRepository:
+        def persist(self, document):
+            return None
+
+    outbox = CollectionOutbox(tmp_path / "outbox.sqlite3")
+    outbox.submit(submission)
+    registry = CollectionParserRegistry()
+    registry.register(FakeParser())
+    worker = CollectionPersistenceWorker(
+        outbox=outbox,
+        registry=registry,
+        repository=FakeRepository(),
+        lease_seconds=30,
+        cleanup_transient_files=False,
+    )
+
+    assert _run(worker.process_once()) is True
+    assert params_path.exists()
+    assert raw_path.exists()
 
 
 def test_worker_marks_invalid_source_files_as_permanent_failure(tmp_path):

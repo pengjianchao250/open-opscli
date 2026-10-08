@@ -15,7 +15,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from opscli.api.cors import LOCAL_PROTOTYPE_ORIGINS, PRIVATE_LAN_PROTOTYPE_ORIGIN
 from opscli.api.errors import register_exception_handlers
-from opscli.api.routers import auth, health, keepa, query
+from opscli.api.routers import auth, health, keepa, query, xydc
 from opscli.api.seller_sprite import router as seller_sprite_router
 
 
@@ -26,7 +26,7 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
         lifespan: 可选的 MCP/宿主生命周期上下文，用于组合 ASGI 应用时复用资源管理。
 
     Returns:
-        注册了健康检查、query 全量取数和 keepa 场景路由的 FastAPI 实例。
+        注册了健康检查、query、Keepa、西柚和 SellerSprite 路由的 FastAPI 实例。
     """
     app = FastAPI(
         title="opscli Scenario API",
@@ -56,6 +56,7 @@ def create_api_app(*, lifespan: Any = None) -> FastAPI:
     app.include_router(auth.router)
     app.include_router(query.router)
     app.include_router(keepa.router)
+    app.include_router(xydc.router)
     app.include_router(seller_sprite_router)
     return app
 

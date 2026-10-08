@@ -44,13 +44,13 @@
 
 - `product-research` 里的“月份 / 数据月份 / 2026-04”应传顶层 `period`，不是 `putawayMonth`。
 - `keyword-research` 的 `period` 表示数据月份，使用 `YYYY-MM`；不要把公共默认 `30d` 当作月份。未指定时使用后端返回的最新可用月份，不硬编码页面月份选项。
-- `keyword-research` 默认使用 `page=1/page_size=100`，只获取第一页后完成任务，不自动续页。
-- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换。
+- `keyword-research` 默认使用 `page=1/page_size=100`；用户明确要求“全部/全量”时可使用 `collection_scope=all`，按页面实际分页合同采集。
+- `association-traffic` 使用公共默认 `page_size=100`；场景固定选择“用全部变体查询”，不对外开放“当前变体”切换；请求合同支持 `pageNum/pageSize`，默认仍只请求第一页，全量模式才自动续页。
 - `traffic-extend` 仅支持 `browser-route`，固定 `page=1/size=100`；变体默认 `all`，可选 `sell_well` / `current`，不自动翻页、不调用官网全量导出。
 - `keyword-comparison` 仅支持 `browser-route` 和默认“流量占比”；固定 `page=1/size=100`，未指定变体时自动选择“用畅销变体拓词”，明确要求时可选择“用当前变体拓词”，不自动翻页、不调用官网额度型导出。
 - `keyword-conversion-rate` 仅支持 `browser-route`，周期只支持按周 `W` 或近 90 天 `90D`；公共默认 `30d` 映射为页面默认的 `W`。固定 `pageNum=1/pageSize=100`，不自动翻页、不调用官网导出。
 - `real-time-bidding` 仅支持 `browser-route` 和单个 ASIN；普通历史已完成/失败时自动“再次查询”，无历史时弹窗新建默认推荐关键词任务，进行中任务只等待，官网示例只读；完成后分别读取 SP、SB 第一页并严格合并为 100 条完整竞价数据，不调用官网导出。
-- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；固定只请求第一页 100 条，忽略公共分页覆盖值，并在本地生成 `.xlsx`。
+- `aba-research` 未提供 `period`（或收到公共默认 `30d`）时默认最近完整周；默认请求第一页 100 条，可用 `page`/`size`（或公共别名 `page_size`）指定单页，网页已确认可翻到第 2 页；全量模式最多采集 2,000 条；本地生成 `.xlsx`。
 - `aba-reverse` 未提供 `period`（或收到公共默认 `30d`）时，默认选择每周和最近完整周；显式周期可传具体周结束日或月份。只支持 `xls` / `xlsx`，实际返回官方 `.xlsx` 文件。
 - `branddb` 固定使用 `browser-route`，`text` 必填，接口等待上限 120 秒；只支持 `xls` / `xlsx`，官方文件原样保存。请求发出后遇到超时、登录失效或结果不明时不会自动重试或换账号，避免重复消耗导出额度。
 - `putawayMonth` 只表示上架月数，如 `1`、`3`、`6`、`12`。
@@ -92,10 +92,10 @@
 | `competitor-lookup` | `keyword` / `brand` / `sellerName` / `asins` / 商品链接 五选一；单个 `asin` 需先转成 `asins` | `node` / `category` / `nodeIdPath` / `nodeIdPaths` | 指定商品筛选或关键词候选；`asins` 不代表竞品发现；`page=1`，按销量倒序，`lowPrice=N` |
 | `product-research` | 无 | `recommendationMode`、类目参数、销量/价格/评分/卖家/关键词筛选 | `page=1`，`selectType=2`，按 `total_units` 倒序，`smallAndLight=N`，`lowPrice=N` |
 | `keyword-miner` | `keyword` | `filterRootWord`、`amazonChoice`、`includeHighFrequency` | `pageNum=1`，`orderBy=5`，`desc=true` |
-| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认只取第一页 100 条 |
-| `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；固定第一页 100 条；本地生成 XLSX |
+| `keyword-research` | 无 | 关键词、类目、需求/增长/竞争/转化/成本范围、`marketPeriod` | 数据月份用顶层 `period`；默认第一页 100 条，`collection_scope=all` 最多 2,000 条 |
+| `aba-research` | 父/子 ASIN 或关键词 | `departments`、`rankGrowthType`、排序、搜索结果范围筛选 | 周/月 ABA 周期；默认第一页 100 条，可指定 `page`/`size`；本地生成 XLSX |
 | `branddb` | `text` | `feature`、`office`、`brandName`、`status`、`applicant`、`niceClass`、`applicationYear`、`expiryYear`、排序、`ids` | browser-route 直接请求；120 秒；官方 XLSX；不可自动重试 |
-| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc` | 全部变体固定开启；只取第一页；`page_size=100` |
+| `association-traffic` | `asins`，1—20 个 | `relations`、`orderField`、`desc`、`pageNum`、`pageSize` | 全部变体固定开启；默认第一页，`collection_scope=all` 自动按 `pageNum/pageSize` 续页，最多 2,000 条；`page_size=100` |
 | `traffic-extend` | `asins`，1—20 个 | `site`、`period`、`variantSelection` | 仅 browser-route；变体默认 `all`，可选 `sell_well/current`；第一页 100 条；本地生成主表、`Unique Words` 和 `Asin` |
 | `keyword-comparison` | `ownAsin` 1 个；`competitorAsins` 1—10 个 | `site`、`variantSelection` | 仅 browser-route 和流量占比；变体默认 `sell_well`，可选 `current`；固定第一页 100 条；本地生成 XLSX |
 | `keyword-conversion-rate` | `keywords`，1—1000 个关键词词组 | `site`、`period` | 仅 browser-route；周期 `W/90D`；每个词组只按一次 Enter；固定第一页 100 条；本地生成单业务表 |
@@ -172,7 +172,8 @@
 ### 分页与结果范围
 
 - 默认传 `page=1`、`page_size=100`，映射为页面查询参数 `page=1`、`size=100`。
-- 每个任务只保留当前页结果；默认任务返回第一页，最多 100 条，不自动请求或合并后续页。
+- `collection_scope=page` 只请求当前页；`collection_scope=all` 才自动续页，并统一最多采集 2,000 条可访问结果。逐页原始响应和检查点由后端保管，最终导出在本地生成 XLSX。
+- HTML 页面若没有可靠的总数，会在短页或 2,000 条处停止并标记 `coverage=unverified`；完整性未确认时任务失败并保留检查点，不把部分结果报告为完整结果。
 
 ### 范围校验
 
@@ -253,8 +254,9 @@
 
 ### 分页与导出
 
-- 后端固定提交一次 `POST /v3/api/aba-research`，强制使用 `page=1`、`size=100`；调用方传入的 `page`、`size` 或顶层 `page_size` 不会改变这一约束。
-- 只保存第一页实际返回的数据，不请求或合并后续页；`row_count` 等于第一页 `data.items` 的实际数量。
+- 后端提交 `POST /v3/api/aba-research`，使用 `page`/`size`；默认值为 `page=1`、`size=100`。调用方可以用 `page`、`size` 或顶层 `page_size` 指定单页大小，翻页时必须冻结周期、排序和筛选条件。
+- 网页实测可以从第 1 页翻到第 2 页；本轮只确认分页可用，不承诺超过页面可见范围的全量采集。
+- 只保存调用方指定页实际返回的数据，不自动循环或合并后续页；`row_count` 等于该页 `data.items` 的实际数量。
 - 不调用官网导出接口，不消耗官网有限导出次数；根据查询 JSON 在本地生成 `ABAKeywordTrend-{站点}-{周期}.xlsx`。
 - 本地工作簿对齐官方 19 列业务主表、橙色表头、冻结窗格、列宽和数字格式；不生成官网 `Notes` 页及二维码图片。
 
@@ -275,9 +277,10 @@
 | 关联类型 | `relations` | 可省略；省略表示全部类型；可传下表 code 数组或分隔文本 |
 | 排序字段 | `orderField` | 默认 `createdTime`；可用 `relationCount` |
 | 倒序 | `desc` | 默认 `true` |
-| 每页数量 | 顶层 `page_size` | 固定按公共默认 `100` 执行；只返回第一页，最多 100 条 |
+| 页码 | `params.pageNum` | 默认 `1`；页面请求支持指定页码，翻页时冻结 ASIN、关联类型和排序 |
+| 每页数量 | 顶层 `page_size` / `params.pageSize` | 默认 `100`；页面请求实际使用 `pageSize` |
 
-若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次；登录成功后仍只获取第一页 100 条。
+若主接口返回 `pagerDto.size=20` 且实际只有 20 条数据，视为游客限制响应。browser-route 会恢复登录态并重试一次；本轮已用真实请求确认 `pageNum=7,pageSize=50` 可访问指定页，但仍只执行调用方指定的单页请求。
 
 ### 关联类型枚举
 
@@ -342,12 +345,14 @@
 1. browser-route 填写自己的 ASIN 和竞品 ASIN，点击“立即查询”。
 2. 捕获并校验 `POST /v3/api/keyword-comparison/prepare`；HTTP、JSON、业务状态或 `data.diamondList` 任一异常都立即失败，不继续等待弹窗。
 3. prepare 成功后按 `variantSelection` 点击对应按钮；用户未指定时默认点击“用畅销变体拓词”，明确要求当前变体时点击“用当前变体拓词”，无需再次确认。
-4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
+4. 点击变体按钮前才开始监听 `POST /v3/api/keyword-comparison/asin`，避免 prepare 和弹窗等待占用主响应超时；主请求中的 `asin` 始终表示自己的 ASIN，页面最终 `asinList` 只表示竞品或变体列表，可以不包含自己的 ASIN。只允许页面最终 `asinList` 覆盖初始竞品列表，分页、站点和排序仍使用后端固定值。
 5. 变体控制参数不进入主请求；页面交互后未捕获主响应时直接失败，不使用静默接口 fallback。
+6. 请求参数已经包含合法 `ownAsin` / `asin`，但任务仍返回 `SELLER_SPRITE_CONFIG_ERROR: 流量词对比导出缺少自己的 ASIN` 时，按运行时导出合同异常处理并提交工具反馈；保留原参数和错误信息，不要求用户重复输入 ASIN，也不通过切换 JSON/XLSX 格式重试同一链路。
 
 ### 数据与导出
 
 - 只保留第一页最多 100 条，不请求后续页；`row_count` 等于第一页 `data.items` 实际数量。
+- 本地导出 ASIN 顺序按 `[asin] + asinList` 合并并去重，自己的 ASIN 固定在首位；兼容页面 `asinList` 已包含自己的 ASIN，不重复生成列。
 - 每个最终 ASIN 动态生成“流量占比 + 流量词类型”两列，自己的 ASIN 标记 `(我的)`；对比值从 `competitorList` 读取。
 - 查询 JSON 在本地生成 `CompareKeywords-{站点}-{自己的ASIN}-...xlsx`，不调用官网额度型导出。
 - 工作簿包含动态业务主表和 `ASIN` 辅助表，不生成 `Notes`。
@@ -468,6 +473,72 @@ seller_sprite_run(
 
 ## `product-research` 重点参数
 
+### 页面请求合同
+
+以下字段以 `/v3/product-research` 页面实际 POST `/v3/api/product-research` 为准，不能套用关键词挖掘、ABA 或其他场景的参数语义。
+
+| 业务含义 | 正式参数 | 说明 |
+| --- | --- | --- |
+| 包含关键词 | `params.keywords` | 字符串；多个关键词按页面提示用英文逗号分隔，例如 `loft bed,bunk bed`；兼容单数 `keyword`，同时传入时以 `keywords` 为准；数组会报错 |
+| 匹配模式 | `params.selectType` | `"2"` 模糊、`"3"` 词组、`"4"` 精准，默认 `"2"`；这是关键词匹配模式 |
+| 展示所有变体 | `params.symbolFlag` | 使用 **POST 请求体**语义：`false` 展示所有变体，`true` 不展示所有变体；默认 `false` |
+| 数据周期 | 顶层 `period` | `30d` 映射为 `monthName=bsr_sales_nearly`；`YYYY-MM` 映射为对应月份 |
+| 销量增长率比较 | `params.salesGrowthType` | `30d` 环比、`yoy` 同比，默认 `30d`；独立于数据周期，不能据此声称查询的是最近 30 天 |
+| 排序 | `params.order` | 如 `{"field":"price","desc":false}`；兼容 `orderField/orderDesc`，页面对象里的同名值优先；增长率排序字段随环比/同比切换 |
+
+旧 `matchType=0/1/2` 只作为兼容别名，转换为 `selectType="2"/"3"/"4"` 后发送；若同时传 `selectType`，以它为准。接口不会再收到 `matchType`。旧 `loadVariations=true/false` 分别转为 POST 的 `symbolFlag=false/true`，显式 `symbolFlag` 优先。
+
+页面 URL 的 `symbolFlag` 是复选框状态，和 POST 请求体相反。复制网页请求时读取请求体，不要直接把地址栏参数原样当作 POST；opscli 会自动生成正确的页面 URL。`filterSub` 仅控制子类目排名，与变体无关。
+
+本轮未增加自动分页或多页合并。`page_size` 仍表示单页大小，不代表总采集条数。
+
+原 LOFT 条件的调用参数示例：
+
+```json
+{
+  "scenario": "product-research",
+  "site": "US",
+  "period": "30d",
+  "page_size": 100,
+  "params": {
+    "keywords": "LOFT",
+    "selectType": "2",
+    "symbolFlag": false,
+    "salesGrowthType": "30d",
+    "order": {"field": "total_units", "desc": true},
+    "nodeIdPaths": [
+      "1055398:1063306:1063308:3733101:3248801011",
+      "1055398:1063306:1063308:3733101:3248804011"
+    ]
+  }
+}
+```
+
+### 列表场景分页与获取全部
+
+- 默认 `collection_scope=page`，请求一页，`page_size=100`。用户明确要求“全部”“全量”时，传顶层 `collection_scope=all`，不要放进 `params`。
+- 官网只允许查看前 **2,000 条**；all 表示取完网页可访问范围，不能承诺取完所有匹配商品。总匹配数可能大于2,000，例如4,830条只采集20页共2,000条；更大范围应由用户缩小条件，禁止自动拆条件或切账号绕过上限。
+- all 支持已核验的 9 个列表场景：`product-research`、`competitor-lookup`、`keyword-miner`、`keyword-reverse`、`traffic-source`、`association-traffic`、`aba-research`、`keyword-research`、`market-research`。每个场景使用网页确认过的独立页字段、响应路径和唯一性检查；统一从第一页开始、单页 `page_size=1-100`、`export_format=xls/xlsx`，`product-research` 仍要求 `page_size=100`。`xls` 最终生成 `.xlsx`。不要给 all 传 JSON 导出，或为其他场景复用该分页逻辑。
+- 返回 `collection.source_total`（匹配数）、`access_limit`（2,000）、`rows_written`、`pages_completed`、`collection_complete` 与 `coverage`。`source_limited` 表示已取完可访问范围但来源受限；`matched_range` 表示本次所有匹配结果均已采集；`partial/unverified` 不能报告为完整结果。动态排序不提供数据库快照保证。
+- 全量结果的 `data=[]`，`preview` 最多10行，仅用于预览；后续分析必须读取 XLSX，不能把预览当成全部商品。逐页原始文件与检查点由后端保管。
+- 处理中继续查询同一个 `job_id`。调度器中断可恢复已完成页面；任务已终态失败时不会自动续跑。重复ASIN、总数漂移、异常短页会停止并返回失败，保留已采集页；不要擅自反复提交。
+- 首期全量模式不复用共享结果缓存。MCP 及 Collector 均需部署支持 `collection_scope` 的版本；线上未暴露该参数时如实说明，不用多次单页提交冒充全量任务。AppHub REST 当前尚未开放该参数。
+
+CLI 示例（选产品）：
+
+```bash
+opscli seller-sprite run product-research --site US --period 30d --collection-scope all --export-format xlsx --params '{"keywords":"LOFT","selectType":"2"}'
+```
+
+MCP 使用同样的顶层 `collection_scope="all"`、`export_format="xlsx"`，筛选条件仍在 `params`。
+
+### 其他场景分页合同状态
+
+- 选竞品使用 `page/size`，关键词挖掘和关联流量使用 `pageNum/pageSize`，关键词反查使用 `limit/skip`，查流量来源使用 `pageNo/pageSize`；这些场景均已登记独立合同并支持 `collection_scope=all`，统一最多采集前 2,000 条。
+- ABA 选品使用 `page/size`，也支持 `collection_scope=all`；高频词是查询级附加结果，只在第一页请求一次，不随分页重复请求。
+- 关键词选品和选市场是 HTML 页面；页面无可靠 total 时只能在短页或 2,000 条处停止，结果必须经过完整性门禁，否则返回 `unverified` 并保留检查点。
+- `aba-reverse`、`branddb` 使用官方 XLSX；`listing-analysis` 是单报告；`keyword-comparison`、`traffic-extend`、`keyword-conversion-rate`、`real-time-bidding` 涉及 prepare、远程任务、动态列或合并结果。这些场景继续拒绝 `collection_scope=all`，不能用重复首页请求冒充全量。
+
 ### 推荐模式
 
 `recommendationMode` 可用值：
@@ -510,11 +581,11 @@ seller_sprite_run(
 - `sellerTypes`：`AMZ`、`FBA`、`FBM`
 - `pkgDimensionTypeList`：`SS`、`LS`、`SB`、`LB`、`ELO`、`EL5O`、`EL7O`、`EL15O`、`O`
 - `sellerNationList`：如 `CN`、`US`、`JP`、`GB`、`DE`
-- `video`：`Y` / `N`
+- `video`：POST 使用 `Y` / `N`；也接受页面控件布尔值 `true` / `false`，空字符串或不传表示不限
 - `lowPrice`：`Y` / `N`
 - `smallAndLight`：常用 `N` 或 `lowPrice`
 - `filterSub`：是否只看所选子类目排名
-- `matchType`：`0` 模糊匹配，`1` 词组匹配，`2` 精准匹配
+- `selectType`：`"2"` 模糊匹配、`"3"` 词组匹配、`"4"` 精准匹配；旧 `matchType` 仅作兼容转换，详见上方页面请求合同
 
 关于 `A+` / `NonA+`：
 

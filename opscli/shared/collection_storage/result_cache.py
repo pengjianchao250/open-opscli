@@ -96,7 +96,17 @@ def safe_result_metadata(payload: dict[str, Any]) -> dict[str, Any]:
             }
             if item:
                 safe_warnings.append(item)
+    collection = payload.get("collection")
+    safe_collection = {
+        key: collection[key] for key in (
+            "scope", "source_total", "access_limit", "target_rows", "page_size",
+            "current_page", "pages_completed", "rows_received", "rows_written",
+            "planned_pages", "page_requests", "retry_requests", "source_total_last",
+            "duplicate_count", "collection_complete", "coverage", "stop_reason",
+        ) if key in collection and isinstance(collection[key], (str, int, bool, type(None)))
+    } if isinstance(collection, dict) else {}
     return {
+        **({"collection": safe_collection} if safe_collection else {}),
         "row_count": int(payload.get("row_count") or 0),
         "export": safe_export,
         "warnings": safe_warnings,

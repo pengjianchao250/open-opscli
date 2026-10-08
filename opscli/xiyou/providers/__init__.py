@@ -1,9 +1,14 @@
-"""西柚多通道 Provider。"""
-
-from opscli.xiyou.providers.xydc_mcp import (
-    XYDC_MCP_URL,
-    XydcMcpError,
-    XydcMcpProvider,
+"""西柚 OpenAPI Provider。"""
+from opscli.xiyou.providers.xydc_openapi import (
+    XYDC_OPENAPI_PROVIDER,
+    XydcOpenApiError,
+    XydcOpenApiProvider,
+    list_operations,
 )
 
-__all__ = ["XYDC_MCP_URL", "XydcMcpError", "XydcMcpProvider"]
+__all__ = [
+    "XYDC_OPENAPI_PROVIDER",
+    "XydcOpenApiError",
+    "XydcOpenApiProvider",
+    "list_operations",
+]

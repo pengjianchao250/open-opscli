@@ -56,6 +56,7 @@ Thumbs.db
 opscli/skills/templates/ops-feedback-query/data/feedback_insight.local.json
 
 # 本地采集与验证产物
+/tmp/
 test-data/
 temp_mcp_*.json
 seller_sprite_runs/

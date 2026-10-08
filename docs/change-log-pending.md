@@ -1,3 +1,56 @@
+## 2026-09-28 SellerSprite - 明确全量分页上限与异常恢复规则
+
+**变更原因**：需要判断是否能为全部场景开放获取全部分页，并统一处理网页访问上限、异常退出和恢复。
+**改动点**：方案明确普通网页列表的 opscli 安全上限为累计 2,000 行，按场景实际页大小换算页数；`total>2000` 返回 `source_limited`，缺失可靠 total 返回 `unverified`。补充原始页原子落盘、检查点、同账号同查询恢复、认证刷新、可重试错误、取消/崩溃/超时和导出中断规则；明确官方 XLSX、单报告及动态任务场景暂不进入通用 all。
+**验证结果**：本条为设计规则固化，不改变当前 `collection_scope` 可用范围；当前代码仍仅对选产品开放 all，其他场景继续 page 单页模式。
+**影响范围**：分页实施方案和网页实测边界说明；不改变现有运行时请求或导出行为。
+
+---
+
+## 2026-09-28 SellerSprite - 完成全部场景分页可用性核查
+
+**变更原因**：用户要求逐场景确认卖家精灵页面或真实接口是否能从第 1 页进入第 2 页；验收标准是分页参数和结果发生变化，不要求测试超过 2,000 条。
+**改动点**：修正 ABA 数据选品 payload，保留调用方 `page`/`size`（默认 1/100），新增 ABA 分页合同和回归；补充关键词选品、选市场真实页面第 2 页证据；记录关键词反查 `limit/skip` 与关联流量 `pageNum/pageSize` 的真实请求；新增全场景分页网页实测矩阵，更新分页设计、代码核查和 SellerSprite Skill 说明。
+**验证结果**：payload/分页合同定向回归 `107 passed`；关键词选品页面从 `page=1` 点击“下一页”后为 `page=2&size=50` 且结果从第 51 条开始；选市场点击页码 2 后为 `page=2&size=50` 且细分市场从第 51 个开始；既有 SellerSprite 全量回归保持排除一个修改前已存在的 `test_manager_generates_camel_case_job_id` 基线失败。
+**影响范围**：仅 ABA 单页请求的页码映射、场景分页合同、文档和测试；除已有选产品 all 外，不新增其他场景全量循环，不改变 2,000 条页面限制。
+**回滚方式**：回滚 ABA payload/测试/合同及本条文档更新；保留此前已提交的选产品分页实现和关联流量页码修复。
+
+---
+
+## 2026-09-28 SellerSprite - 选产品可访问范围分页采集
+
+**变更原因**：默认保留单页100条，用户要求显式获取全部可访问结果，并在Skill说明官网最多2,000条。
+**改动点**：CLI/MCP及通用代理新增collection_scope；all仅限选产品、100条/页、第一页起、XLSX、最多20页。独立解析data.items/total，冻结请求、逐页原子落盘、SQLite v9账号/代际/执行者/租约检查点、哈希恢复、累计时限及有限重试；已有页后禁止跨账号拼接。流式XLSX复用现有列格式，结果仅摘要和10行预览；异常覆盖不报成功；all禁用共享缓存但保留成功文件沉淀。Skill v0.0.24与manifest补充2,000条合同。
+**验证结果**：42项新增专项回归；最终相关回归682 passed、1 deselected，排除项为已在修改前基线复现的关键词反查文件名断言。本轮不排除时也仅该项失败。源码wheel构建、compileall和diff检查通过；新增文件Ruff通过，既有文件lint与HEAD均107项、无新增。合成100/1000/2000行基准中峰值RSS为69.55/70.43/71.11MiB，2000相对100增加1.56MiB。详见`docs/analysis/卖家精灵选产品分页开发验证.md`。
+**影响范围**：选产品显式all路径；page缓存和其他场景保持兼容。真实HTTP样本、连续20页网络采集、生产数据库及浏览器内存验证仍为发布门禁，本轮未部署。
+**回滚方式**：先暂停/排空all任务，再回滚代码与文档；新增检查点表可保留，不删除旧任务和页文件。
+
+---
+
+## 2026-09-28 SellerSprite - 对齐选产品页面请求参数
+
+**变更原因**：选产品查询的关键词别名、排序和销量增长周期字段未完整映射到官网请求，用户要求按本场景网页请求核实并修复，分页保持现状。
+**改动点**：增加脱敏页面请求 fixture 和选产品独立回归；keywords 字符串统一别名，order 优先于扁平别名；按本页 DOM/JS 将 matchType 旧别名转为 selectType=2/3/4，symbolFlag 使用 POST 语义并在 referer 取反，loadVariations 兼容映射；增长率环比/同比独立于数据月份，增长率排序随之切换；视频布尔值转换为 POST 的 Y/N。
+**验证结果**：首批修复前 4 项测试稳定失败，本页 DOM/JS 补充用例修复前 22 failed，缓存隔离用例修复前 1 failed；新增 36 项选产品回归，含 route.continue_ 发出的 POST 请求体对照。相关回归 306 passed、1 failed；唯一失败为既有关键词反查导出文件名断言，使用修改前运行模块复现。登录官网用修复后 referer 复现 LOFT 床类目结果，并实际核对词组/精准匹配、变体和视频控件 URL；请求证据与验证边界见 `docs/analysis/卖家精灵选产品页面参数核对.md`。
+**影响范围**：仅 product-research 参数合同、页面 referer 的布尔序列化和对应缓存合同，不扩展分页；新增测试保证其他场景缓存身份不变。场景 manifest 和 Skill 参数手册同步修正，ops-seller-sprite 升至 v0.0.23。
+**回滚方式**：回滚本条对应的选产品实现、缓存合同版本、测试、fixture 和参数文档；旧缓存未删除。
+
+---
+
+## 2026-09-22 SellerSprite - 修正流量词对比自身 ASIN 导出合同
+
+**变更原因**：官网流量词对比主请求使用独立 `asin` 传自己的 ASIN，页面生成的 `asinList` 可以只包含竞品或变体。原 browser-route 将 `asinList` 直接作为导出列顺序，导致请求成功后误报“流量词对比导出缺少自己的 ASIN”；Skill 也未明确该字段合同和错误归因。
+
+**改动点**：远端请求继续保留页面 `asinList` 原义，仅在本地导出元数据中按 `[asin] + asinList` 去重并固定自己的 ASIN 在首位；兼容旧页面列表已包含自己的 ASIN。`ops-seller-sprite` 参数手册和 MCP 规范补充主请求字段、导出合并与错误归因说明，Skill 版本升级至 `v0.0.22`。
+
+**验证结果**：真实请求形态的回归测试修复前稳定失败、修复后通过；SellerSprite 浏览器路由、payload 与导出相关回归 `235 passed`，完整 SellerSprite 回归 `465 passed, 1 failed`，唯一失败为既有 `keyword-reverse` 文件名断言；Skill Creator UTF-8 模式校验返回 `Skill is valid!`，MCP/Skill 契约测试 `2 passed`。
+
+**影响范围**：SellerSprite `keyword-comparison` browser-route 的本地动态 XLSX/JSON 导出列顺序及 Agent 错误归因；不改变官网请求字段、查询额度、页面交互、分页或其他场景。
+
+**回滚方式**：恢复 browser-route 直接记录页面 `asinList` 的行为，删除 Skill 补充说明并将版本恢复为 `v0.0.21`。
+
+---
+
 ## 2026-09-21 CLI - 子命令懒加载消除升级后首命令卡顿
 
 **变更原因**：正式 wheel 为 Cython 编译（355 个 `.so`），每次从 pypi 升级重写的 `.so` 均带系统写入的 `com.apple.provenance` 属性，macOS 对其首次 `dlopen` 逐文件做安全评估（本机实测均值约 202ms/文件、中位 317ms，syscall 阻塞、CPU 仅 2~7%）；而 `opscli/cli.py` 顶层急切导入 28 个子命令组，升级后首条任意命令（含 `opscli -V`）需触发约 434 个模块对应二进制的评估，实测 34.9s~88.6s，二次运行恢复 1.27s。历史修复 `c83bc0fb`（2026-07-24）消除的是启动/退出网络阻塞，属另一根因，对本问题无效。方案与排查数据见 `docs/plans/CLI子命令懒加载方案.md`。
@@ -31,6 +84,15 @@
 **验证结果**：AppHub 合同与数据合同相关测试 `11 passed`；Skill 静态契约测试 `16 passed, 1 deselected`；`data_contracts.py` 通过 `py_compile`；机器合同 JSON 解析通过。完整三组测试中 6 项依赖 pytest `tmp_path` 的既有临时目录 ACL 被 Windows 拒绝，非断言失败；使用无临时目录的专项筛选完成核心逻辑验证。
 **影响范围**：影响新建 AppHub SellerSprite 数据产品的合同验证和生成门禁；不影响普通 `opscli seller-sprite` 查询、认证、额度、任务状态和旧 AppHub 站点。
 **回滚方式**：回滚 `data_contracts.py`、AppHub Skill 文档、相关回归测试和本条记录；保留原有 SellerSprite 运行时与通用数据合同校验。
+---
+## 2026-09-21 Xiyou - 删除旧网页/爬虫与旧 MCP 运行入口
+
+**变更原因**：西柚已切换到正式 OpenAPI v2，旧网页/爬虫链路和 xydc MCP 链路继续保留会造成命令、MCP 工具和 Skill 路由歧义。
+**改动点**：删除 `opscli xiyou` 旧命令、旧网页 Client、场景编排、导出和旧 `xydc_mcp` Provider；移除旧 `xiyou_*` MCP 工具与对应测试；正式 OpenAPI 通过 `xydc_openapi` 凭据和 `ext_xydc_openapi_*` MCP 工具提供；保留 `xydc_mcp` 历史凭据值用于查询/清理，但禁止新增；为通用 OpenAPI 入口补入历史 xiyou 计费分组限额，保留历史计数；同步更新 Skill、SDK 文档和命令说明。
+**验证结果**：OpenAPI、MCP 注册、配额、凭据和 Skill 定向回归通过；定向回归 `47 passed`、OpenAPI/凭据/Skill 回归 `23 passed`；`compileall` 和 `git diff --check` 通过。
+**影响范围**：旧 `opscli xiyou` 命令、旧网页/爬虫 API、旧 xydc MCP Provider 和 `xiyou_*` MCP 工具不再可用；正式 OpenAPI 查询入口保持可用。
+**回滚方式**：恢复本条删除文件并重新启用对应命令/注册后，重新安装旧版本 Skill；不建议恢复旧路由与正式 OpenAPI 同时默认生效。
+
 ---
 
 ## 2026-09-16 Skill - 简化 Ops App Build 展示名称
@@ -11711,6 +11773,26 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回滚迁移服务、共享合同校验模块、两个 Skill 版本及本条对应测试和文档。
 ---
 
+## 2026-09-22 Xiyou - 优化服务别名和关键词意图触发
+
+**变更原因**：西柚找词和西柚洞察名称未在所有工具说明中体现，关键词能力缺少自然语言意图映射。
+**改动点**：更新 ops-xiyou 描述与 MCP 工具描述，覆盖西柚找词/西柚洞察、Xiyou、xydc、xydx；补充搜索量、ABA、竞价、反查词和竞争分析的入口映射，支持同任务追问继承来源；未指定来源时可推荐，实际付费调用仍须用户选用；Skill 升级为 v1.3.1。
+**验证结果**：Skill 校验通过；现有 Skill 安装及 MCP 注册回归 11 passed；git diff --check 通过。
+**影响范围**：Skill 发现、意图路由和 MCP 工具说明；接口名称、参数和调用实现保持原合同。
+**回滚方式**：回滚本条描述与 Skill 版本变更。
+
+---
+
+## 2026-09-22 Xiyou - 新增正式 REST API
+
+**变更原因**：业务系统需要像 Keepa 一样通过 HTTP 使用西柚查询。
+**改动点**：新增 GET /api/v1/xydc/scenarios 和 POST /api/v1/xydc/run；共用 MCP 操作合同、AppHub 身份、日额度、遥测及 Provider 审计日志；补充错误映射、文档和回归测试。
+**验证结果**：tests/api 全量及西柚/MCP 注册/限额回归 149 passed；含真实 Provider + mock HTTP 的 REST 用户身份和审计联通检查，不消耗供应商 Credit。
+**影响范围**：同一 opscli-mcp HTTP 服务新增两个 REST 路由；旧网页/供应商 MCP 入口继续废弃。
+**回滚方式**：回滚本次路由、合同、错误映射和文档变更，无 MySQL 表结构变化。
+
+---
+
 ## 2026-09-18 Skills - 题库版本跟随最新并跳过重复安装
 
 **变更原因**：Rufus 题库升级写死版本，重复安装又按版本覆盖，可能丢失已同步题库。
@@ -11740,7 +11822,6 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
 **回滚方式**：`git checkout opscli/skills/services/rule_injector.py opscli/skills/templates/ops-feedback/`，删除 `tests/skills/test_rule_injector.py`（回滚后已注入的新格式块需手工移除）。
 ---
-
 ## 2026-09-27 Skills - 修复 Codex 用户级 Hook 双表示告警
 
 **变更原因**：旧迁移只把 opscli Hook 写入 `~/.codex/config.toml`，同时保留 `~/.codex/hooks.json` 中的第三方 Hook；Codex 会把这两个文件视为同一用户层的两种有效表示，因此启动时仍提示 `prefer a single representation for this layer`。
@@ -11748,4 +11829,37 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：Hook 回归 `6 passed`；Hook/CLI/跳过安装/远程安装目录/元数据保护组合回归 `48 passed`；本地源码已 editable 安装为 `opscli v0.0.139`。真实用户配置已备份并收敛为 `hooks.json` 单表示，`opscli skills hooks status` 返回 `duplicate_representation=false`；CLI 首次迁移后完成一次 Trust，第二轮 CLI 与 Desktop 重启均无双表示告警或重复 Trust。Skills 管理集合仍有 3 个既有模板断言/缺失模板失败，与本次无关。
 **影响范围**：仅影响 Skill 使用上报 Hook 的用户级 Codex 配置选择、状态和迁移；不搬运或改写 Orca、Codex BI 等第三方 Hook 命令。
 **回滚方式**：回退 `settings_injector.py`、Hook 回归测试与说明文档；真实配置可使用迁移备份目录执行 `opscli skills hooks rollback <backup_dir>`。
+---
+## 2026-09-28 SellerSprite - 固化普通 JSON 场景分页合同
+
+**变更原因**：用户提供的真实请求确认关联流量可以发送第 7 页，原构造器固定 `pageNum=1` 会丢失页面分页参数；同时各普通 JSON 场景的页字段、总数路径和上限语义不同，不能继续把选产品分页解析器当成通用逻辑。
+**改动点**：新增独立分页合同解析器，分别声明 `page/size`、`pageNum/pageSize`、`limit/skip` 和 `pageNo/pageSize`，并为来源接口保留 `pager.page=0,size=null` 的兼容性；场景注册表显式关联各自合同；关联流量构造器现在保留传入 `pageNum`，新增 `pagerDto.items/total` 合同；注册选竞品 2,000 条已验证上限，关键词挖掘明确超过 2,000 条且其上限未知；Skill v0.0.25 增补其他场景的分页状态。普通场景默认单页执行保持不变。
+**验证结果**：新增合同单元测试覆盖页参数转换、嵌套 rows/total 路径、非法响应和来源接口缺少标准页字段的情况；浏览器实测记录见 `docs/analysis/卖家精灵全部场景分页代码核查.md`。
+**影响范围**：普通 JSON 场景的分页合同基础设施；未开放其他场景 `collection_scope=all`，未改变现有任务执行和导出逻辑。
+## 2026-09-29 SellerSprite - 选产品总数波动允许有界采集
+
+**变更原因**：LOFT 查询总数从 4796 变为 4793 即中断，无法导出已获取的数据。
+**改动点**：分页将总数波动与行异常分开处理，按最新总数判断自然末页，波动标记随检查点持久化；管理器仅允许到达自然末页或访问边界的结果导出，总数波动保留 collection_complete=false、coverage=unverified；响应及 XLSX 采集说明披露波动和 2000 条上限。补充总数涨跌、恢复原值、断点恢复、异常短页及管理器导出的回归测试。
+**验证结果**：修改前定向测试 7 failed、1 passed，已复现第 3 页停止和无法导出；修改后分页、管理器、导出及通用分页组合回归 137 passed，补充公共/专属账号后台任务用例后的选产品回归 70 passed（共覆盖 139 个不同用例）。保存的真实 4796/4796/4793 响应原样回放已继续请求第 4 页，保留 300 行及 unverified 标记。请求样本字段无缺失，官方已记录 JS 翻页仅修改 page。测试服务请求均 mock，未重跑线上全量采集。
+**影响范围**：仅选产品 all 分页、结果告警及 XLSX 说明；其他场景不变。
+**回滚方式**：回退本条对应的分页、管理器、导出和测试改动。
+
+## 2026-09-29 SellerSprite - 选产品全量分页复用浏览器会话
+
+**变更原因**：全量分页每页都按带页码的 referer 重新导航、准备页面并点击查询，重复加载页面且增加了无关请求。
+**改动点**：首个分页请求完成登录和页面准备后，后续页复用同一 browser worker 的页面和登录态，通过浏览器上下文发送保留完整 `page`、`size` 和筛选条件的 POST；会话回收、跨场景切换和登录失效仍回到原有打开页面流程。
+**验证结果**：SellerSprite 模块回归 593 passed；新增 worker 用例确认第二页复用上下文请求，分页调度用例确认页码与 `reuse_page_session` 参数正确传递。测试使用 mock，未完成真实 20 页端到端验收。设计文档补充页面停留在第 1 页的原因及任务进度查看方式。
+**影响范围**：仅选产品 `collection_scope=all` 的 browser-route 分页执行；单页场景及其他分页场景不变。
+**回滚方式**：回退本条对应的 browser worker、API 管理器、测试和说明改动。
+
+---
+
+## 2026-10-08 鹰眼 PND - 补齐 CLI 到远端 MCP 的正式入口
+
+**变更原因**：CLI 原先没有鹰眼查询入口，单独调整 Skill 无法让终端用户调用远端通用 MCP 挂载的 PND 工具。
+**改动点**：新增 opscli yingyan 命令组及远端适配层，提供目录、只读 SQL（参数或 UTF-8 文件）、相似词及报告任务状态四项能力；复用本地 OPS 认证与远端 MCP 配置，选择 BI运营系统；更新 ops-yingyan Skill 的调用链路、命令示例及服务端代理边界，补充命令映射测试及帮助快照，提交前清理新增文件的末尾多余空行。
+**验证结果**：本次会话运行 uv run --no-sync pytest tests/yingyan tests/skills/test_ops_yingyan_skill.py tests/test_cli_lazy_loading.py tests/mcp/test_remote_client.py tests/mcp/test_config_client.py -q，70 passed；git diff --check 通过。四项工具名称和参数已与当前 MCP 对照；MCP 目录实测返回 23 个数据集。CLI 实测在本地获取 OPS JWT 时返回 401，尚未完成 CLI 与 MCP 的真实查询一致性验收。
+**影响范围**：鹰眼 CLI、对应 Skill 与测试；未修改远端 MCP 注册及 PND 服务，未发布。
+**回滚方式**：回退本条对应提交，移除鹰眼 CLI 注册、模块及相关 Skill 和测试改动。
+
 ---

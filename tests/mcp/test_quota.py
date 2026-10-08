@@ -167,6 +167,7 @@ def test_sqlite_quota_store_initializes_default_policy_table(tmp_path):
         ("ext_xydc_get_asin_traffic", "xiyou", 10, 1, "Asia/Shanghai"),
         ("ext_xydc_get_keyword_asin_analysis", "xiyou", 10, 1, "Asia/Shanghai"),
         ("ext_xydc_get_keyword_info", "xiyou", 10, 1, "Asia/Shanghai"),
+        ("ext_xydc_openapi_call", "xiyou", 10, 1, "Asia/Shanghai"),
         ("keepa_run", "keepa", 200, 1, "Asia/Shanghai"),
         ("seller_sprite_listing_analysis_submit", "seller_sprite", 5, 1, "Asia/Shanghai"),
         ("seller_sprite_run", "seller_sprite", 100, 1, "Asia/Shanghai"),
@@ -216,6 +217,7 @@ def test_sqlite_quota_store_does_not_overwrite_existing_policy_table(tmp_path):
         ("ext_xydc_get_asin_traffic", 10),
         ("ext_xydc_get_keyword_asin_analysis", 10),
         ("ext_xydc_get_keyword_info", 10),
+        ("ext_xydc_openapi_call", 10),
         ("seller_sprite_run", 100),
     ]
 

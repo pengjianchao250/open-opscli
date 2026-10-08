@@ -1,13 +1,68 @@
 ---
 name: ops-yingyan
-description: 仅当用户明确提到“鹰眼”或“PND”，或明确要求使用鹰眼数据时，通过 opscli-mcp 查询鹰眼数据集目录、执行窄范围只读 SQL、搜索相似词或查询报告任务状态。普通 Amazon、销售、选品或数据分析请求不得自动触发。
+description: 仅当用户明确提到“鹰眼”或“PND”，或明确要求使用鹰眼数据时，沿 opscli CLI 到远端通用 MCP 的代理链路，或在宿主已直连 MCP 时调用 ext_pnd_* 查询鹰眼数据；普通 Amazon、销售、选品或数据分析请求不得自动触发。
 metadata:
   mcp-version: v1.0.0
 ---
 
 # ops-yingyan
 
-通过 `opscli-mcp` 暴露的 `ext_pnd_*` Tools 使用鹰眼数据。`pnd` 只是技术 ID；面向用户统一称“鹰眼”。
+鹰眼 PND 是远端通用 MCP 服务挂载的第三方 MCP，服务端向调用方暴露 `ext_pnd_*` MCP Tools。`pnd` 只是技术 ID；面向用户统一称“鹰眼”。
+
+## 调用链路与运行模式
+
+入口按以下优先级选择：如果当前发行版或宿主提供正式的 CLI 到远端 MCP 代理入口，优先使用该入口；否则仅在宿主已经直连 MCP Tools 时使用 MCP 直连。
+
+```text
+opscli CLI
+→ 本地 OPS 登录态
+→ 获取远端 MCP 配置/API Key
+→ 连接远端通用 MCP（优先 BI运营系统）
+→ 远端服务挂载或代理第三方鹰眼 PND
+→ ext_pnd_*
+```
+
+- CLI/终端模式使用当前安装提供的 `opscli` 远端 MCP 代理能力。CLI 自动使用本地 OPS 登录态获取远端配置并请求远端工具；不要让用户启动本地 `opscli-mcp`、注册 stdio 服务、填写 PND 地址或提供 API Key。
+- `opscli-mcp` 在这里指通用 MCP 服务端组件，不是 CLI 用户为本次查询临时启动的本地进程；`opscli mcp` 只管理服务端、用户和第三方上游，也不是鹰眼查询命令。
+- 正式 CLI 入口是 `opscli yingyan`，它把命令映射到远端通用 MCP 的 `ext_pnd_*` Tools。不要改用 `opscli query metadata`，也不要把普通 Query 结果冒充鹰眼。
+- 只有当前宿主明确直连并暴露 `ext_pnd_*` MCP Tools 时，才走 MCP 直连路径；该路径不需要再经过 CLI。
+
+### CLI 与服务端代理的边界
+
+- `opscli.mcp.tools.yingyan_proxy` 是 `opscli-mcp` 服务端注册代理的实现，不是 CLI 客户端接口。CLI 模式不得从本地 Python/PowerShell 脚本导入并直接调用它来模拟远端工具。
+- 不要为规避入口缺失而临时拼接 `python -c`、here-string、`asyncio.run(...)` 或工作区脚本；这类脚本失败属于本地调用包装错误，不能证明 PND 服务不可用。
+- 当前安装若没有 `opscli yingyan --help` 或该命令执行失败，报告 CLI 入口缺失；不要自行编写替代脚本。只有真正通过 CLI 代理或 MCP 直连拿到鹰眼目录后，才进入 SQL 工作流。
+
+CLI 代理和 MCP 直连是两种入口，不能把一条入口的可见性当成另一条入口的能力判断。查询规则和错误处理规则对两条入口相同。
+
+## 入口检查
+
+- CLI/终端模式：确认 `opscli yingyan --help` 可用，并确认本地 OPS 登录态可用；`opscli query metadata` 只能证明普通 Query 能力，不能作为鹰眼入口。
+- MCP 直连模式：检查当前 Agent 的已挂载工具列表是否包含 `ext_pnd_list_available_datasets`、`ext_pnd_execute_readonly_sql` 或 `ext_pnd_search_similar_terms`。
+
+- MCP 直连工具已挂载，或 CLI 代理入口可用：按本 Skill 的典型工作流执行。
+- 两种入口都不可用：说明当前环境没有鹰眼调用入口，保留原始能力缺口，不要用 `opscli query metadata`、其他内部数据集或普通 SQL 结果替代 PND。
+
+在任一入口真正返回目录前，不要声称已经读取 PND 目录，也不要开始构造 PND SQL。
+
+## 正式 CLI 命令
+
+CLI 自动使用本地 OPS 登录态获取远端 MCP 配置，并请求“BI运营系统”中的鹰眼代理：
+
+```powershell
+# 读取目录；执行 SQL 前必须先做这一步
+opscli yingyan datasets
+
+# 直接传短 SQL；长 SQL 或含中文时推荐使用 UTF-8 文件
+opscli yingyan execute-sql --sql "SELECT category_id FROM <目录返回的表> WHERE site = 'US' LIMIT 1"
+opscli yingyan execute-sql --sql-file .\query.sql
+
+# 相似词与已有报告任务
+opscli yingyan search-similar-terms "stereo amplifier" --site US --top 20
+opscli yingyan report-task-status <task_id>
+```
+
+`execute-sql` 必须且只能提供 `--sql` 或 `--sql-file` 一个参数；SQL 文件按 UTF-8 读取。命令输出远端 MCP 的 JSON 响应，失败时保留错误码供反馈和诊断。
 
 ## 触发边界
 
@@ -49,6 +104,8 @@ metadata:
 - 若能设计出明显更窄的新查询，可在说明降级原因后执行一次，例如增加精确搜索词、类目 ID、短日期范围和更小 `LIMIT`；这属于重写查询，不是重放。
 - 无法进一步收窄时立即停止，基于已成功取得的数据交付结论，并明确缺失证据。
 - `UPSTREAM_MCP_TIMEOUT`、其他 `success=false` 或异常按项目规则立即进入 `ops-feedback`；反馈完成后继续降级交付，不因反馈再次执行原查询。
+- 如果 `ext_pnd_list_available_datasets` 成功，但后续工具返回 `UPSTREAM_MCP_CALL_FAILED`，说明 CLI/MCP 到远端通用 MCP 和鹰眼上游的路由已经打通；问题在上游工具执行、SQL 合同或上游服务状态，不能归因于“没有挂载 Skill”。保留错误码，按查询规则只尝试一次明显更窄的重写。
+- 如果错误发生在本地临时脚本的语法、转义或导入阶段，说明请求尚未发出；修正入口或停止，不要把它当成鹰眼 SQL 失败反复重试。
 
 ## Tool 参数
 
@@ -129,8 +186,8 @@ ext_pnd_get_report_task_status(task_id="<已有任务ID>")
 ### 类目初筛
 
 1. 从数据目录选择类目筛选或市场规模数据集。
-2. 用站点、价格带、最小市场规模、时间范围等条件先形成小候选集。
-3. 对少量精确类目 ID 查询竞争、新品或月度趋势，不做全站多表大聚合。
+2. 先用站点、单个明确统计期或最新日期、必要的机会阈值，且只选候选所需的少量列和很小的 `LIMIT`，形成候选集；避免一次取多组中文明细列并做无界全局排序。
+3. 再对少量精确类目 ID 查询竞争、新品或月度趋势，不做全站多表大聚合。
 4. 输出一个候选时，同时说明市场、竞争、利润/价格和风险证据；指标缺失时不伪造评分。
 
 ## 执行前自检

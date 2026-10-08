@@ -5,7 +5,7 @@
   "web_tab": {
     "body_field": "selectType",
     "captured_value": "2",
-    "note": "该路由对应选产品场景，抓包接口为 /v3/api/product-research。"
+    "note": "保留历史结构名 web_tab；selectType 实际为关键词匹配模式：2 模糊、3 词组、4 精准，不是变体开关。"
   },
   "api": {
     "method": "POST",
@@ -18,8 +18,8 @@
       "symbolFlag",
       "monthName",
       "video",
-      "matchType",
       "selectType",
+      "salesGrowthType",
       "filterSub",
       "weightUnit",
       "recommendationMode",
@@ -75,7 +75,6 @@
       "minSellers",
       "maxSellers",
       "putawayMonth",
-      "keyword",
       "keywords",
       "includeBrands",
       "excludeBrands",
@@ -83,6 +82,19 @@
       "excludeSellers",
       "outOfKeywords"
     ]
+  },
+  "request_contract": {
+    "verified_at": "2026-09-28",
+    "keywords": "页面包含词为字符串；keyword 仅为兼容别名，不进入 POST。",
+    "selectType": {"2": "模糊匹配", "3": "词组匹配", "4": "精准匹配"},
+    "symbolFlag": "POST false 表示展示所有变体，true 表示不展示所有变体；URL 中的页面复选框状态相反。",
+    "salesGrowthType": {"30d": "销量环比增长率", "yoy": "销量同比增长率"},
+    "period_note": "monthName 控制数据周期；salesGrowthType 控制增长率比较，不是数据周期别名。",
+    "legacy_aliases": {
+      "matchType": "0/1/2 转为 selectType=2/3/4，显式 selectType 优先",
+      "loadVariations": "true/false 转为 POST symbolFlag=false/true，显式 symbolFlag 优先"
+    },
+    "evidence": "docs/analysis/卖家精灵选产品页面参数核对.md"
   },
   "export_api": {
     "method": "POST",
@@ -126,7 +138,26 @@
       "exportAsins",
       "hideSellerInfo"
     ],
-    "response": {
+    "pagination_policy": {
+    "version": "product-accessible-v1",
+    "default_scope": "page",
+    "supported_scopes": [
+      "page",
+      "all"
+    ],
+    "all_page_size": 100,
+    "access_limit": 2000,
+    "all_max_pages": 20,
+    "all_export_formats": [
+      "xls",
+      "xlsx"
+    ],
+    "all_row_path": "data.items",
+    "all_total_path": "data.total",
+    "source": "2026-09-28 已登录网页第20/21页边界实测及官方分页组件 maxTotal:2e3",
+    "note": "total 是匹配数，不是可访问条数；其他场景不可复用本合同。"
+  },
+  "response": {
       "success_code": "OK",
       "data": null
     }

@@ -468,5 +468,12 @@ sqlite3 -batch -bail /var/lib/opscli/mcp_quota/quota.sqlite3 \
 | `OPSCLI_COLLECTION_STORAGE_POLL_INTERVAL_SECONDS` | `2` 秒 |
 | `OPSCLI_COLLECTION_STORAGE_RECONCILE_INTERVAL_SECONDS` | `60` 秒 |
 | `OPSCLI_COLLECTION_STORAGE_LEASE_SECONDS` | `300` 秒 |
+| `OPSCLI_COLLECTION_STORAGE_CLEANUP_TRANSIENT_FILES` | `true` |
+
+成功写入 MySQL 后，Worker 默认删除任务目录中的 `params.json`、`raw.json`、浏览器
+响应 HTML 和 SellerSprite 的 `attempts/` 临时目录，保留 `result.json` 与导出文件供
+任务状态和下载使用。若需要保留原始请求文件进行调试，可设置
+`OPSCLI_COLLECTION_STORAGE_CLEANUP_TRANSIENT_FILES=false`；数据库写入失败或任务尚未
+成功入库时不会清理文件。
 
 禁止在文档、Git、日志、截图和工单中暴露 API Key、Cookie、Session、JWT、数据库密码或导出的邮箱清单。

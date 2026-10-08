@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,12 @@ class SellerSpriteApiManager:
         self.listing_remote_task_id = listing_remote_task_id
         self.listing_task_id_listener = listing_task_id_listener
         self.progress_listener = progress_listener
+        self.product_checkpoint: dict[str, Any] | None = None
+        self.product_checkpoint_listener: Callable[[dict[str, Any]], None] | None = None
+        self.product_task_root: Path | None = None
+        self.pagination_checkpoint: dict[str, Any] | None = None
+        self.pagination_checkpoint_listener: Callable[[dict[str, Any]], None] | None = None
+        self.pagination_task_root: Path | None = None
         self.account_provider = account_provider or SellerSpriteAccountProvider(
             self.settings,
             integration_client=IntegrationAccountClient(jwt=jwt, session_id=session_id),
@@ -189,6 +196,7 @@ class SellerSpriteApiManager:
 
     async def run(self, request: SellerSpriteScenarioRequest) -> SellerSpriteScenarioResult:
         """执行一个接口场景。"""
+        self.product_started_at = time.time()
         self._emit_progress("resolving")
         scenario = get_scenario(request.scenario)
         site = (request.site or self.settings.default_site).upper()
@@ -208,6 +216,8 @@ class SellerSpriteApiManager:
         mode = _resolve_request_mode(request.mode or self.settings.default_mode)
         if scenario.browser_context_only and mode != "browser-route":
             raise SellerSpriteConfigError(f"{request.scenario} 仅支持 browser-route 模式")
+        if request.collection_scope == "all" and mode != "browser-route":
+            raise SellerSpriteConfigError("全量分页采集仅支持 browser-route")
         async with SellerSpriteApiClient(account=account) as client:
             login = {"mode": "cached", "cookie_names": client.cookie_names()}
             if mode == "api-direct" and not client.has_login_cookies():
@@ -216,20 +226,25 @@ class SellerSpriteApiManager:
                     account_provider=self.account_provider,
                     warnings=warnings,
                 )
-            category_resolver = SellerSpriteCategoryResolver(client)
-            params = await _request_with_session_retry(
-                client=client,
-                warnings=warnings,
-                stage="category",
-                action=lambda: category_resolver.resolve_params(
-                    params=request.params,
-                    scenario=request.scenario,
-                    site=site,
-                    period=period,
-                ),
-            )
-            payload = scenario.build_payload(params=params, site=site, period=period, page_size=page_size)
-
+            if request.collection_scope == "all" and (self.product_checkpoint or self.pagination_checkpoint):
+                # 恢复沿用首轮已解析的类目和月份，避免跨月或类目映射变化混入结果。
+                params = request.params
+                checkpoint = self.product_checkpoint or self.pagination_checkpoint
+                payload = checkpoint["payload"]
+            else:
+                category_resolver = SellerSpriteCategoryResolver(client)
+                params = await _request_with_session_retry(
+                    client=client,
+                    warnings=warnings,
+                    stage="category",
+                    action=lambda: category_resolver.resolve_params(
+                        params=request.params,
+                        scenario=request.scenario,
+                        site=site,
+                        period=period,
+                    ),
+                )
+                payload = scenario.build_payload(params=params, site=site, period=period, page_size=page_size)
             params_path = root_dir / "params.json"
             raw_path = root_dir / "raw.json"
             result_path = root_dir / "result.json"
@@ -241,6 +256,18 @@ class SellerSpriteApiManager:
                     "payload": payload,
                 },
             )
+            if request.collection_scope == "all":
+                if request.scenario == "product-research":
+                    return await self._run_product_all(
+                        request=request, account=account, payload=payload, scenario=scenario,
+                        root_dir=root_dir, job_id=job_id, site=site, period=period,
+                        warnings=warnings,
+                    )
+                return await self._run_scenario_all(
+                    request=request, account=account, payload=payload, scenario=scenario,
+                    root_dir=root_dir, job_id=job_id, site=site, period=period,
+                    warnings=warnings,
+                )
             if mode == "browser-route":
                 if request.scenario == "listing-analysis" and self.listing_remote_task_id:
                     self._emit_progress("remote_poll")
@@ -508,6 +535,213 @@ class SellerSpriteApiManager:
         _write_json(result_path, result.to_dict())
         return result
 
+    async def _run_product_all(
+        self, *, request: SellerSpriteScenarioRequest, account: SellerSpriteAccount,
+        payload: dict[str, Any], scenario: Any, root_dir: Path, job_id: str,
+        site: str, period: str, warnings: list[dict[str, Any]],
+    ) -> SellerSpriteScenarioResult:
+        """采集网页可访问的选产品范围，逐页落盘后流式生成导出文件。"""
+        from itertools import islice
+
+        from opscli.seller_sprite.export.xlsx import export_product_pages_to_xlsx
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.product_pagination import (
+            ProductPagination,
+            atomic_json,
+        )
+
+        collector = ProductPagination(
+            root=root_dir, task_root=self.product_task_root or root_dir,
+            account_key=seller_sprite_account_key(account),
+            request_identity={"scenario": request.scenario, "site": site, "period": period,
+                              "params": request.params, "page_size": request.page_size},
+            payload=payload, timeout_seconds=max(0, self.settings.task_timeout_seconds - (time.time() - self.product_started_at)),
+            checkpoint=self.product_checkpoint,
+            save_checkpoint=self.product_checkpoint_listener, progress=self._emit_progress,
+        )
+
+        async def fetch(page_payload: dict[str, Any], page_root: Path) -> dict[str, Any]:
+            """每页仅更改 page，沿用本场景冻结的 POST 和 referer 合同。"""
+            page_root.mkdir(parents=True, exist_ok=True)
+            # 第 1 页负责打开并准备页面；后续页复用同一 worker 的页面和登录态，
+            # 直接通过浏览器上下文发送带 page/size 的原始 POST，避免重复 goto。
+            result = await _run_browser_route_request(
+                settings=self.settings, account=account, request=request,
+                scenario_method=scenario.method, endpoint=scenario.endpoint_for(page_payload),
+                payload=page_payload, referer=scenario.build_referer(page_payload),
+                root_dir=page_root, high_frequency_endpoint=None, high_frequency_payload=None,
+                session_state_listener=self.session_state_listener,
+                session_owner_id=self.session_owner_id, replay_safe=scenario.replay_safe,
+                reuse_page_session=True,
+            )
+            warnings.extend(result.warnings)
+            return result.response
+
+        await collector.collect(fetch, cooldown_seconds=self.settings.browser_cooldown_seconds)
+        collection = collector.summary()
+        # 仅总数波动允许带告警导出；必须确实到达自然末页或访问边界。
+        if collection["stop_reason"] not in {"total_reached", "access_limit"}:
+            raise SellerSpriteConfigError("选产品分页出现异常行数或重复ASIN，结果完整性未确认；已保留页面检查点")
+        if collection["total_changed"]:
+            warnings.append({"stage": "collection", "message": (
+                f"采集期间匹配总数发生变化（首次 {collection['source_total']}，"
+                f"末次 {collection['source_total_last']}）；已导出获取到的数据，"
+                "完整性未验证，不能视为全部匹配结果"
+            )})
+        if collection["stop_reason"] == "access_limit":
+            warnings.append({"stage": "collection", "message": "匹配总数超过网页上限，仅采集前2000条可访问结果；可缩小筛选范围继续查询"})
+        self._emit_progress("exporting")
+        collector.remaining()
+        export = await asyncio.to_thread(
+            export_product_pages_to_xlsx, rows=collector.iter_rows(),
+            output_path=_scenario_export_output_path(
+                root_dir, job_id=job_id, scenario=request.scenario, site=site,
+                payload=collector.state["payload"], extension="xlsx", own_asin=None,
+            ), site=site, period=period, params=request.params, collection=collection,
+        )
+        self._emit_progress("uploading")
+        collector.remaining()
+        await asyncio.to_thread(
+            _upload_export_if_enabled, export=export, job_id=job_id, scenario=request.scenario,
+            site=site, period=period, warnings=warnings, jwt=self.jwt, session_id=self.session_id,
+        )
+        self._emit_progress("finalizing")
+        collector.remaining()
+        result = SellerSpriteScenarioResult(
+            job_id=job_id, scenario=request.scenario, site=site, period=period,
+            row_count=collection["rows_written"], root_dir=str(root_dir),
+            params_path=str(root_dir / "params.json"), raw_path=str(root_dir / "raw.json"),
+            result_path=str(root_dir / "result.json"), export=export, warnings=warnings,
+            collection=collection, preview=list(islice(collector.iter_rows(), 10)),
+        )
+        atomic_json(Path(result.result_path), result.to_dict())
+        return result
+
+    async def _run_scenario_all(
+        self, *, request: SellerSpriteScenarioRequest, account: SellerSpriteAccount,
+        payload: dict[str, Any], scenario: Any, root_dir: Path, job_id: str,
+        site: str, period: str, warnings: list[dict[str, Any]],
+    ) -> SellerSpriteScenarioResult:
+        """采集已核验列表场景的前 2,000 行，逐页保存并支持恢复。"""
+        from opscli.seller_sprite.services.account_pool import seller_sprite_account_key
+        from opscli.seller_sprite.services.scenario_pagination import (
+            ScenarioPagination,
+            get_pagination_contract,
+        )
+
+        contract = get_pagination_contract(request.scenario)
+        collector = ScenarioPagination(
+            root=root_dir,
+            task_root=self.pagination_task_root or root_dir,
+            account_key=seller_sprite_account_key(account),
+            request_identity={
+                "scenario": request.scenario,
+                "site": site,
+                "period": period,
+                "params": request.params,
+                "page_size": request.page_size,
+            },
+            payload=payload,
+            contract=contract,
+            page_size=request.page_size,
+            timeout_seconds=max(0, self.settings.task_timeout_seconds - (time.time() - self.product_started_at)),
+            checkpoint=self.pagination_checkpoint,
+            save_checkpoint=self.pagination_checkpoint_listener,
+            progress=self._emit_progress,
+        )
+        first_high_frequency: dict[str, Any] | None = collector.state.get("high_frequency_response")
+        high_frequency_requested = bool(collector.state.get("high_frequency_requested"))
+
+        async def fetch(page_payload: dict[str, Any], page_root: Path) -> dict[str, Any]:
+            nonlocal first_high_frequency, high_frequency_requested
+            page_root.mkdir(parents=True, exist_ok=True)
+            request_high_frequency = (
+                not high_frequency_requested
+                and bool(page_payload.get("includeHighFrequency"))
+            )
+            result = await _run_browser_route_request(
+                settings=self.settings,
+                account=account,
+                request=request,
+                scenario_method=scenario.method,
+                endpoint=scenario.endpoint_for(page_payload),
+                payload=_main_payload(request.scenario, page_payload),
+                referer=scenario.build_referer(page_payload),
+                root_dir=page_root,
+                high_frequency_endpoint=(
+                    scenario.high_frequency_endpoint_for(page_payload)
+                    if request_high_frequency
+                    else None
+                ),
+                high_frequency_payload=(
+                    _high_frequency_payload(request.scenario, page_payload)
+                    if request_high_frequency
+                    else None
+                ),
+                session_state_listener=self.session_state_listener,
+                session_owner_id=self.session_owner_id,
+                replay_safe=scenario.replay_safe,
+            )
+            warnings.extend(result.warnings)
+            if request_high_frequency:
+                first_high_frequency = result.high_frequency_response
+                high_frequency_requested = True
+                collector.state["high_frequency_requested"] = True
+                collector.state["high_frequency_response"] = first_high_frequency
+            return result.response
+
+        await collector.collect(fetch, cooldown_seconds=self.settings.browser_cooldown_seconds)
+        collection = collector.summary()
+        if not collection["collection_complete"] or collection["coverage"] == "unverified":
+            raise SellerSpriteConfigError(
+                f"{request.scenario} 分页结果完整性未确认（{collection['stop_reason']}）；已保留分页检查点"
+            )
+        if collection["coverage"] == "source_limited":
+            warnings.append({"stage": "collection", "message": "匹配总数超过 2,000 条，仅采集前 2,000 条可访问结果"})
+        self._emit_progress("exporting")
+        collector.remaining()
+        rows = list(collector.iter_rows())
+        high_frequency_rows = _extract_high_frequency_rows(first_high_frequency)
+        export = await asyncio.to_thread(
+            export_rows_to_xlsx,
+            rows=rows,
+            output_path=_scenario_export_output_path(
+                root_dir, job_id=job_id, scenario=request.scenario, site=site,
+                payload=collector.state["payload"], extension="xlsx", own_asin=None,
+            ),
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            params=request.params,
+            high_frequency_rows=high_frequency_rows,
+        )
+        self._emit_progress("uploading")
+        collector.remaining()
+        await asyncio.to_thread(
+            _upload_export_if_enabled, export=export, job_id=job_id,
+            scenario=request.scenario, site=site, period=period, warnings=warnings,
+            jwt=self.jwt, session_id=self.session_id,
+        )
+        self._emit_progress("finalizing")
+        collector.remaining()
+        result = SellerSpriteScenarioResult(
+            job_id=job_id,
+            scenario=request.scenario,
+            site=site,
+            period=period,
+            row_count=collection["rows_written"],
+            root_dir=str(root_dir),
+            params_path=str(root_dir / "params.json"),
+            raw_path=str(root_dir / "raw.json"),
+            result_path=str(root_dir / "result.json"),
+            export=export,
+            warnings=warnings,
+            collection=collection,
+            preview=rows[:10],
+        )
+        _write_json(Path(result.result_path), result.to_dict())
+        return result
+
     def job_status(self, job_id: str) -> dict[str, Any]:
         """读取已落盘任务状态。"""
         root_dir = self.settings.output_dir / job_id
@@ -582,7 +816,7 @@ async def _run_main_request(
         rows = parse_keyword_research_html(response_html)
         return {
             "code": "OK",
-            "data": {"items": rows},
+            "data": {"items": rows, **_html_pagination_total(response_html, method="GET_PAGE")},
             "response_html_path": str(response_html_path),
             "response_html_length": len(response_html),
         }
@@ -611,11 +845,26 @@ async def _run_main_request(
             "code": "OK",
             "data": {
                 "items": rows,
+                **_html_pagination_total(response_html, method="FORM"),
             },
             "response_html_path": str(response_html_path),
             "response_html_length": len(response_html),
         }
     return await client.post_json(endpoint, payload, referer=referer)
+
+
+def _html_pagination_total(html: str, *, method: str) -> dict[str, int]:
+    """从页面明确的分页文案提取 total；带 ``+`` 的展示只视为未知。"""
+    if method == "GET_PAGE":
+        matched = re.search(r"(?<!\d)\d+\s*[-–]\s*\d+\s*/\s*([\d,]+)(?![\d+])", html)
+    else:
+        matched = re.search(r"找到的细分行业\s*[:：]\s*([\d,]+)", html)
+    if not matched:
+        return {}
+    try:
+        return {"total": int(matched.group(1).replace(",", ""))}
+    except ValueError:
+        return {}
 
 
 async def _run_browser_route_request(
@@ -635,6 +884,7 @@ async def _run_browser_route_request(
     replay_safe: bool = True,
     keyword_comparison_variant: str = "sell_well",
     traffic_extend_variant: str = "all",
+    reuse_page_session: bool = False,
 ) -> BrowserRouteResult:
     """提交 browser-route 请求，遇到并发回收时仅重建并重试一次。"""
     browser_request = BrowserRouteRequest(
@@ -663,6 +913,7 @@ async def _run_browser_route_request(
         replay_safe=replay_safe,
         keyword_comparison_variant=keyword_comparison_variant,
         traffic_extend_variant=traffic_extend_variant,
+        reuse_page_session=reuse_page_session,
     )
     for attempt in range(2):
         worker = get_browser_route_worker(

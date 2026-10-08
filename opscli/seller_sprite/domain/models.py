@@ -39,6 +39,49 @@ class SellerSpriteScenarioRequest:
     page_prepare: bool | None = None
     task_interval_seconds: float | None = None
     cooldown_seconds: float | None = None
+    collection_scope: str = "page"
+
+    def __post_init__(self) -> None:
+        """在认证与入队前校验分页全量采集边界。"""
+        from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
+
+        all_scenarios = {
+            "product-research",
+            "competitor-lookup",
+            "keyword-miner",
+            "keyword-reverse",
+            "traffic-source",
+            "association-traffic",
+            "aba-research",
+            "keyword-research",
+            "market-research",
+        }
+
+        if self.collection_scope not in {"page", "all"}:
+            raise SellerSpriteConfigError("collection_scope 仅支持 page/all")
+        if self.collection_scope == "page":
+            return
+        if self.scenario not in all_scenarios:
+            raise SellerSpriteConfigError(
+                "collection_scope=all 仅支持已核验的列表场景；官方文件、单报告和远程任务场景暂不支持"
+            )
+        if self.mode not in {None, "browser-route"}:
+            raise SellerSpriteConfigError("全量分页采集仅支持 browser-route")
+        if self.export_format.lower() not in {"xls", "xlsx"}:
+            raise SellerSpriteConfigError("全量分页采集仅支持 xls/xlsx 文件导出")
+        if isinstance(self.page_size, bool) or not isinstance(self.page_size, int) or not 0 < self.page_size <= 100:
+            raise SellerSpriteConfigError("全量分页采集要求 page_size 为 1-100 的整数")
+        if self.scenario == "product-research":
+            if self.page_size != 100:
+                raise SellerSpriteConfigError("选产品全量采集要求 page_size=100")
+            for name, value, expected in [
+                *[(name, self.params[name], 100) for name in ("size", "pageSize") if name in self.params],
+            ]:
+                if isinstance(value, bool) or str(value) != str(expected):
+                    raise SellerSpriteConfigError(f"选产品全量采集要求 {name}={expected}")
+        for name in ("page", "startPage", "pageNum", "pageNo"):
+            if name in self.params and str(self.params[name]) != "1":
+                raise SellerSpriteConfigError(f"全量分页采集要求 {name}=1，从第一页开始")
 
     def to_dict(self) -> dict[str, Any]:
         """转换为可序列化字典。"""
@@ -61,11 +104,16 @@ class SellerSpriteScenarioResult:
     export: SellerSpriteExportResult | None = None
     data: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[dict[str, Any]] = field(default_factory=list)
+    collection: dict[str, Any] | None = None
+    preview: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """转换为 MCP/CLI 返回结构。"""
         payload = asdict(self)
         payload["export"] = self.export.to_dict() if self.export else None
+        if self.collection is None:
+            payload.pop("collection")
+            payload.pop("preview")
         return payload
 
     @classmethod

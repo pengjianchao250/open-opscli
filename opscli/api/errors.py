@@ -91,6 +91,67 @@ def query_exception_response(exc: Exception) -> JSONResponse:
     )
 
 
+def xydc_result_response(result: dict) -> JSONResponse:
+    """将西柚共享查询结果转换为 HTTP 状态，保留数据、用量和 Trace ID。
+
+    调用用户认证由 AppHub 处理；供应商凭据错误属于服务端配置故障，
+    返回 503，避免前端把西柚 Key 失效当成用户会话失效。
+    """
+    # feedback 是 MCP Agent 的草案，REST 不输出其中的内部异常和重复入参。
+    content = {key: value for key, value in result.items() if key != "feedback"}
+    if content.get("success") is True:
+        return JSONResponse(content)
+
+    error = content.get("error")
+    error = dict(error) if isinstance(error, dict) else {}
+    code = str(error.get("code") or "")
+    status_by_code = {
+        "XYDC_OPENAPI_INVALID_PARAMS": 400,
+        "XYDC_OPENAPI_UNKNOWN_OPERATION": 400,
+        "InvalidParams": 400,
+        "InvalidBiz": 400,
+        "RateLimitExceeded": 429,
+        "MCP_QUOTA_EXCEEDED": 429,
+        "MCP_QUOTA_IDENTITY_MISSING": 401,
+        "XYDC_OPENAPI_CREDENTIAL_UNAVAILABLE": 503,
+        "APICredentialUnavailable": 503,
+        "APICredentialNotFound": 503,
+        "CreditBalanceInsufficient": 503,
+        "CreditAccountUnavailable": 503,
+        "CreditAccountNotFound": 503,
+        "MCP_QUOTA_UNAVAILABLE": 503,
+        "MCP_QUOTA_ACCESS_UNAVAILABLE": 503,
+    }
+    upstream_status = error.get("status_code")
+    status_code = status_by_code.get(code, {
+        400: 400, 401: 503, 403: 503, 404: 502, 429: 429,
+    }.get(upstream_status, 502))
+
+    # 配额存储和 MySQL 等非业务异常可能包含路径或连接信息，统一替换。
+    if code in {"MCP_QUOTA_UNAVAILABLE", "MCP_QUOTA_ACCESS_UNAVAILABLE"}:
+        error = {"code": code, "message": "调用限额服务暂不可用，请稍后重试"}
+    elif code not in status_by_code and upstream_status is None:
+        error = {
+            "code": code if code.startswith("XYDC_OPENAPI_") else "XYDC_OPENAPI_REQUEST_FAILED",
+            "message": "西柚查询服务执行失败，请稍后重试",
+        }
+    content.update(success=False, data=None, error=error)
+    headers = {}
+    retry_after = str(error.get("retry_after") or "")
+    # 仅转发可解析的秒数或 HTTP 日期，避免供应商响应头污染 HTTP 输出。
+    if status_code == 429 and retry_after.isascii() and "\r" not in retry_after and "\n" not in retry_after:
+        from email.utils import parsedate_to_datetime
+
+        try:
+            if not retry_after.isdigit():
+                parsedate_to_datetime(retry_after)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        else:
+            headers["Retry-After"] = retry_after
+    return JSONResponse(content, status_code=status_code, headers=headers)
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """注册 REST 层统一异常处理器。
 

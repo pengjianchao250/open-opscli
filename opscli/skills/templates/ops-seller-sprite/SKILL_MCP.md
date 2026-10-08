@@ -126,7 +126,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 - `association-traffic` 固定查询全部变体，只获取第一页 100 条即完成任务，不自动请求后续分页；导出按官网关联流量 56 列主表格式对齐，只生成业务主表，不生成官网 `Notes` 页。
 - `association-traffic` 固定使用 `page_size=100`；browser-route 必须把 ASIN 逐个写入页面输入框并按回车，点击“立即查询”后再点击“用全部变体查询”；不得用静默接口 fallback 冒充已完成页面交互。若接口返回固定 20 条的游客数据，先恢复登录态并重试一次。
 - `traffic-extend` 必须提供 1—20 个 ASIN，仅支持 browser-route，固定第一页 100 条；点击“立即查询”并校验 `/prepare` 后，默认点击“用全部变体拓词”，也支持 `variantSelection=sell_well/current`。本地生成 33 列主表、`Unique Words` 和 `Asin`，不生成 `Notes`，不得调用官方全量导出接口。
-- `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；仅支持 browser-route 和默认“流量占比”，固定第一页 100 条。必须先校验 prepare 响应；用户未指定时自动点击“用畅销变体拓词”，明确要求当前变体时在 `params` 传 `variantSelection=current` 并点击“用当前变体拓词”。点击变体按钮前才监听主响应，控制参数不进入主请求；prepare 失败或页面交互后未捕获主响应时直接失败，不得使用静默 fallback 或改投 `keyword-reverse`。查询 JSON 在本地生成动态业务主表和 `ASIN` 辅助表，不调用官网额度型导出、不生成 `Notes`。
+- `keyword-comparison` 必须分别提供 1 个自己的 ASIN 和 1—10 个竞品 ASIN；仅支持 browser-route 和默认“流量占比”，固定第一页 100 条。必须先校验 prepare 响应；用户未指定时自动点击“用畅销变体拓词”，明确要求当前变体时在 `params` 传 `variantSelection=current` 并点击“用当前变体拓词”。点击变体按钮前才监听主响应，控制参数不进入主请求；prepare 失败或页面交互后未捕获主响应时直接失败，不得使用静默 fallback 或改投 `keyword-reverse`。主请求的 `asin` 是自己的 ASIN，页面 `asinList` 是竞品或变体列表且可以不含自己的 ASIN；本地导出按 `[asin] + asinList` 去重。已传合法 `ownAsin` 却报“流量词对比导出缺少自己的 ASIN”时按运行时导出合同异常反馈，不要求用户改参或切换导出格式重试。查询 JSON 在本地生成动态业务主表和 `ASIN` 辅助表，不调用官网额度型导出、不生成 `Notes`。
 - `keyword-conversion-rate` 必须提供 1—1000 个关键词词组，仅支持 browser-route，周期只支持按周或近 90 天，固定第一页 100 条。页面录入时每个词组只发送一次 Enter；动作超时后只检查标签计数，禁止盲目补按。标签完整后只点击一次“立即查询”，主响应缺失时不得静默 fallback 或换账号重放。本地生成官方 33 列单业务表，不调用官网导出、不生成 `Notes`。
 - `real-time-bidding` 必须且只能提供 1 个 ASIN，仅支持 browser-route。普通历史已完成/失败时自动调用一次“再次查询”，无历史时通过弹窗新建默认“亚马逊推荐关键词”任务，进行中任务只轮询，官网示例只读；完成后分别读取 SP、SB 第一页 100 条并校验关键词集合后合并，本地生成官方 46 列单业务表，不调用官网导出、不生成 `Notes`。提交响应不明时禁止重放，列表摘要或详情当前视图不能冒充列表导出。
 - `aba-research` 必须提供父/子 ASIN 或关键词；周/月周期、类目多选、排序和结果筛选按参数手册传递，不支持六种推荐模式。后端固定提交一次 `POST /v3/api/aba-research`，使用 `page=1/size=100`，不请求后续页、不调用官网导出接口；查询 JSON 在本地生成官方 19 列业务主表，不生成官网 `Notes` 页和二维码图片，`row_count` 等于第一页实际行数。
@@ -148,3 +148,7 @@ Listing Analysis 必须使用 submit/status/result 专用流程，不属于普�
 ```md
 任务仍在后台执行，本次等待窗口到期但任务未失败。我已保留全部未完成任务编号；你可以直接说“继续”或“查结果”，我会续查完整 pending 集合，不会重新提交或再次消耗额度。
 ```
+
+## 选产品全量采集合同
+
+`seller_sprite_run` 新增顶层 `collection_scope`，默认 `page`；显式 `all` 支持已核验列表场景（选产品、选竞品、关键词挖掘、关键词反查、查流量来源、关联流量、ABA 数据选品、关键词选品、选市场），从第一页开始、使用 XLSX 文件。opscli 统一最多采集 2,000 行；匹配数更大时必须披露 `source_limited`。读取 [分页参数及结果解释](SCENARIO_PARAMS_ZH.md#选产品分页与获取全部) 后构造请求并解释 `collection`。官方 XLSX、单报告和远程任务场景仍拒绝 `all`。

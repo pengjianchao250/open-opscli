@@ -52,6 +52,17 @@ def test_add_uses_confirmed_hidden_input_and_never_echoes_key(monkeypatch):
     assert '"api_key_masked": "secr****-key"' in result.stdout
 
 
+def test_add_rejects_deprecated_xydc_mcp_provider():
+    result = runner.invoke(
+        credential_cli.app,
+        ["add", "--provider", "xydc_mcp", "--name", "legacy"],
+    )
+
+    assert result.exit_code != 0
+    assert "已废弃" in result.output
+    assert "xydc_openapi" in result.output
+
+
 def test_init_schema_requires_only_mysql(monkeypatch):
     """首次建表只需要 MySQL 配置。"""
     configured = ApiCredentialSettings(

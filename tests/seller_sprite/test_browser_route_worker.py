@@ -61,6 +61,76 @@ def test_close_browser_route_worker_closes_and_removes_account_session():
     _run(scenario())
 
 
+def test_browser_session_failure_closes_worker_before_next_task(monkeypatch, tmp_path):
+    """页面崩溃后不得把同一坏会话交给下一条任务。"""
+
+    assert worker_module._is_browser_session_failure(
+        RuntimeError("Page.goto: Page crashed")
+    )
+    assert worker_module._is_browser_session_failure(
+        RuntimeError(
+            "Response.text: Protocol error (Network.getResponseBody): "
+            "No resource with given identifier found"
+        )
+    )
+    assert not worker_module._is_browser_session_failure(RuntimeError("业务参数错误"))
+
+    async def scenario():
+        worker_module._WORKERS.clear()
+        account = SellerSpriteAccount(
+            name="account-1", username="user@example.com", password="secret"
+        )
+        settings = SellerSpriteSettings(output_dir=tmp_path)
+        worker = worker_module.get_browser_route_worker(settings=settings, account=account)
+
+        class CloseProbe:
+            def __init__(self):
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class PlaywrightProbe:
+            def __init__(self):
+                self.stopped = False
+
+            async def stop(self):
+                self.stopped = True
+
+        context = CloseProbe()
+        playwright = PlaywrightProbe()
+        worker._context = context
+        worker._playwright = playwright
+        worker._opened_at = 1.0
+
+        async def crashed(_request):
+            raise RuntimeError("Page.goto: Page crashed")
+
+        monkeypatch.setattr(worker, "_run_one", crashed)
+        request = worker_module.BrowserRouteRequest(
+            scenario="keyword-reverse",
+            method="POST",
+            endpoint="/v3/api/keyword/reverse",
+            payload={"asin": "B0TEST"},
+            referer=worker_module.DEFAULT_PAGE_URL,
+            account=account,
+            root_dir=tmp_path,
+        )
+
+        with pytest.raises(RuntimeError, match="Page.goto: Page crashed"):
+            await worker.submit(request)
+
+        assert context.closed is True
+        assert playwright.stopped is True
+        assert worker.accepts_tasks is False
+        replacement = worker_module.get_browser_route_worker(
+            settings=settings, account=account
+        )
+        assert replacement is not worker
+
+    _run(scenario())
+
+
 def test_authentication_failure_close_quarantines_persistent_profile(tmp_path):
     async def scenario():
         worker_module._WORKERS.clear()
@@ -1906,6 +1976,15 @@ def test_keyword_comparison_route_payload_accepts_sell_well_replacement():
     }
 
 
+def test_keyword_comparison_export_asin_list_deduplicates_own_asin():
+    assert worker_module._keyword_comparison_export_asin_list(
+        {
+            "asin": "b0949dwjcv",
+            "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+        }
+    ) == ["B0949DWJCV", "B0744DM3Y3"]
+
+
 def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_path):
     """主请求只接受页面生成的畅销变体列表，并同步记录最终顺序。"""
     endpoint = "/v3/api/keyword-comparison/asin"
@@ -1919,7 +1998,7 @@ def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_pat
                 headers={"content-type": "application/json"},
                 post_data=json.dumps(
                     {
-                        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+                        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
                         "page": 9,
                         "size": 5,
                         "station": "JP",
@@ -1995,11 +2074,13 @@ def test_keyword_comparison_route_sends_effective_asin_list(monkeypatch, tmp_pat
     assert result == {"code": "OK", "data": {"items": []}}
     assert sent_body == {
         **payload,
-        "asinList": ["B0949DWJCV", "B0744DM3Y3"],
+        "asinList": ["B0744DM3Y3", "B0BRN58CXR"],
         "page": 1,
         "size": 100,
     }
-    assert route_metadata == {"asinList": ["B0949DWJCV", "B0744DM3Y3"]}
+    assert route_metadata == {
+        "asinList": ["B0949DWJCV", "B0744DM3Y3", "B0BRN58CXR"]
+    }
 
 
 def test_keyword_comparison_route_aborts_and_reports_invalid_body(monkeypatch, tmp_path):
@@ -4235,6 +4316,7 @@ def test_failure_cooldown_skips_session_config_and_unknown_errors(monkeypatch):
     assert worker_module._failure_cooldown_seconds(
         SellerSpriteApiError("expired", api_code="ERR_GLOBAL_SESSION_EXPIRED")
     ) == 0.0
+    assert SellerSpriteApiError("forbidden", api_code="ERR_GLOBAL_403").is_session_expired()
     assert worker_module._failure_cooldown_seconds(
         SellerSpriteApiError("参数不对", status_code=400, api_message="参数错误")
     ) == 0.0
@@ -4344,6 +4426,75 @@ def test_run_one_relogs_and_retries_main_request_once(monkeypatch, tmp_path):
         assert execute_calls == ["main", "main"]
         assert login_calls == [worker_module.DEFAULT_PAGE_URL]
         assert open_calls == [worker_module.DEFAULT_PAGE_URL, worker_module.DEFAULT_PAGE_URL]
+
+    _run(scenario())
+
+
+def test_run_one_reuses_prepared_page_for_product_pagination(monkeypatch, tmp_path):
+    async def scenario():
+        account = SellerSpriteAccount(name="default", username="user@example.com", password="secret")
+        worker = SellerSpriteBrowserRouteWorker(
+            settings=SellerSpriteSettings(output_dir=tmp_path),
+            account=account,
+        )
+        page = SimpleNamespace(
+            url="https://www.sellersprite.com/v3/product-research",
+            is_closed=lambda: False,
+        )
+        events = []
+
+        async def fake_ensure_page(current_account):
+            events.append("ensure_page")
+            return page
+
+        async def fake_open(current_page, request, **kwargs):
+            events.append(("open", request.payload["page"]))
+            return {"logged_in": True, "current_url": request.referer}
+
+        async def fake_captcha(*args, **kwargs):
+            events.append("captcha")
+
+        async def fake_route(**kwargs):
+            events.append(("route", kwargs["payload"]["page"]))
+            return {"code": "OK", "data": {"items": [], "total": 200}}
+
+        async def fake_context(**kwargs):
+            events.append(("context", kwargs["payload"]["page"], kwargs["payload"]["keyword"]))
+            return {"code": "OK", "data": {"items": [], "total": 200}}
+
+        monkeypatch.setattr(worker, "_ensure_page", fake_ensure_page)
+        monkeypatch.setattr(worker, "_open_referer_and_login", fake_open)
+        monkeypatch.setattr(worker, "_handle_robot_captcha_if_enabled", fake_captcha)
+        monkeypatch.setattr(worker, "_execute_route_fetch", fake_route)
+        monkeypatch.setattr(worker, "_execute_context_fetch", fake_context)
+
+        def request(page_number):
+            return worker_module.BrowserRouteRequest(
+                scenario="product-research",
+                method="POST",
+                endpoint="/v3/api/product-research",
+                payload={"page": page_number, "size": 100, "keyword": "loft"},
+                referer=(
+                    "https://www.sellersprite.com/v3/product-research"
+                    f"?page={page_number}&size=100"
+                ),
+                account=account,
+                root_dir=tmp_path,
+                page_prepare=False,
+                reuse_page_session=True,
+            )
+
+        await worker._run_one(request(1))
+        await worker._run_one(request(2))
+
+        assert events == [
+            "ensure_page",
+            ("open", 1),
+            "captcha",
+            ("route", 1),
+            "ensure_page",
+            ("context", 2, "loft"),
+        ]
 
     _run(scenario())
 

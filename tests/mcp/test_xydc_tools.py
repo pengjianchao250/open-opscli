@@ -11,6 +11,8 @@ from opscli.mcp.tools import xydc as xydc_tools
 
 
 XYDC_TOOL_NAMES = {
+    "ext_xydc_openapi_operations",
+    "ext_xydc_openapi_call",
     "ext_xydc_get_asin_info",
     "ext_xydc_get_asin_traffic",
     "ext_xydc_get_keyword_info",
@@ -30,7 +32,7 @@ def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch):
             calls.append((tool_name, arguments))
             return {"success": True, "data": [], "error": None}
 
-    monkeypatch.setattr(xydc_tools, "XydcMcpProvider", FakeProvider)
+    monkeypatch.setattr(xydc_tools, "XydcOpenApiProvider", FakeProvider)
 
     result = _run(
         xydc_tools.ext_xydc_get_keyword_asin_analysis(
@@ -57,10 +59,29 @@ def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch):
     ]
 
 
+def test_client_quota_is_rejected_before_provider_call(monkeypatch):
+    def forbidden():
+        raise AssertionError("内部额度操作不应进入公开 MCP Provider")
+
+    monkeypatch.setattr(xydc_tools, "XydcOpenApiProvider", forbidden)
+    result = _run(
+        xydc_tools.ext_xydc_openapi_call(
+            operation="client_quota",
+            payload={},
+        )
+    )
+
+    assert result["success"] is False
+    assert result["error"]["code"] == "XYDC_OPENAPI_INTERNAL_OPERATION"
+
+
 def test_xydc_tools_have_testing_description_and_gateway_metadata():
     assert {tool.__name__ for tool in xydc_tools._ALL_TOOLS} == XYDC_TOOL_NAMES
     for tool in xydc_tools._ALL_TOOLS:
-        assert (tool.__doc__ or "").startswith("【测试中｜消耗西柚 Credit】")
+        if tool.__name__ in {"ext_xydc_openapi_operations", "ext_xydc_openapi_call"}:
+            assert "OpenAPI" in (tool.__doc__ or "")
+        else:
+            assert (tool.__doc__ or "").startswith("【OpenAPI｜消耗西柚 Credit】")
         assert getattr(tool, "__opscli_catalog_module__", None) == "external_xydc"
         assert getattr(tool, "__opscli_telemetry_role__", None) == "gateway_proxy"
         assert getattr(tool, "__opscli_skip_quota__", False) is False
@@ -117,3 +138,29 @@ def test_default_server_registers_xydc_tools_with_frozen_schemas(monkeypatch, tm
         "minimum": 1,
         "type": "integer",
     }
+
+
+def test_default_server_registers_full_openapi_operation_contract(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "OPSCLI_MCP_UPSTREAM_CONFIG_PATH",
+        str(tmp_path / "missing-mcp-upstreams.json"),
+    )
+
+    async def allow_all():
+        return None
+
+    monkeypatch.setattr("opscli.mcp.permissions._resolve_allowed_tools", allow_all)
+    mcp, _registrars = server_module._build_server()
+
+    async def scenario():
+        async with Client(mcp) as client:
+            return {tool.name: tool for tool in await client.list_tools()}
+
+    tools = _run(scenario())
+    operation_tool = tools["ext_xydc_openapi_call"]
+    operation_schema = operation_tool.inputSchema["properties"]["operation"]
+
+    assert len(operation_schema["enum"]) == 21
+    assert "asin_info" in operation_schema["enum"]
+    assert "search_terms_analysis_monthly" in operation_schema["enum"]
+    assert "client_quota" not in operation_schema["enum"]

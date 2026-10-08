@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
 from numbers import Real
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,67 @@ from opscli.seller_sprite.domain.exceptions import SellerSpriteConfigError
 from opscli.seller_sprite.domain.models import SellerSpriteExportResult
 from opscli.seller_sprite.export.columns import ExportColumn, columns_for_scenario, currency_label
 from opscli.seller_sprite.export.worksheet import SellerSpriteWorksheet
+
+
+def export_product_pages_to_xlsx(
+    *, rows: Iterable[dict[str, Any]], output_path: Path,
+    site: str, period: str, params: dict[str, Any],
+    collection: dict[str, Any] | None = None,
+) -> SellerSpriteExportResult:
+    """逐行生成选产品表格，沿用单页列映射、数值格式及标题。"""
+    from openpyxl import Workbook
+    from openpyxl.cell import WriteOnlyCell
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    columns = columns_for_scenario("product-research", site, period)
+    formats = _number_formats_for_scenario("product-research", len(columns))
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet(_main_sheet_title(
+        scenario="product-research", site=site, period=period, params=params, rows=[],
+    ))
+    sheet.freeze_panes = "A2"
+    for index, column in enumerate(columns, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = _column_width(column.title)
+    header = []
+    for column in columns:
+        cell = WriteOnlyCell(sheet, value=column.title)
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill("solid", fgColor="EAF2F8")
+        header.append(cell)
+    sheet.append(header)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output_path.with_suffix(".part.xlsx")
+    try:
+        for row in rows:
+            cells = []
+            for index, column in enumerate(columns):
+                value = _cell_value(_column_value(row, column, site=site))
+                cell = WriteOnlyCell(sheet, value=value)
+                number_format = formats[index]
+                if number_format and isinstance(value, Real) and not isinstance(value, bool):
+                    cell.number_format = number_format
+                elif not number_format:
+                    _apply_number_format(cell)
+                cells.append(cell)
+            sheet.append(cells)
+        # 文件被单独分享时也必须披露波动，主表及其列映射保持原样。
+        if collection and collection.get("total_changed"):
+            note = workbook.create_sheet("采集说明")
+            note.column_dimensions["A"].width = 24
+            note.column_dimensions["B"].width = 90
+            note.append(["完整性", "完整性未验证：采集期间匹配总数发生变化，不能视为全部匹配结果"])
+            note.append(["首次匹配总数", collection["source_total"]])
+            note.append(["末次匹配总数", collection["source_total_last"]])
+            note.append(["实际导出条数", collection["rows_written"]])
+            note.append(["单次访问上限", collection["access_limit"]])
+        workbook.save(temporary)
+        temporary.replace(output_path)
+    finally:
+        workbook.close()
+        temporary.unlink(missing_ok=True)
+    resolved = output_path.resolve()
+    return SellerSpriteExportResult(path=str(resolved), filename=resolved.name, url=resolved.as_uri())
 
 
 def build_export_worksheets(
