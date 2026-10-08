@@ -80,7 +80,14 @@ def test_help_output_matches_snapshot():
     snapshot = (
         REPO_ROOT / "tests" / "test_cli_lazy_loading_help_snapshot.txt"
     ).read_text(encoding="utf-8")
-    assert result.stdout == snapshot, "opscli --help 输出与懒加载前快照不一致"
+    # Rich 会按当前命令表宽度调整行尾填充空格；快照只比较可见内容，
+    # 避免新增命令或终端宽度变化造成无意义的空白差异。
+    def normalize(text: str) -> str:
+        return "\n".join(line.rstrip() for line in text.splitlines())
+
+    assert normalize(result.stdout) == normalize(snapshot), (
+        "opscli --help 输出与懒加载前快照不一致"
+    )
 
 
 # ---------- ④ 注册表 help 与子模块 typer.Typer(help=...) 一致 ----------

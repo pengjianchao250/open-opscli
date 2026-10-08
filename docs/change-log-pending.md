@@ -11853,3 +11853,13 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条对应的 browser worker、API 管理器、测试和说明改动。
 
 ---
+
+## 2026-10-08 鹰眼 PND - 补齐 CLI 到远端 MCP 的正式入口
+
+**变更原因**：CLI 原先没有鹰眼查询入口，单独调整 Skill 无法让终端用户调用远端通用 MCP 挂载的 PND 工具。
+**改动点**：新增 opscli yingyan 命令组及远端适配层，提供目录、只读 SQL（参数或 UTF-8 文件）、相似词及报告任务状态四项能力；复用本地 OPS 认证与远端 MCP 配置，选择 BI运营系统；更新 ops-yingyan Skill 的调用链路、命令示例及服务端代理边界，补充命令映射测试及帮助快照，提交前清理新增文件的末尾多余空行。
+**验证结果**：本次会话运行 uv run --no-sync pytest tests/yingyan tests/skills/test_ops_yingyan_skill.py tests/test_cli_lazy_loading.py tests/mcp/test_remote_client.py tests/mcp/test_config_client.py -q，70 passed；git diff --check 通过。四项工具名称和参数已与当前 MCP 对照；MCP 目录实测返回 23 个数据集。CLI 实测在本地获取 OPS JWT 时返回 401，尚未完成 CLI 与 MCP 的真实查询一致性验收。
+**影响范围**：鹰眼 CLI、对应 Skill 与测试；未修改远端 MCP 注册及 PND 服务，未发布。
+**回滚方式**：回退本条对应提交，移除鹰眼 CLI 注册、模块及相关 Skill 和测试改动。
+
+---
