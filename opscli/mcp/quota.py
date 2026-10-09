@@ -2,8 +2,8 @@
 
 本模块为 MCP 外部服务类工具提供统一的每日限额能力。限额逻辑集中在
 Tool 注册切面中执行，避免卖家精灵、西柚、Sif 等业务工具各自重复实现。
-SQLite 作为单机部署下的本地持久化存储，同时负责限额判断、长期日加额
-和审计记录。
+默认使用 MySQL 表持久化额度策略、每日用量和长期日加额；显式选择
+SQLite 时保留单机部署的兼容存储。
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class QuotaPolicy:
 
     Args:
         tool_name: MCP Tool 函数名，如 seller_sprite_run。
-        service: 业务服务名，用于 SQLite 记录和响应 quota.service。
+        service: 业务服务名，用于限额记录和响应 quota.service。
         daily_limit: 每个用户每天可成功调用的次数。
         timezone: 自然日统计时区，当前固定使用北京时间。
     """
@@ -104,7 +104,7 @@ _quota_access_ctx: contextvars.ContextVar[QuotaAccessContext | None] = contextva
 class QuotaUnavailableError(Exception):
     """限额存储不可用。
 
-    SQLite 是限额的强依赖。该异常会被转换为 MCP_QUOTA_UNAVAILABLE，
+    所选数据库是限额的强依赖。该异常会被转换为 MCP_QUOTA_UNAVAILABLE，
     防止存储故障时绕过每日限额。
     """
 
@@ -616,7 +616,7 @@ class SQLiteQuotaStore:
 class QuotaLimiter:
     """MCP Tool 限额编排器。
 
-    该类每次调用都从存储层读取最新策略，避免线上修改 SQLite 策略表后
+    该类每次调用都从存储层读取最新策略，避免线上修改数据库策略表后
     仍然使用进程启动时的旧快照。
     """
 
@@ -843,8 +843,9 @@ def get_quota_limiter() -> QuotaLimiter:
 
 
 def _default_quota_store() -> QuotaStore:
-    """按显式后端配置创建限额存储，默认保持 SQLite 兼容。"""
-    backend = os.environ.get(ENV_QUOTA_BACKEND, "sqlite").strip().lower()
+    """默认读取 MySQL 额度表，显式指定后端时使用对应存储。"""
+    # 额度集中到 MySQL，避免未设置后端变量的服务继续读取旧 SQLite。
+    backend = os.environ.get(ENV_QUOTA_BACKEND, "mysql").strip().lower()
     if backend == "sqlite":
         return SQLiteQuotaStore(os.environ.get(ENV_SQLITE_PATH))
     if backend == "mysql":

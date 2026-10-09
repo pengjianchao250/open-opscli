@@ -14,7 +14,7 @@
 
 | 模块 | 建表 | 数据迁移 | 运行时切换 |
 |---|---|---|---|
-| MCP quota | 支持 | 支持 dry-run/apply | 支持显式切换 |
+| MCP quota | 支持 | 支持 dry-run/apply | 默认使用 MySQL |
 | SellerSprite 公共爬虫账号凭据 | 不在本地 SQLite | 本轮不迁移 | 继续使用 OPS 集成账号接口；后续另立范围 |
 | SellerSprite 账号事件和隔离状态 | 随队列表预建 | 暂不支持 | 禁止切换 |
 | SellerSprite 任务队列 | 仅预建 | 暂不支持 | 禁止切换 |
@@ -147,11 +147,13 @@ python -m opscli.migrations.sqlite_runtime quota \
 
 ### 6.4 切换
 
-```bash
-OPSCLI_MCP_QUOTA_BACKEND=mysql
-```
+完成建表、数据迁移和第 5 节连接配置后，部署新代码并重启 MCP/REST 服务。额度存储默认使用 MySQL，无需设置 `OPSCLI_MCP_QUOTA_BACKEND=mysql`；所有使用默认限额工厂的服务（包括西柚、Keepa 和 SellerSprite）统一读取 MySQL 额度表。
 
-MySQL 读写异常会阻断受限 Tool。当前 `check_schema()` 尚未接入默认工厂，schema/策略完整性必须补齐启动预检后才能切换，不能仅凭环境变量认为版本校验已生效。
+默认 MySQL 模式不读取 `OPSCLI_MCP_QUOTA_SQLITE_PATH`，也不会自动同步旧 `quota.sqlite3` 的后续修改。额度策略、每日用量和长期日加额分别由 `mcp_quota_policy`、`mcp_quota_daily` 和 `mcp_quota_bonus_daily` 控制。修改当前 MySQL 策略并提交后，下一次调用立即生效，不需要重启。
+
+已有部署如果显式配置 `OPSCLI_MCP_QUOTA_BACKEND=sqlite`，仍会使用 SQLite；要采用新的默认行为，需要移除该配置并重启服务。后端实例及连接配置在进程内初始化，切换后端或变更 MySQL 连接配置需要重启。
+
+MySQL 连接配置缺失或读写异常会阻断受限 Tool，不会回退到 SQLite。部署前必须确认表结构和策略记录完整；无策略或禁用策略的工具仍按原逻辑放行。当前 `check_schema()` 尚未接入默认工厂，部署时仍需主动核对 schema/策略完整性，默认选择 MySQL 不代表版本校验已生效。
 
 ## 7. Quota 核对
 
