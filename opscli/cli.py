@@ -47,6 +47,7 @@ _SUBCOMMANDS: tuple[tuple[str, str, str], ...] = (
     ("google-trends", "opscli.google_trends.cli", "Google Trends 正式场景与本地运维命令。"),
     ("keepa", "opscli.keepa.cli", "Keepa 远端 MCP 正式命令面。"),
     ("seller-sprite", "opscli.seller_sprite.cli", "卖家精灵远端 MCP 正式命令面。"),
+    ("yingyan", "opscli.yingyan.cli", "鹰眼 PND 远端 MCP 正式命令面。"),
     ("skills", "opscli.skills.cli", "Skill 生命周期管理"),
     ("mcp", "opscli.mcp.cli", "MCP Server 管理"),
     ("baiyi", "opscli.baiyi.cli", "佰易产品数据查询"),

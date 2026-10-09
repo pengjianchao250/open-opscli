@@ -1,3 +1,17 @@
+## 2026-10-09 SQLite 迁移 - 合入 Quota MySQL 支持
+
+**变更原因**：将迁移 worktree 中已有的 Quota MySQL 实现、导入工具和文档合入主仓库当前分支，同时避免带入已撤回的专属账号工厂引用。
+
+**改动点**：合入显式 MySQL 后端选择、运行库连接配置、Quota 四表导入、建表与清理脚本、迁移文档及测试；恢复原 SQLite 专属账号读取，增加默认访问解析及后端选择回归。任务队列 SQL 仍为预建草案，不启用生产迁移。
+
+**验证结果**：新增默认访问解析测试在修复前复现普通用户及专属账号两种路径的 ImportError；修复后迁移分支 49 项测试通过。合并后主仓库 Quota、MySQL Store、连接配置、迁移、专属绑定、Collector/MCP 服务入口及 CLI 懒加载共 86 项测试通过；暂存差异检查通过。MySQL 使用模拟连接，未执行生产数据库操作。
+
+**影响范围**：默认仍为 SQLite；仅显式配置 MySQL 时使用新 Quota Store。公共账号 API、专属绑定存储、队列运行时保持既有行为。生产切换仍须完成策略、预检、Monitor 适配及对账验收。
+
+**回滚方式**：通过 Git 回退本次合并提交。若生产 MySQL 已产生调用计数，回退代码前须停写并核对数据，不直接切回旧 SQLite。
+
+---
+
 ## 2026-09-28 SellerSprite - 明确全量分页上限与异常恢复规则
 
 **变更原因**：需要判断是否能为全部场景开放获取全部分页，并统一处理网页访问上限、异常退出和恢复。
@@ -11851,5 +11865,15 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：SellerSprite 模块回归 593 passed；新增 worker 用例确认第二页复用上下文请求，分页调度用例确认页码与 `reuse_page_session` 参数正确传递。测试使用 mock，未完成真实 20 页端到端验收。设计文档补充页面停留在第 1 页的原因及任务进度查看方式。
 **影响范围**：仅选产品 `collection_scope=all` 的 browser-route 分页执行；单页场景及其他分页场景不变。
 **回滚方式**：回退本条对应的 browser worker、API 管理器、测试和说明改动。
+
+---
+
+## 2026-10-08 鹰眼 PND - 补齐 CLI 到远端 MCP 的正式入口
+
+**变更原因**：CLI 原先没有鹰眼查询入口，单独调整 Skill 无法让终端用户调用远端通用 MCP 挂载的 PND 工具。
+**改动点**：新增 opscli yingyan 命令组及远端适配层，提供目录、只读 SQL（参数或 UTF-8 文件）、相似词及报告任务状态四项能力；复用本地 OPS 认证与远端 MCP 配置，选择 BI运营系统；更新 ops-yingyan Skill 的调用链路、命令示例及服务端代理边界，补充命令映射测试及帮助快照，提交前清理新增文件的末尾多余空行。
+**验证结果**：本次会话运行 uv run --no-sync pytest tests/yingyan tests/skills/test_ops_yingyan_skill.py tests/test_cli_lazy_loading.py tests/mcp/test_remote_client.py tests/mcp/test_config_client.py -q，70 passed；git diff --check 通过。四项工具名称和参数已与当前 MCP 对照；MCP 目录实测返回 23 个数据集。CLI 实测在本地获取 OPS JWT 时返回 401，尚未完成 CLI 与 MCP 的真实查询一致性验收。
+**影响范围**：鹰眼 CLI、对应 Skill 与测试；未修改远端 MCP 注册及 PND 服务，未发布。
+**回滚方式**：回退本条对应提交，移除鹰眼 CLI 注册、模块及相关 Skill 和测试改动。
 
 ---
