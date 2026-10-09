@@ -7,7 +7,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 
 统一模板仓库：`http://10.1.13.143:3000/aukeys-admin/template`，分支：`master`。模板提供应用代码和发布资产，Skill 维护跨项目开发规则；不另建脚手架。
 
-本 Skill 中“站点”和“看板”含义相同，均指完整的 AppHub 应用项目；正文统一优先使用“看板”。“新建”继续使用模板克隆流程；“迁移”专指源码复制迁移流程，不复制模板、不执行完整重构、不在源目录修改业务源码。迁移目标必须是与源目录隔离的新目录，迁移后的源码尽可能保持原样，仅新增迁移标识、AppHub/Git 元数据、启动脚本和必要的本地忽略规则。
+本 Skill 中“站点”和“看板”含义相同，均指完整的 AppHub 应用项目；正文统一优先使用“看板”。“新建”继续使用模板克隆流程；“迁移”专指源码复制迁移流程，不复制模板、不执行完整重构、不在源目录修改业务源码。迁移目标必须是与源目录隔离的新目录，迁移后的源码尽可能保持原样，仅在目标副本建立本地迁移状态和最小 AppHub 适配层。
 
 ## Git 基础门禁
 
@@ -47,11 +47,12 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 ### 源码复制迁移门禁
 
 1. 明确源项目目录和迁移目标根目录；目标未明确时由 `opscli app migrate start` 在当前对话目录创建 `app-hub-source-时间戳`。
-2. 执行 `opscli app migrate start --source "<source-project>" [--target-root "<target-root>"] --json`，命令完成源码复制、迁移标识、AppHub create 和 Git init。
-3. 通过 `opscli app migrate status --target "<target-project>" --json` 查看状态；通过 `opscli app migrate verify --target "<target-project>" --json` 验证源目录未变更、目标隔离、复制清单、启动清单、Git 和绑定状态。
-4. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；未知启动方式允许完成迁移，但必须标记 `startup_manual_required`。
-5. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
-6. 迁移项目推送仍使用 `opscli app push`，但只走迁移专用门禁；普通新建项目继续使用原有 `app create/init/push` 逻辑。
+2. 执行 `opscli app migrate start --source "<source-project>" [--target-root "<target-root>"] --json`，命令复制源码、写入本地迁移标识、建立最小适配层；只有启动与适配证据明确时才继续普通 AppHub create 和 Git init。
+3. 通过 `opscli app migrate status --target "<target-project>" --json` 查看状态；通过 `opscli app migrate verify --target "<target-project>" --json` 验证源目录未变更、目标隔离、复制/启动/适配清单、`app.yaml` 身份、Git 和 binding。
+4. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；未知启动方式必须停在 `startup_manual_required` / `adaptation_manual_required`，不得初始化或推送。
+5. 人工补齐启动或适配资产后执行 `opscli app migrate resume --target "<target-project>" --json`；命令按持久化阶段继续，不重新复制、不重复创建应用。
+6. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
+7. 迁移项目推送仍使用 `opscli app push`；迁移过程门禁通过后继续执行与普通项目相同的 `app.yaml` 身份和 AppHub 生产门禁。普通新建项目继续使用原有 `app create/init/push` 逻辑。
 ### AppHub 真实取数交付门禁
 
 页面需要 OPS、Keepa 或 SellerSprite 数据时，必须委托 `$ops-app-data-builder` 完成“需求识别 → 正式查询尝试 → 合同固化 → 业务 API/页面接入”的闭环。业务范围已经足够明确时，不得因为用户没有提供 dataset、field、scenario 或轮询参数而停止；这些技术细节由对应查询 Skill 验证并回填。

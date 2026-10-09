@@ -12,12 +12,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from opscli.app.domain.exceptions import AppProjectError
 from opscli.app.services.manager import AppManager
+from opscli.app.services.migration_contract import (
+    inspect_migration_frontend_build,
+    inspect_migration_public_paths,
+    inspect_migration_runtime_assets,
+)
 
-MIGRATION_SCHEMA_VERSION = 1
+MIGRATION_SCHEMA_VERSION = 2
 MIGRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 MIGRATION_ORIGIN_TYPE = "migration_copy"
+FINALIZE_JOURNAL_NAME = ".opscli-migration-finalize.json"
 EXCLUDED_PARTS = {
     ".git",
     ".opscli",
@@ -31,7 +39,6 @@ EXCLUDED_PARTS = {
     ".coverage",
     "coverage",
     "dist",
-    "build",
     ".next",
     ".nuxt",
     ".cache",
@@ -39,7 +46,7 @@ EXCLUDED_PARTS = {
     "temp",
     "logs",
 }
-SENSITIVE_GIT_PATTERNS = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "data")
+SENSITIVE_GIT_PATTERNS = (".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "/data")
 LEGACY_STATE_FILES = {
     "audit-snapshot.json",
     "coverage-matrix.json",
@@ -69,10 +76,11 @@ class MigrationService:
     ) -> dict[str, Any]:
         source_path = self._resolve_existing_directory(source, "源项目")
         migration_key = self._migration_id(migration_id)
+        if target_root is not None:
+            self._recover_interrupted_commit(Path(target_root).expanduser())
         target_path, target_reason = self._resolve_target(source_path, target_root)
         self._validate_roots(source_path, target_path)
-        if target_path.exists():
-            raise AppProjectError("APP-MIGRATION-TARGET", f"迁移目标已存在：{target_path}")
+        target_existed = target_path.exists()
 
         staging = target_path.parent / f".{target_path.name}.migration-{migration_key}.tmp"
         if staging.exists():
@@ -89,83 +97,202 @@ class MigrationService:
             "source_root": str(source_path),
             "target_root": str(target_path),
             "target_reason": target_reason,
+            "app_name": app_name.strip() if app_name and app_name.strip() else source_path.name,
             "phase": "target_resolved",
             "status": "running",
+            "delivery_ready": False,
+            "generated_files": [],
             "created_at": _now(),
             "updated_at": _now(),
         }
         try:
             copy_manifest = self._copy_source(source_path, staging, migration_key)
-            self._write_json(staging / ".opscli" / "migration" / migration_key / "copy-manifest.json", copy_manifest)
-            self._write_json(staging / ".opscli" / "migration" / migration_key / "migration.json", state)
-            self._write_json(staging / ".opscli" / "migration" / "current.json", {
-                "schema_version": MIGRATION_SCHEMA_VERSION,
-                "migration_id": migration_key,
-            })
-            self._write_json(staging / ".opscli" / "project.json", {
-                "schema_version": MIGRATION_SCHEMA_VERSION,
-                "project_type": "apphub",
-                "origin_type": MIGRATION_ORIGIN_TYPE,
-                "migration_id": migration_key,
-                "source_root": str(source_path),
-                "target_root": str(target_path),
-                "source_readonly": True,
-                "template_cloned": False,
-                "business_source_rewritten": False,
-            })
-            self._ensure_gitignore(staging)
+            state.update(phase="copied", updated_at=_now())
+            migration_dir = staging / ".opscli" / "migration" / migration_key
+            self._write_json(migration_dir / "copy-manifest.json", copy_manifest)
+            self._write_json(migration_dir / "migration.json", state)
+            self._write_json(
+                staging / ".opscli" / "migration" / "current.json",
+                {
+                    "schema_version": MIGRATION_SCHEMA_VERSION,
+                    "migration_id": migration_key,
+                },
+            )
+            self._write_json(
+                staging / ".opscli" / "project.json",
+                {
+                    "schema_version": MIGRATION_SCHEMA_VERSION,
+                    "project_type": "apphub",
+                    "origin_type": MIGRATION_ORIGIN_TYPE,
+                    "migration_id": migration_key,
+                    "source_root": str(source_path),
+                    "target_root": str(target_path),
+                    "source_readonly": True,
+                    "template_cloned": False,
+                    "business_source_rewritten": False,
+                },
+            )
+            if self._ensure_gitignore(staging):
+                state["generated_files"].append(".gitignore")
             startup = self._scan_and_write_startup(staging, migration_key)
+            if startup.get("wrapper_generated"):
+                state["generated_files"].append("scripts/start_app.py")
             state.update(
-                phase="startup_ready" if startup["status"] == "ready" else "startup_manual_required",
+                phase=(
+                    "startup_ready"
+                    if startup["status"] == "ready"
+                    else "startup_manual_required"
+                ),
                 startup_status=startup["status"],
                 updated_at=_now(),
             )
-            self._write_json(staging / ".opscli" / "migration" / migration_key / "migration.json", state)
-            staging.rename(target_path)
+            self._scan_and_write_adaptation(staging, state, startup)
+            self._write_json(migration_dir / "migration.json", state)
+            if target_existed:
+                self._commit_to_existing_target(staging, target_path, migration_key)
+            else:
+                staging.rename(target_path)
             self._assert_source_unchanged(source_path, copy_manifest["source_fingerprint"])
-
-            manager = self._get_manager()
-            resolved_name = app_name.strip() if app_name and app_name.strip() else source_path.name
-            create_result = manager.create_app(
-                resolved_name,
-                path=target_path,
-                origin_type=MIGRATION_ORIGIN_TYPE,
-                migration_id=migration_key,
-            )
-            state.update(phase="registered", app_id=create_result.get("app_id"), updated_at=_now())
-            self._write_state(target_path, migration_key, state)
-            init_result = manager.init_git(target_path)
-            state.update(phase="initialized", status="ready", updated_at=_now())
-            self._write_state(target_path, migration_key, state)
-            target_notice = None
-            if target_reason == "user_non_empty_fallback":
-                target_notice = (
-                    f"指定迁移目标目录非空，已在其下创建独立目标目录：{target_path}"
-                )
-            return {
-                **self.status(target_path, migration_id=migration_key),
-                "target_reason": target_reason,
-                "target_notice": target_notice,
-                "copy_manifest": str(self._migration_dir(target_path, migration_key) / "copy-manifest.json"),
-                "startup_manifest": str(self._migration_dir(target_path, migration_key) / "startup-manifest.json"),
-                "create": create_result,
-                "init": init_result,
-                "message": "源码迁移、AppHub 创建和 Git 初始化已完成。",
-            }
+            return self._continue_migration(target_path, state)
         except Exception as exc:
-            state.update(status="failed", phase="failed", error=_error_payload(exc), updated_at=_now())
-            if staging.exists():
+            state.update(
+                status="failed",
+                failed_phase=state.get("phase"),
+                error=_error_payload(exc),
+                delivery_ready=False,
+                updated_at=_now(),
+            )
+            rollback_incomplete = (
+                isinstance(exc, AppProjectError)
+                and exc.code == "APP-MIGRATION-FINALIZE"
+                and exc.detail.get("rollback_completed") is False
+            )
+            if staging.exists() and not rollback_incomplete:
                 shutil.rmtree(staging, ignore_errors=True)
-            elif target_path.exists():
+            elif not staging.exists() and target_path.exists():
                 self._write_state(target_path, migration_key, state)
             raise
 
-    def status(self, target: str | Path = ".", *, migration_id: str | None = None) -> dict[str, Any]:
+    def resume(
+        self,
+        target: str | Path = ".",
+        *,
+        migration_id: str | None = None,
+    ) -> dict[str, Any]:
+        """从已持久化阶段继续，不重复复制源文件或重复登记应用。"""
+        root, state, _ = self._load_context(target, migration_id)
+        state.pop("error", None)
+        state.pop("failed_phase", None)
+        state.update(status="running", delivery_ready=False, updated_at=_now())
+        self._write_state(root, state["migration_id"], state)
+        try:
+            return self._continue_migration(root, state)
+        except Exception as exc:
+            state.update(
+                status="failed",
+                failed_phase=state.get("phase"),
+                error=_error_payload(exc),
+                delivery_ready=False,
+            )
+            self._write_state(root, state["migration_id"], state)
+            raise
+
+    def _continue_migration(self, root: Path, state: dict[str, Any]) -> dict[str, Any]:
+        migration_key = state["migration_id"]
+        startup = self._scan_and_write_startup(root, migration_key)
+        if startup.get("wrapper_generated"):
+            self._record_generated_file(state, "scripts/start_app.py")
+        state.update(startup_status=startup["status"], delivery_ready=False)
+        adaptation = self._scan_and_write_adaptation(root, state, startup)
+        if startup["status"] != "ready":
+            state.update(
+                phase="startup_manual_required",
+                status="manual_required",
+                adaptation_status="adaptation_manual_required",
+            )
+            self._write_state(root, migration_key, state)
+            return self._migration_result(
+                root,
+                state,
+                message="源码副本已建立；启动方式无法可靠识别，需要人工补充后执行 migrate resume。",
+            )
+        if adaptation["status"] == "adaptation_manual_required":
+            state.update(
+                phase="adaptation_manual_required",
+                status="manual_required",
+                adaptation_status="adaptation_manual_required",
+            )
+            self._write_state(root, migration_key, state)
+            return self._migration_result(
+                root,
+                state,
+                message="源码副本已建立；缺少可验证的 AppHub 生产适配资产，需要人工补齐后执行 migrate resume。",
+            )
+
+        manager = self._get_manager()
+        create_result: dict[str, Any] | None = None
+        init_result: dict[str, Any] | None = None
+        if not state.get("app_id"):
+            create_result = manager.create_app(
+                str(state.get("app_name") or root.name),
+                path=root,
+                include_default_database=False,
+            )
+            app_id = create_result.get("app_id")
+            if not isinstance(app_id, str) or not app_id:
+                raise AppProjectError("APPHUB-PROTOCOL", "AppHub 创建响应缺少 app_id。")
+            state.update(phase="registered", app_id=app_id, status="running")
+            self._write_state(root, migration_key, state)
+
+        self._ensure_app_manifest(
+            root,
+            app_id=str(state["app_id"]),
+            title=str(state.get("app_name") or root.name),
+        )
+        self._record_generated_file(state, "app.yaml")
+        adaptation = self._scan_and_write_adaptation(root, state, startup)
+        state["adaptation_status"] = adaptation["status"]
+        if adaptation["status"] != "ready":
+            state.update(phase="adaptation_manual_required", status="manual_required")
+            self._write_state(root, migration_key, state)
+            return self._migration_result(
+                root,
+                state,
+                create=create_result,
+                message="AppHub 应用已登记，但最小适配层仍需人工处理；完成后执行 migrate resume。",
+            )
+
+        if state.get("phase") not in {"initialized", "push_ready"}:
+            init_result = manager.init_git(root)
+        state.update(phase="initialized", status="running", adaptation_status="ready")
+        self._write_state(root, migration_key, state)
+        verified = self.verify(root, migration_id=migration_key)
+        return {
+            **verified,
+            "target_reason": state.get("target_reason"),
+            "target_notice": self._target_notice(root, state),
+            "create": create_result,
+            "init": init_result,
+            "message": "源码复制、最小适配、AppHub 登记和 Git 初始化已完成。",
+        }
+
+    def status(
+        self,
+        target: str | Path = ".",
+        *,
+        migration_id: str | None = None,
+    ) -> dict[str, Any]:
         root, state, project = self._load_context(target, migration_id)
         migration_key = state["migration_id"]
         migration_dir = self._migration_dir(root, migration_key)
         startup = self._read_json(migration_dir / "startup-manifest.json", required=False) or {}
-        copy_manifest = self._read_json(migration_dir / "copy-manifest.json", required=False) or {}
+        adaptation = (
+            self._read_json(migration_dir / "adaptation-manifest.json", required=False)
+            or {}
+        )
+        copy_manifest = (
+            self._read_json(migration_dir / "copy-manifest.json", required=False) or {}
+        )
         return {
             "schema_version": MIGRATION_SCHEMA_VERSION,
             "migration_id": migration_key,
@@ -175,51 +302,116 @@ class MigrationService:
             "phase": state.get("phase"),
             "status": state.get("status"),
             "startup_status": startup.get("status") or state.get("startup_status"),
+            "adaptation_status": adaptation.get("status") or state.get("adaptation_status"),
+            "delivery_ready": bool(state.get("delivery_ready")),
             "app_id": state.get("app_id"),
             "copy_manifest": str(migration_dir / "copy-manifest.json"),
             "startup_manifest": str(migration_dir / "startup-manifest.json"),
+            "adaptation_manifest": str(migration_dir / "adaptation-manifest.json"),
             "copied_file_count": copy_manifest.get("included_file_count", 0),
             "excluded_file_count": copy_manifest.get("excluded_file_count", 0),
             "state_path": str(migration_dir / "migration.json"),
         }
 
-    def scan_startup(self, target: str | Path = ".", *, migration_id: str | None = None) -> dict[str, Any]:
+    def scan_startup(
+        self,
+        target: str | Path = ".",
+        *,
+        migration_id: str | None = None,
+    ) -> dict[str, Any]:
         root, state, _ = self._load_context(target, migration_id)
         startup = self._scan_and_write_startup(root, state["migration_id"])
+        if startup.get("wrapper_generated"):
+            self._record_generated_file(state, "scripts/start_app.py")
+        adaptation = self._scan_and_write_adaptation(root, state, startup)
         state.update(
             phase="startup_ready" if startup["status"] == "ready" else "startup_manual_required",
             startup_status=startup["status"],
+            adaptation_status=adaptation["status"],
+            status="running" if startup["status"] == "ready" else "manual_required",
+            delivery_ready=False,
             updated_at=_now(),
         )
         self._write_state(root, state["migration_id"], state)
-        return {**self.status(root, migration_id=state["migration_id"]), "startup": startup}
+        return {
+            **self.status(root, migration_id=state["migration_id"]),
+            "startup": startup,
+            "adaptation": adaptation,
+        }
 
-    def verify(self, target: str | Path = ".", *, migration_id: str | None = None) -> dict[str, Any]:
+    def verify(
+        self,
+        target: str | Path = ".",
+        *,
+        migration_id: str | None = None,
+    ) -> dict[str, Any]:
         root, state, project = self._load_context(target, migration_id)
         migration_key = state["migration_id"]
         migration_dir = self._migration_dir(root, migration_key)
-        copy_manifest = self._read_json(migration_dir / "copy-manifest.json", required=True) or {}
-        startup_manifest = self._read_json(migration_dir / "startup-manifest.json", required=True) or {}
+        copy_manifest = (
+            self._read_json(migration_dir / "copy-manifest.json", required=True) or {}
+        )
+        startup_manifest = (
+            self._read_json(migration_dir / "startup-manifest.json", required=True) or {}
+        )
+        adaptation_manifest = (
+            self._read_json(migration_dir / "adaptation-manifest.json", required=True)
+            or {}
+        )
         source = Path(str(project.get("source_root") or "")).expanduser().resolve()
+        managed_files = adaptation_manifest.get("managed_files")
+        frontend_build = inspect_migration_frontend_build(root)
+        public_paths = inspect_migration_public_paths(root)
+        runtime_assets = inspect_migration_runtime_assets(root)
+        copy_baseline_verified = state.get("phase") == "push_ready"
         checks = {
             "source_exists": source.is_dir(),
-            "source_unchanged": source.is_dir() and self._fingerprint(source) == copy_manifest.get("source_fingerprint"),
-            "target_independent": source != root and source not in root.parents and root not in source.parents,
+            "source_unchanged": source.is_dir() and self._fingerprint_files(
+                source, copy_manifest.get("included_files")
+            ) == copy_manifest.get("source_fingerprint"),
+            "target_independent": (
+                source != root
+                and source not in root.parents
+                and root not in source.parents
+            ),
             "migration_marker": project.get("origin_type") == MIGRATION_ORIGIN_TYPE,
-            "copy_verified": self._fingerprint_files(
-                root,
-                copy_manifest.get("included_files"),
-            ) == copy_manifest.get("target_fingerprint"),
-            "startup_manifest": bool(startup_manifest),
+            # The copy hash is a pre-delivery migration gate. Once that gate has
+            # passed, normal maintenance must be allowed to change business files.
+            "copy_verified": copy_baseline_verified
+            or self._copied_files_match(root, copy_manifest, managed_files),
+            "startup_ready": startup_manifest.get("status") == "ready",
+            "adaptation_ready": adaptation_manifest.get("status") == "ready",
+            "frontend_build_contract": frontend_build["ready"],
+            "public_path_contract": public_paths["ready"],
+            "runtime_asset_contract": runtime_assets["ready"],
+            "app_manifest_identity": self._manifest_matches(root, state.get("app_id")),
             "git_initialized": (root / ".git").exists(),
             "app_binding": (root / ".opscli" / "app.json").is_file(),
         }
         passed = all(checks.values())
-        state.update(phase="push_ready" if passed else state.get("phase"), status="ready" if passed else "blocked", updated_at=_now())
+        state.update(
+            phase="push_ready" if passed else state.get("phase"),
+            status="ready" if passed else "blocked",
+            adaptation_status=adaptation_manifest.get("status"),
+            delivery_ready=passed,
+            updated_at=_now(),
+        )
         self._write_state(root, migration_key, state)
-        return {**self.status(root, migration_id=migration_key), "passed": passed, "checks": checks}
+        return {
+            **self.status(root, migration_id=migration_key),
+            "passed": passed,
+            "checks": checks,
+            "frontend_build": frontend_build,
+            "public_paths": public_paths,
+            "runtime_assets": runtime_assets,
+        }
 
-    def convert_legacy(self, target: str | Path = ".", *, migration_id: str | None = None) -> dict[str, Any]:
+    def convert_legacy(
+        self,
+        target: str | Path = ".",
+        *,
+        migration_id: str | None = None,
+    ) -> dict[str, Any]:
         root = self._resolve_existing_directory(target, "迁移目标")
         current_path = root / ".opscli" / "migration" / "current.json"
         current = self._read_json(current_path, required=True) or {}
@@ -230,7 +422,12 @@ class MigrationService:
         has_legacy = any((legacy_dir / name).exists() for name in LEGACY_STATE_FILES)
         if not has_legacy:
             raise AppProjectError("APP-MIGRATION-STATE", "当前迁移目录没有可转换的旧重构状态。")
-        backup = root / ".opscli" / "migration-legacy" / f"{migration_key}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        backup = (
+            root
+            / ".opscli"
+            / "migration-legacy"
+            / f"{migration_key}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        )
         backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(legacy_dir), str(backup))
         self._write_json(current_path, {
@@ -239,7 +436,11 @@ class MigrationService:
             "status": "legacy_converted",
             "legacy_backup": str(backup),
         })
-        return {"migration_id": migration_key, "status": "legacy_converted", "legacy_backup": str(backup)}
+        return {
+            "migration_id": migration_key,
+            "status": "legacy_converted",
+            "legacy_backup": str(backup),
+        }
 
     def _get_manager(self) -> AppManager:
         if self.app_manager is None:
@@ -274,31 +475,25 @@ class MigrationService:
         raise AppProjectError("APP-MIGRATION-TARGET", f"无法生成唯一迁移目标：{candidate}")
 
     def _copy_source(self, source: Path, staging: Path, migration_id: str) -> dict[str, Any]:
-        before = self._fingerprint(source)
         included: list[str] = []
         excluded: list[dict[str, str]] = []
         staging.mkdir(parents=True, exist_ok=False)
-        for path in source.rglob("*"):
-            relative = path.relative_to(source)
-            reason = self._excluded_reason(relative, path)
-            if reason:
-                excluded.append({"path": relative.as_posix(), "reason": reason})
-                continue
+        directories, files, excluded = self._source_inventory(source)
+        for relative in directories:
+            (staging / relative).mkdir(parents=True, exist_ok=True)
+        for relative in files:
             destination = staging / relative
-            if path.is_symlink():
-                excluded.append({"path": relative.as_posix(), "reason": "symlink_skipped"})
-                continue
-            if path.is_dir():
-                destination.mkdir(parents=True, exist_ok=True)
-                continue
-            if path.is_file():
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(path, destination)
-                included.append(relative.as_posix())
-        after = self._fingerprint(source)
-        if before != after:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / relative, destination)
+            included.append(relative.as_posix())
+        source_fingerprint = self._fingerprint_files(source, included)
+        target_fingerprint = self._fingerprint_files(staging, included)
+        if source_fingerprint != target_fingerprint:
             raise AppProjectError("APP-MIGRATION-SOURCE-CHANGED", "复制过程中源项目发生变化，请重试。")
-        target_fingerprint = self._fingerprint(staging)
+        file_hashes = {
+            relative: hashlib.sha256((source / relative).read_bytes()).hexdigest()
+            for relative in sorted(included)
+        }
         return {
             "schema_version": MIGRATION_SCHEMA_VERSION,
             "migration_id": migration_id,
@@ -308,12 +503,205 @@ class MigrationService:
             "excluded_file_count": len(excluded),
             "excluded_files": excluded,
             "sensitive_files": [item for item in included if self._is_sensitive(Path(item))],
-            "source_fingerprint": before,
+            "source_fingerprint": source_fingerprint,
             "target_fingerprint": target_fingerprint,
+            "file_hashes": file_hashes,
             "created_at": _now(),
         }
 
+    def _source_inventory(
+        self,
+        source: Path,
+    ) -> tuple[list[Path], list[Path], list[dict[str, str]]]:
+        """扫描待复制条目，并在进入依赖或运行时目录前完成剪枝。"""
+        directories: list[Path] = []
+        files: list[Path] = []
+        excluded: list[dict[str, str]] = []
+
+        def raise_walk_error(error: OSError) -> None:
+            raise error
+
+        for current, directory_names, file_names in os.walk(
+            source,
+            topdown=True,
+            followlinks=False,
+            onerror=raise_walk_error,
+        ):
+            current_path = Path(current)
+            retained_directories: list[str] = []
+            for name in sorted(directory_names):
+                path = current_path / name
+                relative = path.relative_to(source)
+                reason = self._excluded_reason(relative, path)
+                if reason:
+                    excluded.append({"path": relative.as_posix(), "reason": reason})
+                    continue
+                directories.append(relative)
+                retained_directories.append(name)
+            directory_names[:] = retained_directories
+
+            for name in sorted(file_names):
+                path = current_path / name
+                relative = path.relative_to(source)
+                reason = self._excluded_reason(relative, path)
+                if reason:
+                    excluded.append({"path": relative.as_posix(), "reason": reason})
+                    continue
+                if path.is_file():
+                    files.append(relative)
+        return directories, files, excluded
+
+    def _commit_to_existing_target(
+        self,
+        staging: Path,
+        target: Path,
+        migration_id: str,
+    ) -> None:
+        """将已校验的临时副本提交到既有空目录，失败时回滚已移动条目。"""
+        if not target.is_dir() or any(target.iterdir()):
+            raise AppProjectError(
+                "APP-MIGRATION-TARGET-CHANGED",
+                f"迁移目标在复制期间不再为空：{target}",
+                fix_hint="清理目标目录中的新增内容后重试。",
+            )
+
+        # `.opscli` 最后移动，避免状态目录先进入目标后又参与其余条目的回滚。
+        entries = sorted(
+            staging.iterdir(),
+            key=lambda path: (path.name == ".opscli", path.name),
+        )
+        journal = target / FINALIZE_JOURNAL_NAME
+        moved: list[str] = []
+        self._write_json(
+            journal,
+            {
+                "schema_version": MIGRATION_SCHEMA_VERSION,
+                "migration_id": migration_id,
+                "status": "committing",
+                "target_root": str(target),
+                "staging_root": str(staging),
+                "moved_entries": moved,
+                "pending_entry": None,
+                "updated_at": _now(),
+            },
+        )
+        try:
+            for entry in entries:
+                self._write_json(
+                    journal,
+                    {
+                        "schema_version": MIGRATION_SCHEMA_VERSION,
+                        "migration_id": migration_id,
+                        "status": "committing",
+                        "target_root": str(target),
+                        "staging_root": str(staging),
+                        "moved_entries": moved,
+                        "pending_entry": entry.name,
+                        "updated_at": _now(),
+                    },
+                )
+                entry.replace(target / entry.name)
+                moved.append(entry.name)
+                self._write_json(
+                    journal,
+                    {
+                        "schema_version": MIGRATION_SCHEMA_VERSION,
+                        "migration_id": migration_id,
+                        "status": "committing",
+                        "target_root": str(target),
+                        "staging_root": str(staging),
+                        "moved_entries": moved,
+                        "pending_entry": None,
+                        "updated_at": _now(),
+                    },
+                )
+            staging.rmdir()
+            journal.unlink()
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            for name in reversed(moved):
+                committed = target / name
+                try:
+                    if committed.exists():
+                        committed.replace(staging / name)
+                except OSError as rollback_error:
+                    rollback_errors.append(f"{name}: {rollback_error}")
+            if not rollback_errors and journal.exists():
+                journal.unlink()
+            raise AppProjectError(
+                "APP-MIGRATION-FINALIZE",
+                f"迁移副本无法提交到目标目录：{target}",
+                fix_hint="确认目标目录未被其他程序占用且当前账号具有写入权限后重试。",
+                detail={
+                    "error_type": type(exc).__name__,
+                    "error_message": str(exc),
+                    "filename": str(getattr(exc, "filename", "") or "") or None,
+                    "errno": getattr(exc, "errno", None),
+                    "winerror": getattr(exc, "winerror", None),
+                    "rollback_completed": not rollback_errors,
+                    "rollback_errors": rollback_errors,
+                },
+            ) from exc
+
+    def _recover_interrupted_commit(self, requested_target: Path) -> None:
+        """发现上次被强制中断的目标提交时，回滚临时条目供本次重新复制。"""
+        target = (
+            (Path.cwd() / requested_target).resolve()
+            if not requested_target.is_absolute()
+            else requested_target.resolve()
+        )
+        journal = target / FINALIZE_JOURNAL_NAME
+        if not target.is_dir() or not journal.is_file():
+            return
+        payload = self._read_json(journal, required=True) or {}
+        staging_value = payload.get("staging_root")
+        moved_value = payload.get("moved_entries")
+        pending_value = payload.get("pending_entry")
+        if not isinstance(staging_value, str) or not isinstance(moved_value, list):
+            raise AppProjectError(
+                "APP-MIGRATION-RECOVERY",
+                f"迁移提交日志格式错误：{journal}",
+                fix_hint="保留现场并提交反馈，不要手工覆盖目标目录。",
+            )
+        staging = Path(staging_value).resolve()
+        expected_prefix = f".{target.name}.migration-"
+        if staging.parent != target.parent or not staging.name.startswith(expected_prefix):
+            raise AppProjectError(
+                "APP-MIGRATION-RECOVERY",
+                f"迁移提交日志包含非法临时目录：{staging}",
+                fix_hint="保留现场并提交反馈，不要手工移动日志中指向的目录。",
+            )
+        names = [name for name in moved_value if isinstance(name, str)]
+        if isinstance(pending_value, str) and pending_value not in names:
+            names.append(pending_value)
+        if any(Path(name).name != name or name in {"", ".", ".."} for name in names):
+            raise AppProjectError(
+                "APP-MIGRATION-RECOVERY",
+                f"迁移提交日志包含非法条目：{journal}",
+                fix_hint="保留现场并提交反馈，不要手工覆盖目标目录。",
+            )
+        staging.mkdir(parents=False, exist_ok=True)
+        rollback_errors: list[str] = []
+        for name in reversed(names):
+            committed = target / name
+            try:
+                if committed.exists():
+                    committed.replace(staging / name)
+            except OSError as exc:
+                rollback_errors.append(f"{name}: {exc}")
+        if rollback_errors:
+            raise AppProjectError(
+                "APP-MIGRATION-RECOVERY",
+                f"上次中断的迁移提交无法自动回滚：{target}",
+                fix_hint="关闭占用目标文件的程序后，使用相同命令重试。",
+                detail={"rollback_errors": rollback_errors},
+            )
+        shutil.rmtree(staging)
+        journal.unlink()
+
     def _scan_and_write_startup(self, root: Path, migration_id: str) -> dict[str, Any]:
+        manifest_path = self._migration_dir(root, migration_id) / "startup-manifest.json"
+        previous = self._read_json(manifest_path, required=False) or {}
         backend = self._detect_backend(root)
         frontend = self._detect_frontend(root)
         status = "ready" if backend and frontend else "startup_manual_required"
@@ -326,26 +714,93 @@ class MigrationService:
             "wrapper": str(root / "scripts" / "start_app.py"),
             "generated_at": _now(),
         }
-        self._write_json(self._migration_dir(root, migration_id) / "startup-manifest.json", manifest)
         wrapper = root / "scripts" / "start_app.py"
-        if not wrapper.exists():
+        if not wrapper.exists() or previous.get("wrapper_generated") is True:
             self._write_text(wrapper, _startup_wrapper(manifest))
             manifest["wrapper_generated"] = True
         else:
             manifest["wrapper_generated"] = False
-        self._write_json(self._migration_dir(root, migration_id) / "startup-manifest.json", manifest)
+        self._write_json(manifest_path, manifest)
+        return manifest
+
+    def _scan_and_write_adaptation(
+        self,
+        root: Path,
+        state: dict[str, Any],
+        startup: dict[str, Any],
+    ) -> dict[str, Any]:
+        app_id = state.get("app_id")
+        frontend_build = inspect_migration_frontend_build(root)
+        public_paths = inspect_migration_public_paths(root)
+        runtime_assets = inspect_migration_runtime_assets(root)
+        checks = {
+            "startup_ready": startup.get("status") == "ready",
+            "gitignore_present": (root / ".gitignore").is_file(),
+            "start_wrapper_present": (root / "scripts" / "start_app.py").is_file(),
+            "backend_entry_present": (root / "backend" / "app.py").is_file(),
+            "frontend_manifest_present": (root / "frontend" / "package.json").is_file(),
+            "dockerfile_present": (root / "Dockerfile").is_file(),
+            "nixpacks_present": (root / "nixpacks.toml").is_file(),
+            "frontend_build_contract": frontend_build["ready"],
+            "public_path_contract": public_paths["ready"],
+            "runtime_asset_contract": runtime_assets["ready"],
+            "app_manifest_identity": self._manifest_matches(root, app_id),
+        }
+        pre_registration_checks = {
+            key: value for key, value in checks.items() if key != "app_manifest_identity"
+        }
+        if not all(pre_registration_checks.values()):
+            status = "adaptation_manual_required"
+        elif not app_id:
+            status = "registration_required"
+        elif all(checks.values()):
+            status = "ready"
+        else:
+            status = "adaptation_manual_required"
+        manifest = {
+            "schema_version": MIGRATION_SCHEMA_VERSION,
+            "migration_id": state["migration_id"],
+            "status": status,
+            "checks": checks,
+            "frontend_build": frontend_build,
+            "public_paths": public_paths,
+            "runtime_assets": runtime_assets,
+            "managed_files": sorted(set(state.get("generated_files") or [])),
+            "generated_or_modified_files": sorted(set(state.get("generated_files") or [])),
+            "local_only_files": [
+                ".opscli/project.json",
+                f".opscli/migration/{state['migration_id']}/migration.json",
+                f".opscli/migration/{state['migration_id']}/copy-manifest.json",
+                f".opscli/migration/{state['migration_id']}/startup-manifest.json",
+                f".opscli/migration/{state['migration_id']}/adaptation-manifest.json",
+            ],
+            "updated_at": _now(),
+        }
+        self._write_json(
+            self._migration_dir(root, state["migration_id"]) / "adaptation-manifest.json",
+            manifest,
+        )
         return manifest
 
     def _detect_backend(self, root: Path) -> dict[str, Any] | None:
-        candidates = (root / "backend" / "app.py", root / "backend" / "main.py", root / "app.py", root / "main.py")
+        candidates = (
+            root / "backend" / "app.py",
+            root / "backend" / "main.py",
+            root / "app.py",
+            root / "main.py",
+        )
         for candidate in candidates:
             if not candidate.is_file():
                 continue
             relative = candidate.relative_to(root).with_suffix("")
             module = ".".join(relative.parts)
             content = candidate.read_text(encoding="utf-8", errors="replace")
-            if "FastAPI" in content or "uvicorn" in content or "Starlette" in content:
-                return {"command": ["python", "-m", "uvicorn", f"{module}:app"], "cwd": ".", "evidence": str(candidate.relative_to(root))}
+            if re.search(r"\bapp\s*=\s*(?:FastAPI|Starlette)\s*\(", content):
+                return {
+                    "command": ["python", "-m", "uvicorn", f"{module}:app"],
+                    "cwd": ".",
+                    "evidence": str(candidate.relative_to(root)),
+                }
         return None
 
     def _detect_frontend(self, root: Path) -> dict[str, Any] | None:
@@ -361,15 +816,37 @@ class MigrationService:
         scripts = package.get("scripts") if isinstance(package, dict) else None
         if not isinstance(scripts, dict):
             return None
-        script = next((name for name in ("start", "dev", "preview") if name in scripts), None)
+        script = next(
+            (
+                name
+                for name in ("start", "preview", "dev")
+                if isinstance(scripts.get(name), str) and scripts[name].strip()
+            ),
+            None,
+        )
         if script is None:
             return None
         frontend_root = package_path.parent
-        manager = "pnpm" if (frontend_root / "pnpm-lock.yaml").exists() else "yarn" if (frontend_root / "yarn.lock").exists() else "npm"
+        if (frontend_root / "pnpm-lock.yaml").exists():
+            manager = "pnpm"
+        elif (frontend_root / "yarn.lock").exists():
+            manager = "yarn"
+        else:
+            manager = "npm"
         command = [manager, "run", script] if manager != "yarn" else [manager, script]
-        return {"command": command, "cwd": str(frontend_root.relative_to(root)), "script": script, "evidence": str(package_path.relative_to(root))}
+        return {
+            "command": command,
+            "cwd": str(frontend_root.relative_to(root)),
+            "script": script,
+            "script_command": scripts[script],
+            "evidence": str(package_path.relative_to(root)),
+        }
 
-    def _load_context(self, target: str | Path, migration_id: str | None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    def _load_context(
+        self,
+        target: str | Path,
+        migration_id: str | None,
+    ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
         root = self._resolve_existing_directory(target, "迁移目标")
         project = self._read_json(root / ".opscli" / "project.json", required=True) or {}
         if project.get("origin_type") != MIGRATION_ORIGIN_TYPE:
@@ -406,6 +883,34 @@ class MigrationService:
     def _migration_dir(self, root: Path, migration_id: str) -> Path:
         return root / ".opscli" / "migration" / migration_id
 
+    def _migration_result(
+        self,
+        root: Path,
+        state: dict[str, Any],
+        *,
+        create: dict[str, Any] | None = None,
+        init: dict[str, Any] | None = None,
+        message: str,
+    ) -> dict[str, Any]:
+        return {
+            **self.status(root, migration_id=state["migration_id"]),
+            "target_reason": state.get("target_reason"),
+            "target_notice": self._target_notice(root, state),
+            "create": create,
+            "init": init,
+            "message": message,
+        }
+
+    def _target_notice(self, root: Path, state: dict[str, Any]) -> str | None:
+        if state.get("target_reason") == "user_non_empty_fallback":
+            return f"指定迁移目标目录非空，已在其下创建独立目标目录：{root}"
+        return None
+
+    def _record_generated_file(self, state: dict[str, Any], relative: str) -> None:
+        generated = state.setdefault("generated_files", [])
+        if relative not in generated:
+            generated.append(relative)
+
     def _write_state(self, root: Path, migration_id: str, state: dict[str, Any]) -> None:
         state["updated_at"] = _now()
         self._write_json(self._migration_dir(root, migration_id) / "migration.json", state)
@@ -432,13 +937,33 @@ class MigrationService:
         temporary.write_text(content, encoding="utf-8", newline="\n")
         temporary.replace(path)
 
-    def _ensure_gitignore(self, root: Path) -> None:
+    def _ensure_gitignore(self, root: Path) -> bool:
         target = root / ".gitignore"
         existing = target.read_text(encoding="utf-8") if target.exists() else ""
-        additions = ["", "# opscli migration local-only files", ".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "data/", "logs/"]
+        additions = [
+            "",
+            "# opscli migration local-only files",
+            ".opscli/",
+            ".env",
+            ".env.*",
+            "*.db",
+            "*.sqlite",
+            "*.sqlite3",
+            "/data/",
+            "logs/",
+        ]
+        public_root = root / "public"
+        if public_root.is_dir():
+            for candidate in sorted(public_root.rglob("data")):
+                if candidate.is_dir() and any(path.is_file() for path in candidate.rglob("*")):
+                    relative = candidate.relative_to(root).as_posix()
+                    additions.extend((f"!{relative}/", f"!{relative}/**"))
         missing = [line for line in additions[1:] if line not in existing.splitlines()]
         if missing:
-            self._write_text(target, existing.rstrip() + "\n" + "\n".join(additions[:1] + missing) + "\n")
+            content = existing.rstrip() + "\n" + "\n".join(additions[:1] + missing) + "\n"
+            self._write_text(target, content)
+            return True
+        return False
 
     def _excluded_reason(self, relative: Path, source_path: Path) -> str | None:
         if any(part in EXCLUDED_PARTS for part in relative.parts):
@@ -446,19 +971,6 @@ class MigrationService:
         if source_path.is_symlink():
             return "symlink_skipped"
         return None
-
-    def _fingerprint(self, root: Path) -> str:
-        entries: list[str] = []
-        if not root.exists():
-            return ""
-        for path in sorted(root.rglob("*")):
-            relative = path.relative_to(root)
-            if self._excluded_reason(relative, path):
-                continue
-            if path.is_file() and not path.is_symlink():
-                digest = hashlib.sha256(path.read_bytes()).hexdigest()
-                entries.append(f"{relative.as_posix()}|{digest}")
-        return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
 
     def _fingerprint_files(self, root: Path, relative_files: Any) -> str:
         if not isinstance(relative_files, list) or not all(
@@ -474,12 +986,71 @@ class MigrationService:
             entries.append(f"{relative.as_posix()}|{digest}")
         return hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
 
+    def _copied_files_match(
+        self,
+        root: Path,
+        copy_manifest: dict[str, Any],
+        managed_files: Any,
+    ) -> bool:
+        hashes = copy_manifest.get("file_hashes")
+        included = copy_manifest.get("included_files")
+        if not isinstance(hashes, dict) or not isinstance(included, list):
+            return False
+        managed = set(managed_files) if isinstance(managed_files, list) else set()
+        for relative in included:
+            if not isinstance(relative, str) or relative in managed:
+                continue
+            path = root / relative
+            if not path.is_file() or path.is_symlink():
+                return False
+            if hashlib.sha256(path.read_bytes()).hexdigest() != hashes.get(relative):
+                return False
+        return True
+
     def _assert_source_unchanged(self, source: Path, fingerprint: str) -> None:
-        if self._fingerprint(source) != fingerprint:
+        if not source.is_dir():
+            raise AppProjectError("APP-MIGRATION-SOURCE-CHANGED", "复制完成后源项目不存在，请重试。")
+        _, files, _ = self._source_inventory(source)
+        included = [path.as_posix() for path in files]
+        if self._fingerprint_files(source, included) != fingerprint:
             raise AppProjectError("APP-MIGRATION-SOURCE-CHANGED", "复制完成后源项目发生变化，请重试。")
 
+    def _ensure_app_manifest(self, root: Path, *, app_id: str, title: str) -> bool:
+        target = root / "app.yaml"
+        if target.exists():
+            return False
+        self._write_text(
+            target,
+            "apiVersion: apps.aukeys/v1\n"
+            f"app_id: {json.dumps(app_id, ensure_ascii=False)}\n"
+            f"title: {json.dumps(title, ensure_ascii=False)}\n",
+        )
+        return True
+
+    def _manifest_matches(self, root: Path, app_id: Any) -> bool:
+        if not isinstance(app_id, str) or not app_id:
+            return False
+        target = root / "app.yaml"
+        if not target.is_file():
+            return False
+        try:
+            payload = yaml.safe_load(target.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError):
+            return False
+        return (
+            isinstance(payload, dict)
+            and payload.get("apiVersion") == "apps.aukeys/v1"
+            and payload.get("app_id") == app_id
+            and "name" not in payload
+        )
+
     def _is_sensitive(self, path: Path) -> bool:
-        return path.name == ".env" or path.name.startswith(".env.") or path.suffix.lower() in {".db", ".sqlite", ".sqlite3"} or "data" in path.parts
+        return (
+            path.name == ".env"
+            or path.name.startswith(".env.")
+            or path.suffix.lower() in {".db", ".sqlite", ".sqlite3"}
+            or "data" in path.parts
+        )
 
 
 def _startup_wrapper(manifest: dict[str, Any]) -> str:

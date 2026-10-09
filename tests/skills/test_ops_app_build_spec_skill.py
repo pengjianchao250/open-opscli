@@ -34,7 +34,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
     assert 'display_name: "Ops App Build"' in openai
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.29"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.30"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -371,6 +371,16 @@ def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
         "源目录只读",
         "origin_type=migration_copy",
         "migration_id",
+        "不得加入 AppHub 服务端合同",
+        "adaptation-manifest.json",
+        "adaptation_status=ready",
+        "delivery_ready=true",
+        "`backend/app.py`、`frontend/package.json`、`Dockerfile` 和 `nixpacks.toml`",
+        "不得生成通用 Dockerfile",
+        "Corepack 能从该 manifest 所在目录解析 `packageManager`",
+        "不得使用 `pmOnFail=ignore` 绕过版本合同",
+        "opscli app migrate resume",
+        "普通项目相同的 `app.yaml` 身份与 AppHub 生产门禁",
         "startup_manual_required",
         "convert-legacy",
         "普通新建项目行为",
@@ -411,8 +421,10 @@ def test_ops_app_build_spec_requires_command_driven_migration_gates() -> None:
         ".opscli/migration/current.json",
         "copy-manifest.json",
         "startup-manifest.json",
+        "adaptation-manifest.json",
         "scripts/start_app.py",
         "opscli app migrate scan-startup",
+        "opscli app migrate resume",
         "opscli app migrate verify",
         "opscli app migrate convert-legacy",
         "startup_manual_required",
@@ -423,6 +435,8 @@ def test_ops_app_build_spec_requires_command_driven_migration_gates() -> None:
         "不能改变普通新建项目行为",
     ):
         assert required in content
+
+    assert "在请求中带上 `origin_type=migration_copy`、`migration_id`" not in content
 
 def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
     """源码交付必须保持当前 AppHub 单应用合同。"""
@@ -513,7 +527,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.29"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.30"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
