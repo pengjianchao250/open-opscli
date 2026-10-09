@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 ENV_QUOTA_ENABLED = "OPSCLI_MCP_QUOTA_ENABLED"
+ENV_QUOTA_BACKEND = "OPSCLI_MCP_QUOTA_BACKEND"
 ENV_SQLITE_PATH = "OPSCLI_MCP_QUOTA_SQLITE_PATH"
 SELLER_SPRITE_ACCESS_TOOLS = frozenset(
     {
@@ -814,12 +815,26 @@ def get_quota_limiter() -> QuotaLimiter:
     """获取默认限额编排器，供 MCP Tool 注册切面使用。"""
     global _default_limiter
     if _default_limiter is None:
-        sqlite_path = os.environ.get(ENV_SQLITE_PATH)
         _default_limiter = QuotaLimiter(
-            store=SQLiteQuotaStore(sqlite_path),
+            store=_default_quota_store(),
             access_resolver=_resolve_service_access,
         )
     return _default_limiter
+
+
+def _default_quota_store() -> QuotaStore:
+    """按显式后端配置创建限额存储，默认保持 SQLite 兼容。"""
+    backend = os.environ.get(ENV_QUOTA_BACKEND, "sqlite").strip().lower()
+    if backend == "sqlite":
+        return SQLiteQuotaStore(os.environ.get(ENV_SQLITE_PATH))
+    if backend == "mysql":
+        from opscli.mcp.quota_mysql import MySqlQuotaStore
+        from opscli.shared.runtime_mysql import load_runtime_mysql_settings
+
+        return MySqlQuotaStore(settings=load_runtime_mysql_settings())
+    raise ValueError(
+        "OPSCLI_MCP_QUOTA_BACKEND 仅支持 sqlite 或 mysql"
+    )
 
 
 def set_quota_access_context(
