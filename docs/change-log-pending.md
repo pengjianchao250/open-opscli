@@ -11877,3 +11877,13 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条对应提交，移除鹰眼 CLI 注册、模块及相关 Skill 和测试改动。
 
 ---
+
+## 2026-10-09 MCP Quota - 默认使用 MySQL 额度表
+
+**变更原因**：额度迁移合并后仍需显式设置 `OPSCLI_MCP_QUOTA_BACKEND=mysql` 才读取 MySQL，未设置的服务继续读取 SQLite，导致线上额度来源与迁移预期不一致。
+**改动点**：`opscli/mcp/quota.py` 默认后端从 SQLite 改为 MySQL，复用 `OPSCLI_RUNTIME_MYSQL_*` 或现有 `OPSCLI_COLLECTION_MYSQL_*` 配置，保留显式 SQLite 兼容；补充默认后端选择、连接配置复用、配置缺失阻断和策略动态读取的回归测试；更新迁移手册说明默认选择、数据准备和重启边界。
+**验证结果**：修改前新回归用例结果为 `3 failed, 12 passed`，复现未配置后端变量时仍选 SQLite；修改后运行 `.venv/Scripts/python.exe -X utf8 -m pytest tests/mcp/test_quota.py tests/mcp/test_quota_mysql.py tests/shared/test_runtime_mysql.py tests/migrations tests/api/test_xydc.py tests/mcp/test_xydc_tools.py tests/mcp/test_instrumentation.py -q`，`112 passed`；`git diff --check` 通过。测试使用临时 SQLite 和模拟 MySQL，未部署或修改线上数据库。
+**影响范围**：MCP 与 REST 共用的日限额存储选择，覆盖 xiyou、Keepa、SellerSprite；不自动迁移数据库数据。
+**回滚方式**：回退默认工厂、对应测试和手册改动；涉及真实数据切换时先核对用量，避免回退旧 SQLite 导致额度倒退。
+
+---
