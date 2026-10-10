@@ -70,7 +70,7 @@ async def _call_xydc(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any
 
 @_xydc_tool
 async def ext_xydc_openapi_operations() -> dict[str, Any]:
-    """列出西柚找词/西柚洞察（Xiyou、xydc、xydx）的 OpenAPI 目录与必填字段，涵盖关键词搜索量、ABA、CPC、反查词、排名趋势及商品数据；本工具仅查看目录。"""
+    """列出西柚找词/西柚洞察（Xiyou、xydc、xydx）的 OpenAPI 目录、必填字段、payload_schema、example_payload、constraints 与官方文档链接，涵盖关键词搜索量、ABA、CPC、反查词、排名趋势及商品数据；本工具仅查看目录。"""
     return {"success": True, "data": list_operations(), "error": None, "source": "xydc_openapi"}
 
 

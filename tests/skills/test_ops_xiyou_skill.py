@@ -15,8 +15,8 @@ def test_ops_xiyou_template_identity_is_consistent():
     version = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
 
     assert text.startswith("---\nname: ops-xiyou\n")
-    assert "mcp-version: v1.3.1" in text
-    assert version == {"name": "ops-xiyou", "version": "v1.3.1"}
+    assert "mcp-version: v1.3.3" in text
+    assert version == {"name": "ops-xiyou", "version": "v1.3.3"}
 
 
 def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
@@ -79,8 +79,11 @@ def test_ops_xiyou_can_be_installed_from_builtin_templates(tmp_path: Path):
 
     installed_dir = tmp_path / "skills" / "ops-xiyou"
     assert result.name == "ops-xiyou"
-    assert result.to_dict()["version"] == "v1.3.1"
+    assert result.to_dict()["version"] == "v1.3.3"
     assert (installed_dir / "SKILL.md").exists()
     assert json.loads(
         (installed_dir / "data" / "VERSION.json").read_text(encoding="utf-8")
-    ) == {"name": "ops-xiyou", "version": "v1.3.1"}
+    ) == {"name": "ops-xiyou", "version": "v1.3.3"}
+    for filename in ("趋势参数与可用日期.md", "接口参数与返回口径.md"):
+        reference = Path("references") / filename
+        assert (installed_dir / reference).read_bytes() == (SKILL_DIR / reference).read_bytes()
