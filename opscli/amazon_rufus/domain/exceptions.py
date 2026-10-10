@@ -82,19 +82,24 @@ class HeadlessRufusRequestError(RufusError):
 
 
 class RufusReportUploadError(RufusError):
-    """Rufus 报告上传失败，本地文件仍然保留。"""
+    """Rufus 报告上传失败；调用方可读时保留本地文件路径。"""
 
     code = "RUFUS_REPORT_UPLOAD_ERROR"
 
-    def __init__(self, report_path: str | Path, *, upload_error: dict | None = None) -> None:
-        super().__init__("Rufus 报告上传失败，已保留本地文件")
-        self.report_path = Path(report_path)
+    def __init__(self, report_path: str | Path | None, *, upload_error: dict | None = None) -> None:
+        # report_path 为 None 表示报告只在远端 MCP 服务器上，调用方读不到，不能再提示「已保留本地文件」。
+        super().__init__(
+            "Rufus 报告上传失败，已保留本地文件" if report_path is not None
+            else "Rufus 报告上传失败，报告只保存在远端 MCP 服务器上，调用方无法读取，请稍后重试获取"
+        )
+        self.report_path = Path(report_path) if report_path is not None else None
         self.upload_error = upload_error
 
     def to_dict(self) -> dict:
-        """返回包含本地报告路径的稳定错误结构。"""
+        """返回稳定错误结构；仅在调用方可读时包含报告路径。"""
         payload = super().to_dict()
-        payload["report_path"] = self.report_path.as_posix()
+        if self.report_path is not None:
+            payload["report_path"] = self.report_path.as_posix()
         if self.upload_error is not None:
             payload["upload_error"] = self.upload_error
         return payload

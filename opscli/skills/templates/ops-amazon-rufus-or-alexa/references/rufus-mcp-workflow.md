@@ -159,7 +159,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 
 ## 回答质量判断与问题重写重试
 
-每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须读取本次 `report_path` 做回答质量判断，并保留同次返回的 `report_url`。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
+每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须按[输出要求](#输出要求)的 `storage_scope` 规则读取本次报告正文做回答质量判断，并保留同次返回的 `report_url`。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
 
 ### 不合格判断
 
@@ -298,13 +298,19 @@ CLI fallback 只由 `mcp_tools_unavailable` 或 `remote_consent_denied` 触发�
 
 ## 输出要求
 
-MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` 和 `report_url`。完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 用于隔离同一 ASIN 的并发请求，随后上传并返回远程地址。
+MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` 和 `report_url`。完整答案报告写入生成方（MCP 服务进程或 CLI）运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 用于隔离同一 ASIN 的并发请求，随后上传并返回远程地址。
+
+`amazon_rufus_get` 按 `storage_scope` 说明报告能否在调用方本地读取：
+
+- `storage_scope=remote`（远端 HTTP/SSE MCP，多客户端共享部署）：报告文件在 MCP 服务器上，`report_path` 为空、`local_readable=false`。不要在本地文件系统 cat/find 查找；需要正文时用 `curl -fsSL "<download_url>" -o <本地文件>` 下载后读取，`-f` 不可省略，避免链接失效时把错误页当成报告；下载失败时如实返回错误。
+- `storage_scope=local`（本地 stdio MCP）：`report_path` 是本机绝对路径，直接读取。
+- CLI `get-backend` 输出的是 CLI 运行目录下的相对路径，只在执行 CLI 的同一环境可读。
 
 ### 报告新鲜度约束
 
-最终回复用户时固定使用 `Rufus 报告：<report_url>`。本地 `report_path` 只用于读取正文和回答质量判断，不向用户展示。
+最终回复用户时固定使用 `Rufus 报告：<report_url>`。`report_path` 或从 `download_url` 下载的本地副本只用于读取正文和回答质量判断，不向用户展示。
 
-禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果。
+禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果；`storage_scope=remote` 时本地 `output/amazon-rufus/` 中的同 ASIN 文件都不是本次结果。
 
 登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须使用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不得混用不同调用的路径和 URL。
 

@@ -155,13 +155,17 @@ async def amazon_rufus_get(
     skills_dir: str | None = None,
     timeout_seconds: int = DEFAULT_RUFUS_TIMEOUT_SECONDS,
 ) -> dict:
-    """获取指定 ASIN 的 Alexa（原 Rufus）回答，发布报告并返回本地路径与远端地址。
+    """获取指定 ASIN 的 Alexa（原 Rufus）回答，发布报告并返回报告地址 report_url。
 
     Amazon 商品页购物助手 Rufus 已改名为 Alexa，兼容 Alexa/alexa、Rufus/rufus 请求。
     用户要求 Alexa/Rufus 商品页问答、ASIN 或 Listing 诊断时，先使用
     ops-amazon-rufus-or-alexa Skill 完成授权、登录态检查和问题编排，再调用本工具。
     MCP 工具名继续使用 amazon_rufus_*，CLI 继续使用 opscli amazon-rufus。
     本工具不用于 Alexa/Echo 智能音箱或智能家居控制。
+
+    报告读取方式按返回的 storage_scope 区分：remote（远端 HTTP/SSE MCP）时报告在 MCP
+    服务器上，report_path 为空，不要在本地查找，用 curl -fsSL 下载 download_url 后读取；
+    local（本地 stdio MCP）时 report_path 是本机可读的绝对路径。
 
     Args:
         asin: 目标 ASIN

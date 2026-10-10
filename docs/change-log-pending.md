@@ -11905,4 +11905,23 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 - Skill 文档生效路径：`opscli skills upgrade ops-amazon-rufus-or-alexa` 只同步题库与 VERSION.json，不更新 SKILL.md/references；已安装用户需升级到含本修复的 opscli 后执行 `opscli skills install ops-amazon-rufus-or-alexa --force`，或由技能广场重新发布后安装，才能拿到新 SKILL.md。旧版 opscli 用户执行 `skills upgrade` 拿不到新规则，`install --force` 也只会装回旧版内置模板；只有通过广场发布新版 Skill，旧客户端用户才能用上兼容 `RUFUS_BAD_REMOTE_JSON` 的重试规则。
 - feedtask、shopify 自带的解析器未走公共函数，仍有同类问题，未在本次修改。
 **回滚方式**：回退本条对应 commit；仅回滚 Rufus 重试可单独还原 `transport/client.py` 与 `domain/exceptions.py`，公共解析与 Skill 文案可独立保留。
+
+---
+
+## 2026-10-10 Amazon Rufus MCP - Bug 12138 远端模式报告不再指示读取服务端本地路径
+
+**变更原因**：远端 HTTP MCP（多客户端共享部署）调用 `amazon_rufus_get` 成功后，`report_path` 是 MCP 服务进程工作目录下的相对路径，`next_action` 却固定要求「读取 report_path」；Agent 在沙箱内 cat/全盘 find 均扑空（QA 会话 1057444 seq 5124/5208/5350 浪费 3 轮 LLM 往返），并有误读 CLI 历史同 ASIN 报告的风险。服务端本可识别远端模式但响应未区分。
+**改动点**：
+- `opscli/amazon_rufus/services/mcp_manager.py`：新增 `_is_remote_mcp_request()`（API Key 或认证中间件写入的 auth_mode 任一存在即远端，覆盖不带 API Key 的可信上游 internal 模式）；`get()` 按模式分流——远端返回 `storage_scope="remote"`、`local_readable=false`、`report_path=null`、`download_url`（= report_url），服务端报告路径只写服务端 logger、不下发，`next_action` 改为「不要在本地文件系统查找，用 `curl -fsSL <shlex.quote(url)> -o <本地文件>` 下载后判断，失败如实报错，最终向用户返回 report_url」；本地 stdio 返回 `storage_scope="local"`、`local_readable=true`、绝对路径 `report_path`。`report_url` 字段保持不变。上传失败（`RufusReportUploadError`）在 MCP 层按模式改写：远端去掉 `report_path` 并记服务端日志，stdio 改为 resolve 后的绝对路径。
+- `opscli/amazon_rufus/domain/exceptions.py`：`RufusReportUploadError` 允许 `report_path=None`（仅远端 MCP 使用），此时文案为「报告只保存在远端 MCP 服务器上，调用方无法读取，请稍后重试获取」且错误结构不含 `report_path`；有路径时文案保持原「已保留本地文件」，CLI 行为不变。
+- `opscli/mcp/tools/amazon_rufus.py`：`amazon_rufus_get` 工具描述去掉「返回本地路径」，补充按 storage_scope 的读取说明。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本同步）：SKILL.md 主流程第 10/11/14/22 步与回答质量判断第 1 步、`references/rufus-mcp-workflow.md` 回答质量判断与「输出要求/报告新鲜度约束」、README「报告与安全」改为按 storage_scope 读取报告，remote 时 `report_path` 为 null、禁止本地查找并用 `curl -fsSL` 下载 report_url。
+- 文档：`docs/design/rufus-report-upload-errors.md` 补充远端/本地两种上传失败结构与示例；`docs/guide/AmazonRufus功能说明.md` 5.3、7、14.2 节「只返回/读取 report_path」改为按 storage_scope 说明。
+- 测试：新增 `tests/amazon_rufus/test_mcp_report_storage_scope.py` 8 条（远端 API Key、可信上游无 API Key、本地 stdio 绝对路径、URL 含 `$`/反引号时 curl 命令安全引用、远端上传失败不带路径、stdio 上传失败给绝对路径、工具层线程内上下文传递、CLI 输出不变）；更新 `test_mcp_manager.py`、`test_amazon_rufus_tools.py` 中写死旧 next_action 文案的断言。
+- 程序化消费方核查：在 opscli、ops-agent、ops-agent-browser-ext、opscli-claude 中检索，MCP `amazon_rufus_get` 的 `report_path` 无程序化消费方（asin_data 采集器解析的是 CLI stdout，ops-agent 仅提示词文本提及），故远端模式置为 null。
+**验证结果**：修复前新增用例 4 failed、1 passed（CLI 用例），复现远端响应无 storage_scope 且仍指示读取 report_path；返修后在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus/ tests/mcp/test_amazon_rufus_tools.py tests/skills/ -q`：568 passed、10 failed；10 条失败（`test_transport.py::test_get_platform_cookie_sends_platform_query` 及 `tests/skills/` 下 dashboard/manager/reviews/app_build_spec/feedback_report_server/methods_card 9 条）在主工作区 release f9c99303 原始代码上同一命令同样失败（560 passed、10 failed），失败清单逐条一致，属既有基线。另跑 `tests/mcp/test_asin_data_tools.py tests/mcp/test_tool_catalog.py tests/mcp/test_context.py tests/shared/test_file_uploads.py` 39 passed。`git diff --check` 通过。测试全部打桩 Amazon 抓取与 OSS 上传，未访问真实网络。
+**影响范围**：`amazon_rufus_get` MCP 成功响应结构（远端模式 `report_path` 由字符串变为 null，新增 storage_scope/local_readable/download_url；本地模式 report_path 变为绝对路径）与上传失败错误结构（远端不再含 report_path）、工具描述、内置 Skill 与说明文档；CLI `get-backend` 输出与错误不变。远端 MCP 服务需重新部署才生效，stdio/CLI 随下一版 opscli 发布生效；旧版 Skill 模板过渡期依靠 next_action 引导。
+**回滚方式**：回退本条对应提交（mcp_manager、异常类、工具描述、Skill 模板与安装副本、设计/说明文档、相关测试）。
+**后续事项（未在本次范围）**：远端模式报告仍写入 MCP 服务器 `output/amazon-rufus/`，上传后未删除，可能持续累积多租户报告文件，待确认服务端磁盘策略后再决定是否改为临时目录并上传后清理。
+
 ---
