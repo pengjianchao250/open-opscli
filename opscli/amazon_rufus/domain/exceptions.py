@@ -180,6 +180,38 @@ class RufusPlatformCookieAuthError(RufusError):
         return payload
 
 
+class RufusPlatformCookieUnavailableError(RufusError):
+    """OPS 平台 Cookie 接口读登录态遇网关 5xx 或瞬时网络故障，自动重试耗尽后仍失败。"""
+
+    code = "RUFUS_PLATFORM_COOKIE_UNAVAILABLE"
+    # 与 opscli/mcp/upstream.py 一致用类属性 + to_dict 字段表达可重试，Skill 据此做同路径重试
+    retryable = True
+
+    def __init__(self, *, attempts: int, last_error: str, status_code: int | None = None) -> None:
+        # 有 HTTP 状态码说明请求到达了 OPS 网关，确属后端临时不可用；没有状态码是网络层失败，
+        # 也可能是本机网络/代理/证书问题，不能断言是后端故障
+        if status_code is None:
+            summary = "OPS 登录态接口无法访问（可能是 OPS 后端、网关或本机网络/代理问题）"
+        else:
+            summary = "OPS 后端读取亚马逊登录态临时不可用"
+        # 文案先给结论（OPS 侧、可重试、不用重新登录），诊断细节放括号里供反馈定位
+        super().__init__(
+            f"{summary}，不是 Amazon 的问题，也无需重新登录，可稍后重试"
+            f"（已尝试 {attempts} 次；最后一次失败：{last_error}）"
+        )
+        self.attempts = attempts
+        self.status_code = status_code
+
+    def to_dict(self) -> dict:
+        """转换为带可重试标记、尝试次数和 HTTP 状态码（网络异常时无）的稳定错误结构。"""
+        payload = super().to_dict()
+        payload["retryable"] = self.retryable
+        payload["attempts"] = self.attempts
+        if self.status_code is not None:
+            payload["status_code"] = self.status_code
+        return payload
+
+
 class RufusRemoteBusinessError(RufusError):
     """Rufus 远端业务错误。"""
 
