@@ -17,7 +17,10 @@ from opscli.xiyou.contracts import XydcOperation
 from opscli.xiyou.providers.xydc_openapi import OPERATIONS, XydcOpenApiError
 
 
-BODY = {"operation": "search_terms_info", "payload": {"country": "US", "searchTerms": ["bed frame"]}}
+BODY = {"operation": "search_terms_info", "payload": {
+    "country": "US", "searchTerms": ["bed frame"],
+    "sort": {"field": "weeklySearchVolume", "order": "desc"},
+}}
 HEADERS = {"X-Ops-Token": "viewer-token", "X-User-Email": "Viewer@Example.com", "X-User-Id": "u-1"}
 
 
@@ -181,6 +184,34 @@ def test_missing_business_fields_fails_before_credential_lookup(client, monkeypa
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "XYDC_OPENAPI_INVALID_PARAMS"
     assert response.json()["quota"]["used"] == 0
+
+
+def test_real_daily_range_error_survives_rest_and_refunds_quota(client, monkeypatch, tmp_path, respx_mock):
+    """真实错误体经 Provider、MCP、REST 后保留业务码及提示，并退回失败调用额度。"""
+    from opscli.xiyou.providers.xydc_audit import XydcAuditLogger
+    from opscli.xiyou.providers.xydc_openapi import XydcOpenApiProvider
+    from tests.xiyou.test_trends_errors import CAPTURE, ENDPOINT
+    from tests.xiyou.test_xydc_openapi_provider import FakePool, _lease
+
+    sample = CAPTURE["failed"]
+    pool = FakePool(_lease(1, "test-secret"))
+    provider = XydcOpenApiProvider(pool, audit_logger=XydcAuditLogger(tmp_path / "audit.jsonl"))
+    monkeypatch.setattr(tools, "XydcOpenApiProvider", lambda: provider)
+    route = respx_mock.post(ENDPOINT).respond(400, json=sample["body"], headers={"X-Trace-Id":sample["trace_id"]})
+    response = client.post("/api/v1/xydc/run", headers=HEADERS,
+                           json={"operation":"asin_traffic_score_daily", "payload":sample["request"]})
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["code"] == "InvalidTrendsRange"
+    assert body["error"]["message"] == sample["body"]["msg"]
+    assert body["error"]["details"] == sample["body"]
+    assert body["error"]["trace_id"] == sample["trace_id"]
+    assert "hint" in body["error"]
+    assert "feedback" not in body
+    assert body["quota"]["used"] == 0
+    assert body["quota"]["failures"] == 1
+    assert route.call_count == len(pool.acquire_calls) == 1
+    assert json.loads(route.calls.last.request.content) == sample["request"]
 
 
 def test_session_identity_comes_from_verified_session(client, monkeypatch):

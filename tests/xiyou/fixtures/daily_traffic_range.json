@@ -1,0 +1,25 @@
+{
+  "recorded_at": "2026-10-10T03:16:04Z",
+  "failed": {
+    "request": {"asin":"B08L5NP6NG","country":"US","startDate":"2026-10-03","endDate":"2026-10-09"},
+    "status_code": 400,
+    "trace_id": "20261010RWBB1W4HIOOP8PS5Q0BTTFENV1223GV6",
+    "body": {"code":"InvalidTrendsRange","msg":"Internal Server Error","msgType":"nothing"}
+  },
+  "available": {
+    "request": {"asin":"B08L5NP6NG","country":"US","startDate":"2026-10-02","endDate":"2026-10-08"},
+    "trace_id": "20261010C5PBWFGE18NY7DI5DLXSX1UEVBAFES6Q",
+    "body": {
+      "asin":"B08L5NP6NG","country":"US",
+      "trends":[
+        {"date":"2026-10-02","summaryTrafficScore":{"organic":66,"advertising":0}},
+        {"date":"2026-10-03","summaryTrafficScore":{"organic":95,"advertising":0}},
+        {"date":"2026-10-04","summaryTrafficScore":{"organic":75,"advertising":3}},
+        {"date":"2026-10-05","summaryTrafficScore":{"organic":95,"advertising":0}},
+        {"date":"2026-10-06","summaryTrafficScore":{"organic":78,"advertising":0}},
+        {"date":"2026-10-07","summaryTrafficScore":{"organic":50,"advertising":0}},
+        {"date":"2026-10-08","summaryTrafficScore":{"organic":52,"advertising":0}}
+      ]
+    }
+  }
+}
