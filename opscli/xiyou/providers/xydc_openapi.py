@@ -18,6 +18,7 @@ import httpx
 
 from opscli.api_credentials import ApiCredentialLease, ApiCredentialPool
 from opscli.api_credentials.exceptions import ApiCredentialUnavailableError
+from opscli.xiyou.operation_metadata import get_operation_metadata
 
 from .xydc_audit import XydcAuditLogger, _sanitize
 
@@ -47,6 +48,7 @@ class XydcOpenApiOperation:
             "endpoint": self.endpoint,
             "required_fields": list(self.required_fields),
             "description": self.description,
+            **get_operation_metadata(self.name, self.required_fields),
         }
 
 
@@ -59,7 +61,7 @@ OPERATIONS: dict[str, XydcOpenApiOperation] = {
         "asin_info_change_daily", "ASIN 基础信息变动趋势（天）", "/v1/asins/infoChange/trends/daily", ("country", "asin", "startDate", "endDate"), "查询标题和图片等基础信息变化"
     ),
     "asin_traffic_score_daily": XydcOpenApiOperation(
-        "asin_traffic_score_daily", "ASIN 流量得分趋势（天）", "/v1/asins/trafficScore/trend/daily", ("asin", "country", "startDate", "endDate"), "查询每日流量得分趋势"
+        "asin_traffic_score_daily", "ASIN 流量得分趋势（天）", "/v1/asins/trafficScore/trend/daily", ("asin", "country", "startDate", "endDate"), "查询每日流量得分趋势；日期使用 YYYY-MM-DD。流量不含最新一天，客户端昨日不保证是供应商可用日期；拒绝范围时核对站点日期和数据就绪情况"
     ),
     "asin_traffic_score_weekly": XydcOpenApiOperation(
         "asin_traffic_score_weekly", "ASIN 流量得分趋势（周）", "/v1/asins/trafficScore/trend/weekly", ("asin", "country", "startWeek", "endWeek"), "查询每周流量得分趋势"
@@ -80,10 +82,10 @@ OPERATIONS: dict[str, XydcOpenApiOperation] = {
         "asin_info_trends_daily", "ASIN 商品信息趋势图（天）", "/v1/asins/info/trends/daily", ("asin", "country", "startDate", "endDate"), "查询商品信息每日趋势"
     ),
     "asin_research_period": XydcOpenApiOperation(
-        "asin_research_period", "ASIN 反查关键词列表（最近天）", "/v1/asins/research/list/period", ("asin", "country", "startDate", "endDate"), "查询 ASIN 在日期范围内的反查关键词"
+        "asin_research_period", "ASIN 反查关键词列表（最近天）", "/v1/asins/research/list/period", ("asin", "country", "page", "pageSize", "period"), "查询 ASIN 最近7天反查关键词；period 仅支持 last7days，sort 可选，不支持 startDate/endDate"
     ),
     "asin_research_monthly": XydcOpenApiOperation(
-        "asin_research_monthly", "ASIN 反查关键词列表（月）", "/v1/asins/research/list/monthly", ("asin", "country", "startMonth", "endMonth"), "查询 ASIN 月度反查关键词"
+        "asin_research_monthly", "ASIN 反查关键词列表（月）", "/v1/asins/research/list/monthly", ("asin", "country", "page", "pageSize", "startMonth", "endMonth"), "查询 ASIN 月度反查关键词，最长一年，sort 可选"
     ),
     "asin_info": XydcOpenApiOperation(
         "asin_info", "ASIN 商品信息", "/v1/asins/info", ("entities",), "查询标题、价格、评分和主图等商品信息"
@@ -107,13 +109,13 @@ OPERATIONS: dict[str, XydcOpenApiOperation] = {
         "search_terms_aba_weekly", "关键词 ABA 数据趋势（周）", "/v1/searchTerms/abaReport/trends/weekly", ("country", "searchTerms", "startWeek", "endWeek"), "查询关键词周度 ABA 指标"
     ),
     "search_terms_info": XydcOpenApiOperation(
-        "search_terms_info", "关键词信息（最近一周）", "/v1/searchTerms/info", ("country", "searchTerms"), "查询搜索量、竞争难度和建议竞价"
+        "search_terms_info", "关键词信息（最近一周）", "/v1/searchTerms/info", ("country", "searchTerms", "sort"), "查询搜索量、竞争难度和建议竞价；最多100词，sort 必填"
     ),
     "search_terms_analysis_period": XydcOpenApiOperation(
-        "search_terms_analysis_period", "关键词分析列表（最近天）", "/v1/searchTerms/analysis/list/period", ("searchTerm", "country", "period"), "查询关键词竞争 ASIN 和流量"
+        "search_terms_analysis_period", "关键词分析列表（最近天）", "/v1/searchTerms/analysis/list/period", ("searchTerm", "country", "page", "pageSize", "period", "sort"), "查询关键词竞争 ASIN 和流量；period 仅支持 last7days，分页和排序必填"
     ),
     "search_terms_analysis_monthly": XydcOpenApiOperation(
-        "search_terms_analysis_monthly", "关键词分析列表（月）", "/v1/searchTerms/analysis/list/monthly", ("searchTerm", "country", "startMonth", "endMonth"), "查询月度关键词竞争 ASIN 和流量"
+        "search_terms_analysis_monthly", "关键词分析列表（月）", "/v1/searchTerms/analysis/list/monthly", ("searchTerm", "country", "page", "pageSize", "startMonth", "endMonth", "sort"), "查询月度关键词竞争 ASIN 和流量，分页和排序必填"
     ),
     "client_quota": XydcOpenApiOperation(
         "client_quota", "客户端额度", "/v1/client/quota", (), "查询当前 API 客户端额度（文档标注仅适用于 v1）"
@@ -152,7 +154,7 @@ class XydcOpenApiError(RuntimeError):
         self.retry_after = retry_after
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "code": self.code,
             "message": self.message,
             "status_code": self.status_code,
@@ -160,6 +162,16 @@ class XydcOpenApiError(RuntimeError):
             "retry_after": self.retry_after,
             "details": self.payload,
         }
+        # 日期语法合法也可能越过供应商数据边界；补充提示但不猜测或改写请求日期。
+        if self.code == "InvalidTrendsRange" and self.status_code == 400:
+            result["hint"] = (
+                "查询范围被供应商拒绝。请核对当前 operation 的周期字段、日期格式与起止顺序，"
+                "并区分客户端日期、站点日期和供应商最新可用数据日；流量不含最新一天且每天更新。"
+                "客户端昨日可能仍是站点当天，具体截止时区和发布时间需确认。"
+                "保留原始区间和 trace_id，不自动重放相同参数或更换 ASIN；"
+                "仅在任务允许且有可用日期依据时显式调整一次，否则报告数据未取得。"
+            )
+        return result
 
 
 class XydcOpenApiProvider:
@@ -408,20 +420,26 @@ def _should_rotate_credential(exc: XydcOpenApiError) -> bool:
     if exc.status_code in {401, 404}:
         return True
     if exc.status_code == 403:
-        reason = str((exc.payload or {}).get("reason", "")) if isinstance(exc.payload, dict) else ""
-        return reason in {"CreditBalanceInsufficient", "CreditAccountUnavailable", "APICredentialNotFound"}
+        # 两种错误体均由共享解析归一为业务码，继续使用既有额度轮换白名单。
+        return exc.code in {"CreditBalanceInsufficient", "CreditAccountUnavailable", "APICredentialNotFound"}
     return False
 
 
 def _error_code(status_code: int, body: Any) -> str:
     if isinstance(body, dict) and body.get("reason"):
         return str(body["reason"])
+    # 业务接口实际也返回 code/msg；数字 code 是 HTTP 状态，不能当成业务分类。
+    code = body.get("code") if isinstance(body, dict) else None
+    if isinstance(code, str) and code.strip() and not code.strip().isdecimal():
+        return code.strip()
     return f"HTTP_{status_code}"
 
 
 def _error_message(body: Any, status_code: int) -> str:
     if isinstance(body, dict) and body.get("message"):
         return str(body["message"])
+    if isinstance(body, dict) and body.get("msg"):
+        return str(body["msg"])
     return f"西柚 OpenAPI 返回 HTTP {status_code}"
 
 

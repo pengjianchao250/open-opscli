@@ -305,7 +305,7 @@ curl -s -X POST $BASE/api/v1/keepa/run -H "X-Ops-Token: $OPS_TOKEN" \
 
 #### `GET /scenarios` — 公开操作目录
 
-无需登录或配置西柚 Key，不访问供应商、不消耗 Credit。返回 `data` 操作数组，字段为 `operation`、`title`、`method`、`endpoint`、`required_fields` 和 `description`，与 MCP 目录一致。目录中的 `endpoint` 是供应商路径；业务系统统一调用下方 `/run`。
+无需登录或配置西柚 Key，不访问供应商、不消耗 Credit。返回 `data` 操作数组，字段为 `operation`、`title`、`method`、`endpoint`、`required_fields`、`description`、`payload_schema`、`example_payload`、`constraints` 和 `documentation_url`，与 MCP 目录一致。schema 和示例提供类型、枚举及操作限制，示例日期不是默认周期；目录中的 `endpoint` 是供应商路径，业务系统统一调用下方 `/run`。v1专用余额接口不在公共目录。
 
 ```bash
 curl -s "$BASE/api/v1/xydc/scenarios"
@@ -318,7 +318,7 @@ curl -s "$BASE/api/v1/xydc/scenarios"
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | operation | string | 是 | `/scenarios` 返回的操作名，Swagger 枚举与 MCP 共用 |
-| payload | object | 是 | 西柚业务 JSON，字段保留原始大小写，如 `searchTerms`、`pageSize`；必填字段见目录，字段类型和限制见供应商文档 |
+| payload | object | 是 | 西柚业务 JSON，字段保留原始大小写，如 `searchTerms`、`pageSize`；必填字段、类型与限制见目录及其官方文档链接 |
 
 请求体仅接受这两个顶层字段，不接受 `jwt`、`session_id`、`api_key`、`userEmail` 或任意 URL。目录与 JSON Schema 不会代替所有供应商业务参数校验。
 
@@ -329,7 +329,7 @@ curl -s -X POST "$BASE/api/v1/xydc/run" \
   -H "X-Session-Id: $SESSION_ID" \
   -H "X-Ops-Token: $OPS_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"operation":"search_terms_info","payload":{"country":"US","searchTerms":["bed frame"]}}'
+  -d '{"operation":"search_terms_info","payload":{"country":"US","searchTerms":["bed frame"],"sort":{"field":"weeklySearchVolume","order":"desc"}}}'
 ```
 
 查询 ASIN 当前商品信息：
@@ -344,7 +344,7 @@ curl -s -X POST "$BASE/api/v1/xydc/run" \
 
 | HTTP | 情况 |
 | --- | --- |
-| 400 | 缺少业务必填字段或供应商返回 InvalidParams / InvalidBiz |
+| 400 | 缺少业务必填字段或供应商返回 InvalidParams / InvalidBiz / InvalidTrendsRange |
 | 401 | AppHub 未登录；完成用户授权后再发起查询 |
 | 422 | operation 非法、payload 非对象或多余顶层字段 |
 | 429 | opscli 日限额耗尽或供应商限流；供应商返回有效 `retry_after` 时同步输出 `Retry-After` 响应头 |
@@ -352,6 +352,8 @@ curl -s -X POST "$BASE/api/v1/xydc/run" \
 | 503 | 服务端西柚 Key、供应商额度账户或本地限额存储不可用；联系服务管理员，不需要反复刷新用户登录态 |
 
 错误返回 `success=false`、`data=null`、`error` 以及可用的 `quota`；保留可安全输出的供应商业务错误码和 Trace ID，内部连接异常统一脱敏。REST 不输出 MCP 专用 feedback 草案。
+
+最近天 ASIN 反查使用必填 `asin/country/page/pageSize/period`，`period` 仅 `last7days`，不使用起止日期；月度反查另需月份及分页。关键词分析列表的分页和 `sort` 必填，通用 `payload.page` 原样透传，供应商分析分页起点尚未在文档明确。`InvalidTrendsRange` 带日期排查 `hint`，调用方需区分客户端日期、站点日期与已就绪数据日，不能将缺失日填成0或静默修改固定日期范围。
 
 Provider 审计日志继续记录经认证用户、查询条件、返回结果/错误、Trace ID、Credit、耗时与重试记录。位置通过 `OPSCLI_XYDC_OPENAPI_AUDIT_LOG` 配置，默认 `CONFIG_DIR/logs/xydc-openapi.jsonl`。请求在认证/合同/日限额阶段被拒绝时不会进入 Provider 日志。新增 REST 不改 MySQL 表结构。
 
