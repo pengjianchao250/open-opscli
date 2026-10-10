@@ -11,7 +11,7 @@ from opscli.amazon_rufus.domain.mcp_models import (
     RufusRemoteConsentRequest,
     RufusWatchLoginRequest,
 )
-from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
+from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher, report_warning_fields
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 from opscli.amazon_rufus.transport.client import RufusTransportClient
@@ -238,6 +238,8 @@ class RufusMcpManager:
             "asin": str(data.get("asin") or "").strip().upper(),
             "country": str(data.get("country") or "").strip().upper(),
             "question_count": int(data.get("question_count") or len(data.get("questions") or [])),
+            # 部分题无正文或疑似渲染丢失时成功但附带题号告警；无告警时不加字段，响应结构保持不变（Bug 12136）
+            **report_warning_fields(published_report),
             "answer_count": len(answers) if isinstance(answers, list) else 0,
             "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
         })

@@ -499,7 +499,7 @@ def test_factory_upload_request_uses_provided_credentials(monkeypatch, tmp_path,
     token = mcp_request_ctx.set({"api_key": "request-key"})
     try:
         manager = RufusMcpManager.for_current_request(credential_dir=tmp_path, jwt=jwt, session_id=session_id)
-        report = manager.report_publisher.publish({"asin": "B0TEST1234", "answers": []})
+        report = manager.report_publisher.publish({"asin": "B0TEST1234", "answers": [{"text": "适合"}]})
         assert report.url == "https://files.example/report.md"
     finally:
         mcp_request_ctx.reset(token)

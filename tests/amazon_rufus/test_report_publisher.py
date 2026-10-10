@@ -45,7 +45,7 @@ def test_report_publisher_uploads_exact_written_path_with_safe_metadata(tmp_path
 
     class DummyWriter:
         def write(self, data: dict) -> Path:
-            report_path.write_text("# report", encoding="utf-8")
+            report_path.write_text("# report\n\n适合", encoding="utf-8")
             return report_path
 
     class DummyFileUploadClient:
@@ -92,7 +92,7 @@ def test_report_publisher_wraps_upload_error_and_keeps_local_report(tmp_path: Pa
 
     class DummyWriter:
         def write(self, data: dict) -> Path:
-            report_path.write_text("# report", encoding="utf-8")
+            report_path.write_text("# report\n\n适合", encoding="utf-8")
             return report_path
 
     class FailingFileUploadClient:
@@ -105,7 +105,7 @@ def test_report_publisher_wraps_upload_error_and_keeps_local_report(tmp_path: Pa
     )
 
     with pytest.raises(RufusReportUploadError) as exc_info:
-        publisher.publish({"asin": "B0TEST1234", "country": "US", "answers": []})
+        publisher.publish({"asin": "B0TEST1234", "country": "US", "answers": [{"text": "适合"}]})
 
     assert report_path.exists()
     assert exc_info.value.report_path == report_path
@@ -137,7 +137,7 @@ def test_publisher_returns_safe_api_error_details(monkeypatch, tmp_path, status,
     monkeypatch.setattr("opscli.shared.file_uploads.httpx.post", lambda *args, **kwargs: httpx.Response(status, json=payload))
     publisher = AnswerReportPublisher(file_upload_client=FileUploadClient(auth_client=DummyAuth()))
     with pytest.raises(RufusReportUploadError) as caught:
-        publisher.publish({"asin": "B0TEST1234", "answers": []})
+        publisher.publish({"asin": "B0TEST1234", "answers": [{"text": "适合"}]})
     result = caught.value.to_dict()
     assert caught.value.report_path.exists()
     assert result["upload_error"] == {
@@ -197,7 +197,8 @@ def test_report_publisher_keeps_same_second_concurrent_reports_isolated(monkeypa
 
     class MarkerFormatter:
         def format_data(self, data: dict) -> str:
-            return data["marker"]
+            # 渲染答案正文本身；只返回固定标记会被正文保真校验判为渲染丢失（Bug 12136）
+            return data["answers"][0]["text"]
 
     class CoordinatedFileUploadClient:
         def __init__(self) -> None:
@@ -225,8 +226,7 @@ def test_report_publisher_keeps_same_second_concurrent_reports_isolated(monkeypa
             {
                 "asin": "B0TEST1234",
                 "country": "US",
-                "marker": marker,
-                "answers": [],
+                "answers": [{"text": marker}],
             }
         )
 
