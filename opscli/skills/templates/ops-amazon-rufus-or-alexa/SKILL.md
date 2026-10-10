@@ -51,6 +51,8 @@ Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答
 
 其他错误不允许 CLI fallback，包括 `RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR`、`RUFUS_HEADLESS_REQUEST_ERROR`、OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401。
 
+瞬时错误按[瞬时错误同路径重试](#瞬时错误同路径重试)在原路径重试，不属于 CLI fallback。
+
 CLI fallback 使用以下正式脱敏入口；需要登录时执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 CLI 路径：
 
 ```text
@@ -89,7 +91,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 10. 登录态过期、`can_get_backend=false`、`status=missing/invalid`（包括旧 `curl_data` 或仅 `storage_state`），或登录态检查返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR`、401 时，执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 MCP 路径，不要求预清理；入口确认登录态可用后继续。
 11. 调用 `amazon_rufus_get`，由 MCP 后端使用 headless 链路获取 Rufus 回答、写入并上传报告，成功返回本次 `report_path` 和 `report_url`。单题传 `question`，多题传 `questions`，未提供问题时传 `skills_dir=".agents/skills"` 读取默认题库；多问题在同一个 Rufus 对话中获取，不拆成多个独立对话。
 12. 如果 `amazon_rufus_get` 返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 MCP 路径，不要求预清理；成功后按原问题来源重试 `amazon_rufus_get`，本分支不允许 CLI fallback。
-13. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，按[三类 MCP 错误的登录采集恢复](references/rufus-mcp-workflow.md#三类-mcp-错误的登录采集恢复)处理；其他错误直接返回，不扩大 CLI fallback。
+13. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，按[三类 MCP 错误的登录采集恢复](references/rufus-mcp-workflow.md#三类-mcp-错误的登录采集恢复)处理；仅 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 与旧版 `RUFUS_BAD_REMOTE_JSON` 按[瞬时错误同路径重试](#瞬时错误同路径重试)处理；其他错误直接返回，不扩大 CLI fallback。
 14. Rufus 获取成功后，必须读取本次返回的 `report_path` 做回答质量判断，并保留同次返回的 `report_url`；不得读取历史报告参与判断。
 15. 如果存在无回答、拒答、答非所问，或用户问题不止商品详情但回答退化为商品详情的情况，进入问题重写重试流程。
 16. 问题重写重试必须按问题分别记录 `answer_rewrite_attempts_by_question`，每个问题最多 10 次；达到上限的题目不再交给子 agent。
@@ -122,6 +124,16 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 8. 回答质量重试与登录恢复相互独立：重写问题不得触发 `amazon_rufus_logout`，不得扩大 CLI fallback，且不得重置 `login_recovery_attempted` 或 `watch_login_attempted`。
 9. `answer_rewrite_attempts_by_question` 按问题分别记录回答质量重试次数，每个问题最多 10 次；某题达到上限后不再开启子 agent 改写该题，也不再为该题单独请求 Rufus。
 
+## 瞬时错误同路径重试
+
+OPS 后端读取亚马逊 Rufus 登录态的接口偶发网关超时、5xx 或网络中断，属于瞬时错误，按以下规则处理：
+
+1. 适用错误仅限两种：`amazon_rufus_login_status`、`amazon_rufus_get` 或 CLI `login-status`、`get-backend` 返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE`（错误中带 `retryable=true`），表示 OPS 登录态接口临时不可用或无法访问，不是 Amazon Rufus 返回异常；旧版 opscli 返回的 `RUFUS_BAD_REMOTE_JSON`，可能为同一接口临时不可用。两者都不代表亚马逊 Rufus 登录态失效。
+2. 本规则不适用于报告下载失败、`RUFUS_REPORT_*`、`RUFUS_HEADLESS_*` 及其他错误码，这些错误仍按各自规则处理。
+3. 新版 opscli 返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 前已自动重试 2 次；Agent 等待约 15~30 秒后，用原命令、原参数、原路径重试 1 次：MCP 路径重新调用同一个 MCP Tool，CLI 路径重新执行同一条 `opscli amazon-rufus` 命令，保留原 ASIN、国家站点和问题来源。
+4. 同一次 Skill 调用内瞬时错误最多重试 1 次。重试不切换 MCP/CLI，不触发 `amazon_rufus_logout`、`amazon_rufus_watch_login` 或其他重新登录动作，不修改 `login_recovery_attempted`、`watch_login_attempted`，也不计入回答质量重试次数。
+5. 重试仍失败时直接返回最新错误，并向用户说明失败来源是 OPS 读取亚马逊登录态的接口，不是 Amazon Rufus，可稍后再试。
+
 ## CLI fallback 子流程
 
 1. 先执行 `opscli amazon-rufus login-status <COUNTRY> --pretty`。
@@ -132,7 +144,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
    - 未提供问题时传 `--skills-dir ".agents/skills"` 读取默认题库。
    - `--no-upload-payload` 只关闭旧 Rufus `upload_payload`，不关闭 Markdown 报告上传。
 4. CLI fallback 成功后使用本次返回的 `report_path` 做质量判断，最终只返回本次 `report_url`，不读取历史报告兜底。
-5. CLI fallback 失败时直接返回错误，不再切回 MCP 或继续扩大 fallback。
+5. CLI fallback 失败时不再切回 MCP 或继续扩大 fallback；瞬时错误先按[瞬时错误同路径重试](#瞬时错误同路径重试)在 CLI 路径重试 1 次，其他错误或重试后仍失败时直接返回错误。
 
 ## References
 

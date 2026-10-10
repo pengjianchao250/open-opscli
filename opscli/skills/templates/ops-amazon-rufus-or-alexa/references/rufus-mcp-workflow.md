@@ -115,6 +115,7 @@ amazon_rufus_login_status(country="US")
 - `can_get_backend=true`：已有可用于 Rufus 后端/headless 获取的亚马逊 Rufus 登录态，继续调用 `amazon_rufus_get`。
 - 登录态过期、`can_get_backend=false` 或 `status=missing/invalid`：没有可用亚马逊 Rufus 登录态，执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理。
 - OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401：执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理；本分支不允许 CLI fallback。
+- `RUFUS_PLATFORM_COOKIE_UNAVAILABLE`（`retryable=true`，OPS 登录态接口临时不可用或无法访问）或旧版 `RUFUS_BAD_REMOTE_JSON`（可能为同一接口临时不可用）：不代表登录态失效，不进入登录采集入口；按[瞬时错误同路径重试](../SKILL.md#瞬时错误同路径重试)处理。
 
 `amazon_rufus_login_status` 只输出 `status`、`has_login_state`、`can_get_backend`、`session_cookie_count`、`has_streaming_request` 等脱敏摘要。不要让 Agent 读取或展示 OPS 平台 Cookie 接口 content 原文。
 
@@ -278,6 +279,8 @@ RUFUS_SECRET_NOT_READY
 ```
 
 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理；本分支不允许 CLI fallback。
+
+`RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 不进入登录采集恢复，按[瞬时错误同路径重试](../SKILL.md#瞬时错误同路径重试)处理。
 
 `RUFUS_HEADLESS_REQUEST_ERROR` 的 message 可能是 `Rufus 请求失败: 403`。此时不要把 403 当作 MCP 服务不可用，也不要直接重复调用 `amazon_rufus_get`；按授权或页面上下文失效处理，进入一次登录采集恢复。
 

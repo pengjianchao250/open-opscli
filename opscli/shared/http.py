@@ -5,7 +5,63 @@
 """
 from __future__ import annotations
 
+import re
+
 import httpx
+
+# 非 JSON 错误页只摘 <title>：nginx/网关错误页标题很短（如「504 Gateway Time-out」），80 字足够定位
+MAX_ERROR_TITLE_CHARS = 80
+# <title> 一定出现在页面头部，只在前 4KB 内查找，避免对超大错误页做全文正则
+_TITLE_SCAN_CHARS = 4096
+_TITLE_PATTERN = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+# 标题命中这些模式时可能回显了凭证或请求原文（如把 Cookie 头拼进错误页标题），一律用占位替换
+_SENSITIVE_TITLE_PATTERN = re.compile(r"cookie|session|token|curl|passw|secret|authoriz|bearer|=", re.IGNORECASE)
+
+
+def describe_non_json_response(response: httpx.Response) -> str:
+    """生成非 JSON 响应的脱敏诊断摘要，供错误消息定位「哪个接口、什么形态的响应」。
+
+    只输出 Content-Type、是否空 body、请求路径，以及 4xx/5xx HTML 错误页的 ``<title>``：
+    - 请求路径只取 path，不带 query——query 里可能有业务参数或凭证；
+    - 2xx 响应绝不截取 body 任何内容：例如平台 Cookie 接口的 2xx body 就是 Amazon Cookie 原文，
+      即使 body 混入了 PHP Warning 导致解析失败，也不回显；
+    - 非 HTML 的错误正文（如 PHP fatal 文本）同样不回显、不摘标题，避免带出服务器路径等内部信息；
+    - 标题命中 cookie/session/token/curl/= 等敏感模式时用占位替换；
+    - 不写 body 字节数：字节数随响应浮动，写进消息会让反馈按「错误码+消息」去重的指纹漂移，
+      只保留稳定的「空 body」标记（空 body 与非空的排查方向不同）。
+
+    兼容只有 ``status_code`` 和 ``json()`` 的测试桩对象：取不到的字段直接省略，不额外抛错。
+
+    Args:
+        response: 解析失败的远端响应
+
+    Returns:
+        形如 ``content-type=text/html，path=/api/v1/x，title=504 Gateway Time-out`` 的摘要
+    """
+    headers = getattr(response, "headers", None)
+    content_type = headers.get("content-type") if headers is not None else None
+    # 只保留主类型，去掉 charset 等参数，摘要更短
+    main_type = (content_type or "未知").split(";")[0].strip() or "未知"
+    parts = [f"content-type={main_type}"]
+    try:
+        if not response.content:
+            parts.append("空 body")
+    except Exception:
+        pass
+    try:
+        parts.append(f"path={response.request.url.path}")
+    except Exception:
+        # httpx.Response 未绑定 request 时访问 .request 会抛 RuntimeError，属于测试桩场景，省略即可
+        pass
+    if getattr(response, "status_code", 0) >= 400 and "html" in main_type.lower():
+        try:
+            match = _TITLE_PATTERN.search((response.text or "")[:_TITLE_SCAN_CHARS])
+        except Exception:
+            match = None
+        title = " ".join(match.group(1).split())[:MAX_ERROR_TITLE_CHARS] if match else ""
+        if title:
+            parts.append("title=（已隐藏）" if _SENSITIVE_TITLE_PATTERN.search(title) else f"title={title}")
+    return "，".join(parts)
 
 
 def extract_error_message(payload: dict) -> str | None:
@@ -92,7 +148,8 @@ def parse_remote_response(
     """统一解析远端 HTTP 响应，识别业务层错误并抛出对应异常。
 
     解析流程：
-        1. 尝试 JSON 解码，失败则抛出 bad_json_error_cls
+        1. 尝试 JSON 解码；失败时先看状态码：>= 400 抛 http_error_cls（网关 502/504 HTML、
+           PHP fatal 文本等），2xx/3xx 才抛 bad_json_error_cls；两者消息都带脱敏诊断摘要
         2. HTTP 状态码 >= 400 时抛出 http_error_cls（含 status_code）
         3. 业务层 code 不为 None/0/200 时抛出 business_error_cls（含 business_code）
         4. 响应不是 dict 时抛出 bad_json_error_cls
@@ -115,7 +172,15 @@ def parse_remote_response(
     try:
         payload = response.json()
     except Exception as exc:
-        raise bad_json_error_cls("远端返回了无法解析的 JSON") from exc
+        # 先看状态码再归类：网关超时页、5xx 纯文本、空 body 本质是 HTTP 失败，
+        # 若一律报 bad_json，状态码丢失，调用方无法判断是否属于可重试的网关瞬时错误（Bug 12133）。
+        diagnosis = describe_non_json_response(response)
+        if response.status_code >= 400:
+            raise http_error_cls(
+                response.status_code,
+                f"远端请求失败，HTTP {response.status_code}（非 JSON 响应；{diagnosis}）",
+            ) from exc
+        raise bad_json_error_cls(f"远端返回了无法解析的 JSON（HTTP {response.status_code}；{diagnosis}）") from exc
 
     if response.status_code >= 400:
         message = (extract_error_message(payload) if isinstance(payload, dict) else None)

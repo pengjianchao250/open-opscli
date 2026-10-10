@@ -366,9 +366,10 @@ output/amazon-rufus/
 | `RUFUS_HEADLESS_CAPTURE_ERROR` | headless 打开商品页并捕获 seed 失败 |
 | `RUFUS_HEADLESS_REQUEST_ERROR` | headless 请求 Rufus SSE 失败 |
 | `RUFUS_PLATFORM_COOKIE_AUTH_ERROR` | OPS 平台 Cookie API 401，代表 OPS/MCP 鉴权失败，不等于 Amazon 登录态失效 |
+| `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` | 读 OPS 平台 Cookie API（亚马逊登录态）遇网关 502/503/504、非 JSON 的 5xx（OPS 后端临时不可用），或超时、建连失败、读写中断（接口无法访问，可能是 OPS 后端、网关或本机网络/代理问题），已自动重试 2 次仍失败；`retryable=true`，不是 Amazon 的问题，可稍后同路径重试 |
 | `RUFUS_REMOTE_HTTP_ERROR` | 远端 HTTP 层错误 |
 | `RUFUS_REMOTE_BUSINESS_ERROR` | 远端业务错误 |
-| `RUFUS_BAD_REMOTE_JSON` | 远端返回不是合法 JSON |
+| `RUFUS_BAD_REMOTE_JSON` | OPS 后端返回 2xx 但不是合法 JSON（非 JSON 的 4xx/5xx 已改报 HTTP 错误，消息带状态码、Content-Type、接口路径） |
 
 其中最容易误解的是：
 
@@ -738,6 +739,7 @@ uv run opscli amazon-rufus get-backend B0TEST1234 US -q "这个商品适合送�
 - `RUFUS_HEADLESS_CAPTURE_ERROR`：检查浏览器、商品页、登录态和 Playwright。
 - `RUFUS_HEADLESS_REQUEST_ERROR`：检查 Rufus 请求是否被拒绝、登录态是否失效。
 - `RUFUS_PLATFORM_COOKIE_AUTH_ERROR`：这是 OPS 鉴权问题，不是 Amazon 登录态问题。
+- `RUFUS_PLATFORM_COOKIE_UNAVAILABLE`：OPS 登录态接口临时不可用或无法访问，等待片刻后用原命令重试 1 次，不要重新登录；消息里是网络异常原文（如证书校验失败）时先排查本机网络/代理。
 - `QUESTION_BANK_NOT_READY`：安装或升级 `ops-amazon-rufus-or-alexa` Skill，或临时用 `-q` 指定问题。
 
 在本项目内，任何 `opscli` CLI 命令失败都需要按 `ops-feedback` 规则提交结构化反馈；反馈内容只能包含脱敏摘要，不能包含 Cookie、headers、payload、cURL、seed 或平台 Cookie content 原文。
