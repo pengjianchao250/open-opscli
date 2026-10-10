@@ -6,6 +6,21 @@ import re
 from typing import Any
 
 
+# 文本比对口径（Bug 12136）：逐行去掉有序编号（渲染器会把「1. xx」改写成「- xx」），
+# 再去掉空白、列表符号、Markdown 标点和转义竖线的反斜杠，只保留可读字符。
+# 报告正文保真校验与「总结」去重共用这一口径，避免两处判断标准漂移。
+_COMPARE_ORDERED_MARKER_RE = re.compile(r"^\s*\d+[.)]\s+")
+_COMPARE_NOISE_RE = re.compile(r"[\s•*_`#>|\\\-–—:：]+")
+
+
+def compact_for_compare(text: Any) -> str:
+    """把文本规整为只含可读字符的比对串，用于判断一段正文是否出现在报告中。"""
+    return "".join(
+        _COMPARE_NOISE_RE.sub("", _COMPARE_ORDERED_MARKER_RE.sub("", line))
+        for line in str(text or "").splitlines()
+    )
+
+
 DIAGNOSIS_SECTION_TITLES = {
     1: "标题清晰度与点击意愿分析",
     2: "五点卖点表达优化分析",
@@ -417,6 +432,11 @@ class AnswerReportFormatter:
                 intro = []
                 sections = inferred_sections
         lines: list[str] = []
+        # 商品链接单独成「相关产品」小节，放在固定小节之前：既不混进诊断表格补出「无」，
+        # 也不会被批量校验器算进最后一个「### n、」小节而掩盖其空内容（Bug 12136）。
+        product_links = self._format_product_links((answer if isinstance(answer, dict) else {}).get("productLinks"))
+        if product_links:
+            lines.extend(["### 相关产品", "", *product_links, ""])
         if intro and not sections:
             lines.extend(self._render_plain_lines(intro))
             lines.append("")
@@ -445,9 +465,8 @@ class AnswerReportFormatter:
         summary_text = str(answer_data.get("summary") or answer_data.get("summaryText") or "").strip()
         if summary_text:
             return self._normalize_answer_markdown(summary_text)
-        product_links = self._format_product_links(answer_data.get("productLinks"))
-        if product_links:
-            return self._normalize_answer_markdown("\n".join(product_links))
+        # 商品链接不是答案正文：正文和总结都为空时返回空串，由调用方输出「未获取到答案」；
+        # 链接改由「相关产品」小节单独渲染，避免空正文时链接被塞进诊断表格（Bug 12136）。
         return ""
 
     def _normalize_answer_markdown(self, text: str) -> str:
@@ -1064,7 +1083,14 @@ class AnswerReportFormatter:
         if recommended:
             lines.extend(["", "### 推荐 ASIN", "", *recommended])
 
-        if summary_text:
+        # Rufus 解析结果的 summaryText 常与 text 是同一段文本；原文相同且渲染后的「答案」就是这段文本时不再输出「总结」，
+        # 避免整段正文出现两遍。总结只是正文片段、与 text 有任何差异（如「2-4」与「24」）、或答案改由 blocks 渲染时仍保留（Bug 12136）。
+        summary_same_as_body = (
+            bool(body_lines)
+            and summary_text == str(answer_data.get("text") or "").strip()
+            and compact_for_compare(summary_text) == compact_for_compare("\n".join(body_lines))
+        )
+        if summary_text and not summary_same_as_body:
             lines.extend(["", "### 总结", "", summary_text])
         return "\n".join(lines)
 

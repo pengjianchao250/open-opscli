@@ -105,6 +105,54 @@ class RufusReportUploadError(RufusError):
         return payload
 
 
+class RufusReportContentError(RufusError):
+    """Rufus 报告正文校验未通过：保留本地文件供排查，但不上传、不视为成功。
+
+    RENDER_LOSS：有正文的题在报告里全部找不到（只剩链接和占位的空壳），是报告渲染问题，改写问题重试无效；
+    只有部分题找不到时不抛错，由发布结果告警；
+    EMPTY_CONTENT：所有题都没有拿到答案正文（Rufus 返回为空、只有商品链接或只是占位内容），
+    可结合 answer_error_reasons 中每题的 error_reason 区分空答与拒答，按回答质量规则改写重试。
+    """
+
+    RENDER_LOSS = "RUFUS_REPORT_RENDER_LOSS"
+    EMPTY_CONTENT = "RUFUS_REPORT_EMPTY_CONTENT"
+    code = EMPTY_CONTENT
+
+    def __init__(
+        self,
+        code: str,
+        report_path: str | Path,
+        *,
+        lost_question_indexes: tuple[int, ...] | list[int] = (),
+        empty_question_indexes: tuple[int, ...] | list[int] = (),
+        answer_error_reasons: list[str] | None = None,
+    ) -> None:
+        if code == self.RENDER_LOSS:
+            lost = "、".join(str(index) for index in lost_question_indexes)
+            message = f"Rufus 报告渲染丢失了全部答案正文（第 {lost} 题），已保留本地文件但未上传；这是报告渲染问题，不要改写问题重试"
+        else:
+            message = "Rufus 所有题都没有返回答案正文（回答为空、只有商品链接或只是占位内容），报告已保留在本地但未上传"
+        super().__init__(message)
+        self.code = code
+        self.report_path = Path(report_path)
+        self.lost_question_indexes = list(lost_question_indexes)
+        self.empty_question_indexes = list(empty_question_indexes)
+        # 按题序保存 Rufus 回答的 errorReason（如 empty_answer、shopping_scope_refusal），空串表示未标记原因
+        self.answer_error_reasons = list(answer_error_reasons or [])
+
+    def to_dict(self) -> dict:
+        """返回包含本地报告路径、丢失/无正文题号与每题 error_reason 的稳定错误结构。"""
+        payload = super().to_dict()
+        payload["report_path"] = self.report_path.as_posix()
+        payload["lost_question_indexes"] = self.lost_question_indexes
+        payload["empty_question_indexes"] = self.empty_question_indexes
+        payload["answer_error_reasons"] = [
+            {"question_index": index, "error_reason": reason}
+            for index, reason in enumerate(self.answer_error_reasons, start=1)
+        ]
+        return payload
+
+
 class RufusAnswerValidationError(RufusError):
     """Rufus 回答未通过完整性校验。"""
 

@@ -171,7 +171,18 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 4. 回答没有覆盖问题意图。例如问题询问差评、风险、评价、适配人群、广告投放、对比、场景判断或优化建议，但答案只描述商品详情、规格参数或基础卖点。
 5. 多题场景中某一题答案串题、漏题，或回答内容明显属于另一道题。
 
-成功但 `answer_count=0` 不再按正常 0 答案报告直接结束；必须进入本节的回答质量判断与问题重写重试流程。
+`answer_count=0` 或所有题都没有正文时，获取返回 `RUFUS_REPORT_EMPTY_CONTENT` 错误而不是成功，按下方[报告正文校验错误](#报告正文校验错误)进入问题重写重试流程。
+
+### 报告正文校验错误
+
+`amazon_rufus_get` 与 CLI `get-backend` 上传前会比对 Rufus 返回的正文与渲染后的报告；未通过时报告只保留在本地，不上传，也没有 `report_url`。
+
+| 错误码 | 含义 | 处理 |
+|---|---|---|
+| `RUFUS_REPORT_RENDER_LOSS` | Rufus 有正文，但整份报告的答案正文都在渲染中丢失（只剩链接和占位），`lost_question_indexes` 列出各题 | 报告渲染问题，不进入问题重写重试，直接如实反馈错误码和题号 |
+| `RUFUS_REPORT_EMPTY_CONTENT` | 所有题都没有拿到答案正文（空答、只有商品链接、思考中或错误占位，含 `answer_count=0`） | 视为题目下没有实际答案，参考 `answer_error_reasons` 中每题的 `error_reason`，在每题 10 次上限内按本节规则改写重试 |
+
+部分题没有正文或疑似渲染丢失时获取仍然成功：MCP 返回 `empty_question_indexes` / `render_loss_question_indexes` 和 `warning`，CLI 额外输出一行「Rufus 答案报告告警」。`empty_question_indexes` 中的题按本节规则判为不合格；`render_loss_question_indexes` 中的题是渲染问题，向用户如实说明，不改写重试。
 
 ### 子 agent 改写规则
 
@@ -314,7 +325,7 @@ MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` �
 
 登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须使用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不得混用不同调用的路径和 URL。
 
-当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。
+当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。`RUFUS_REPORT_EMPTY_CONTENT` 例外，按[报告正文校验错误](#报告正文校验错误)改写重试。
 
 除非用户明确要求排障，不输出：
 

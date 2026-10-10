@@ -11925,3 +11925,27 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **后续事项（未在本次范围）**：远端模式报告仍写入 MCP 服务器 `output/amazon-rufus/`，上传后未删除，可能持续累积多租户报告文件，待确认服务端磁盘策略后再决定是否改为临时目录并上传后清理。
 
 ---
+
+## 2026-10-10 Amazon Rufus - Bug 12136 报告正文保真校验与正文/链接分开渲染
+
+**变更原因**：答案报告无论正文是否丢失都会「写完即上传」，CLI 输出「已保存」、MCP 返回 `success:true`，空壳报告（只剩商品链接和大量「无」）被当成交付物；formatter 仍把 productLinks 当正文最后兜底，诊断模板不单独渲染链接，summaryText 与正文相同时整段重复输出。
+**改动点**：
+- `services/report_validator.py` 新增 `AnswerReportFidelityChecker` 与 `skeleton_report_data()`：
+  - 骨架报告：把每题正文字段（answer、text、blocks、summaryText）与结构化诊断报告字段清空后，用同一渲染器渲染一份骨架；报告中与骨架相同的行（题目标题、小节标题、诊断表头、「未获取到答案」、相关产品与推荐 ASIN 等模板文字）不参与比对。
+  - 源正文侧对称过滤：与骨架行规整后相同且像标题（不少于 8 个字符或以「N、」开头）的回显行、「模板标题：占位词」同行写法不算正文；剩余行全是占位词（无、暂无、暂无数据、没有、未提供、none、na、n/a）、`isSuccess=false` 且 text 为空、或 errorReason 为 `thinking_placeholder` / `official_error_placeholder` 时按无正文处理。
+  - 指纹：每题取全部正文来源，逐行生成整行、去「标签：」前缀、按竖线拆单元格三类 24 字符片段，两侧链接只按 ASCII 剔除，在本题「## 」章节内任一命中即视为正文在。
+  - 判定：所有题都没有正文（含缺答案的题，题号按题目数填全）→ `RUFUS_REPORT_EMPTY_CONTENT`；有正文的题全部找不到（原 Bug 的空壳形态）→ `RUFUS_REPORT_RENDER_LOSS`；只有部分题找不到或无正文时照常通过并返回题号供告警。不设报告级字数下限。
+- `services/answer_report_publisher.py`：`publish()` 上传前生成骨架并校验（CLI 与 MCP 共用入口），骨架渲染异常时记 warning（带 report_path）并退化为不剔除模板行的校验，不让发布失败；未通过抛 `RufusReportContentError`，保留本地文件、不上传；`PublishedAnswerReport` 增加 `empty_question_indexes`、`render_loss_question_indexes`，新增 `report_warning_fields()` 供 CLI/MCP 共用告警文案。
+- `domain/exceptions.py` 新增 `RufusReportContentError`（两个错误码，`to_dict` 含 `report_path`、`lost_question_indexes`、`empty_question_indexes` 与按题序的 `answer_error_reasons`）。
+- `commands/cli.py`：校验失败走既有错误分支（exit 1，不输出「已保存」）；部分题无正文或疑似渲染丢失时多输出一行「Rufus 答案报告告警：…」。
+- `services/mcp_manager.py`：失败沿用 `_err` 通用映射（`success:false` + 错误码）；成功响应仅在有告警时追加 `empty_question_indexes` / `render_loss_question_indexes` 与 `warning`，其余字段不变。
+- `services/answer_report_formatter.py`：新增 `compact_for_compare()` 比对口径；`_answer_text` 去掉商品链接兜底正文；诊断模板在固定小节前追加独立「### 相关产品」；自定义题 summaryText 与 text 原文相同且渲染后的答案就是这段文本时不再输出「### 总结」。`_split_numbered_sections` 保持 release 原逻辑不变。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本同步）：`SKILL.md` 在「回答质量判断与问题重写重试」节末补一段（RENDER_LOSS 表示整份报告正文丢失，不得改写重试；部分题疑似丢失为告警，如实说明、不改写重试；EMPTY_CONTENT 视为题目下没有实际答案，可参考 `answer_error_reasons` 在每题 10 次上限内改写重试），第 13、22 条注明 EMPTY_CONTENT 例外；`references/rufus-mcp-workflow.md` 新增「报告正文校验错误」小节，`answer_count=0` 的旧描述与「失败直接返回」一段同步注明。
+- 测试：新增 `tests/amazon_rufus/test_report_fidelity.py`、6 题真实正文 fixture `b0fl2b5hzs_6q.json` 与中文诊断格式 fixture `diagnosis_zh_7q.json`。既有短答用例（「适合送礼」「适合」「答案：…」）保持原样通过；`test_report_publisher.py`、`test_mcp_manager.py` 中发布零个答案、或假写入器/假渲染器不输出答案正文的用例，改为一条短答「适合」并让假报告包含它。
+**验证结果**：`python -m pytest tests/amazon_rufus/ tests/mcp/test_amazon_rufus_tools.py tests/asin_data tests/asin_data_collector tests/skills -q` 为 766 passed、15 failed；同一命令在 release `f9c99303` 干净导出目录中为 703 passed、15 failed，失败清单逐条一致（多出的 63 条为新增保真测试），属于既有基线。新增用例覆盖：正文来源 × 有无链接 × 自定义题/诊断题矩阵；中文/英文短答与拒答照常上传；中文诊断编号与推断格式不误判；链接覆盖正文、丢掉全部正文时判 RENDER_LOSS（含中文编号诊断第 1~7 题、一字短答且问题含该字、正文首行复述问题、推荐 ASIN 描述与正文同句）；只丢一题时成功并告警；回显格式模板、只写小节标题、小节标题加「无」的 6 种形态（部分题为无正文告警、整体回显通过、全部只有标题时 EMPTY_CONTENT）；零个答案、全是占位、每题只答「无」、单元格为 None 判 EMPTY_CONTENT 且题号按题目数填全；骨架渲染失败退化且发布成功；同一 fixture 经 CLI 与 MCP 工具两条路径报告字节一致、成功/告警/错误码一致。第三轮复审脚本：原 Bug 27 组回归（3 种缺陷渲染器 × 自定义/诊断/中英文/blocks/无题目）全部 RENDER_LOSS 且列出全部题号；`split_cmp.py` 12 种编号变体的渲染与 release 完全一致。离线复现脚本回放：真实形态（text+summaryText）报告从 23099 字符降到 12160 字符，正文标记 18/18。
+**影响范围**：`opscli amazon-rufus get-backend` 与 MCP `amazon_rufus_get` 的报告发布结果。行为变化：① 有正文的题在报告里全部找不到时报 `RUFUS_REPORT_RENDER_LOSS`、不上传，以前照常上传空壳；② 只有部分题找不到时照常上传，并以 `render_loss_question_indexes` + 告警提示（启发式误判最多产生告警，不阻断报告）；③ 所有题都没有正文（全部空答、只返回链接、全是思考中/错误占位、只回显格式模板或小节标题、每题只答「无」、零个答案）报 `RUFUS_REPORT_EMPTY_CONTENT`、不上传，Skill 允许按原规则在每题 10 次上限内改写重试；④ 部分题无正文时照常上传并以 `empty_question_indexes` + 告警提示。formatter 改动（链接不再当正文、相关产品小节、总结去重）同时影响批量诊断与 asin_data 的 Rufus 报告渲染。需随 opscli 新版本发布及远端 MCP 重新部署后生效。
+**风险**：EMPTY_CONTENT 是工具调用失败，Agent 按 Skill 改写重试时，同一错误在会话内连续出现可能触发全局「工具失败自动反馈」规则自动提交反馈；部分题真实丢失时只告警不阻断，依赖 Agent 按 Skill 如实告知用户；骨架渲染失败时退化为不剔除模板行的比对，检测力下降但不影响发布。
+**后续事项（本次不修）**：formatter 既有缺陷——回答全用「1、2、3、」列内容条目时被 `_split_numbered_sections` 当作小节标记吞掉整段内容，小节内「1、2、3、」要点被 `_drop_intro_and_headers` 丢弃。本次保真校验会把这类部分题丢失报为渲染丢失告警。修复思路见复审原型 `review12136_r3/proto_split.py`：编号小节识别改为「标题匹配，或序号递增且短标题样式」，小节内非标题的「N、」条目加保护前缀后再进入旧规则；需同时用 `split_cmp.py` 的 12 种编号变体与批量诊断校验器回归，确保不比现状倒退。
+**回滚方式**：回退本条对应提交，恢复 publisher 无校验上传、formatter 链接兜底与总结重复输出，移除新增异常、测试与 fixture、Skill 与参考文档新增内容。
+
+---
