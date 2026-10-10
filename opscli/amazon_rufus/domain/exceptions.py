@@ -121,29 +121,35 @@ class RufusReportContentError(RufusError):
     def __init__(
         self,
         code: str,
-        report_path: str | Path,
+        report_path: str | Path | None,
         *,
         lost_question_indexes: tuple[int, ...] | list[int] = (),
         empty_question_indexes: tuple[int, ...] | list[int] = (),
         answer_error_reasons: list[str] | None = None,
     ) -> None:
+        # report_path 为 None 表示报告只在远端 MCP 服务器上、调用方读不到（与上传失败同口径），
+        # 文案不能再说「保留在本地」，否则会诱导调用方去本地 cat/find
+        remote_note = "报告只保存在远端 MCP 服务器上、调用方无法读取，且未上传"
         if code == self.RENDER_LOSS:
             lost = "、".join(str(index) for index in lost_question_indexes)
-            message = f"Rufus 报告渲染丢失了全部答案正文（第 {lost} 题），已保留本地文件但未上传；这是报告渲染问题，不要改写问题重试"
+            kept = "已保留本地文件但未上传" if report_path is not None else remote_note
+            message = f"Rufus 报告渲染丢失了全部答案正文（第 {lost} 题），{kept}；这是报告渲染问题，不要改写问题重试"
         else:
-            message = "Rufus 所有题都没有返回答案正文（回答为空、只有商品链接或只是占位内容），报告已保留在本地但未上传"
+            kept = "报告已保留在本地但未上传" if report_path is not None else remote_note
+            message = f"Rufus 所有题都没有返回答案正文（回答为空、只有商品链接或只是占位内容），{kept}"
         super().__init__(message)
         self.code = code
-        self.report_path = Path(report_path)
+        self.report_path = Path(report_path) if report_path is not None else None
         self.lost_question_indexes = list(lost_question_indexes)
         self.empty_question_indexes = list(empty_question_indexes)
         # 按题序保存 Rufus 回答的 errorReason（如 empty_answer、shopping_scope_refusal），空串表示未标记原因
         self.answer_error_reasons = list(answer_error_reasons or [])
 
     def to_dict(self) -> dict:
-        """返回包含本地报告路径、丢失/无正文题号与每题 error_reason 的稳定错误结构。"""
+        """返回包含丢失/无正文题号与每题 error_reason 的稳定错误结构；仅在调用方可读时包含报告路径。"""
         payload = super().to_dict()
-        payload["report_path"] = self.report_path.as_posix()
+        if self.report_path is not None:
+            payload["report_path"] = self.report_path.as_posix()
         payload["lost_question_indexes"] = self.lost_question_indexes
         payload["empty_question_indexes"] = self.empty_question_indexes
         payload["answer_error_reasons"] = [

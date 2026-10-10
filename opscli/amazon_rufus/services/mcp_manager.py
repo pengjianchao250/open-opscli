@@ -7,7 +7,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
+from opscli.amazon_rufus.domain.exceptions import RufusReportContentError, RufusReportUploadError
 from opscli.amazon_rufus.domain.mcp_models import (
     RufusGetRequest,
     RufusMcpResult,
@@ -257,6 +257,8 @@ class RufusMcpManager:
 
         Raises:
             RufusReportUploadError: 上传失败；远端模式不带 report_path，stdio 模式带绝对路径。
+            RufusReportContentError: 正文校验未通过（EMPTY_CONTENT / RENDER_LOSS）；路径规则同上，
+                题号与 answer_error_reasons 原样保留。
         """
         data = self.rufus_manager.get_backend(**request.to_backend_kwargs())
         remote = _is_remote_mcp_request()
@@ -269,6 +271,21 @@ class RufusMcpManager:
             raise RufusReportUploadError(
                 None if remote else exc.report_path.resolve(),
                 upload_error=exc.upload_error,
+            ) from exc
+        except RufusReportContentError as exc:
+            # 正文校验失败的报告同样只在 MCP 进程的工作目录里，按上传失败的同一规则改写路径；
+            # 原样透传会把服务端相对路径交给远端调用方，诱导其在本地 cat/find 扑空（12138 要消除的情形）。
+            # 错误码、题号与 answer_error_reasons 是 Skill 判断能否改写重试的依据，必须原样保留。
+            if remote:
+                _logger.warning(
+                    "Rufus 报告正文校验未通过（%s），报告仅保留在 MCP 服务器：%s", exc.code, exc.report_path,
+                )
+            raise RufusReportContentError(
+                exc.code,
+                None if remote else exc.report_path.resolve(),
+                lost_question_indexes=exc.lost_question_indexes,
+                empty_question_indexes=exc.empty_question_indexes,
+                answer_error_reasons=exc.answer_error_reasons,
             ) from exc
         answers = data.get("answers")
         report_url = published_report.url

@@ -4,11 +4,13 @@
 远程 Agent）读不到；旧响应却固定要求「读取 report_path」，导致 Agent 在本地 cat/find 扑空。
 本文件用真实 RufusMcpManager + AnswerReportPublisher/Writer，只给 Amazon 抓取与 OSS 上传打桩，
 分别验证远端模式、可信上游（无 API Key）模式、本地 stdio 模式以及 CLI 输出不受影响。
+正文校验错误（Bug 12136 新增的 RUFUS_REPORT_EMPTY_CONTENT / RUFUS_REPORT_RENDER_LOSS）同样按模式改写路径。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import shlex
 from pathlib import Path
@@ -17,9 +19,11 @@ import pytest
 from typer.testing import CliRunner
 
 from opscli.amazon_rufus.cli import app
-from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
+from opscli.amazon_rufus.domain.exceptions import RufusReportContentError, RufusReportUploadError
 from opscli.amazon_rufus.domain.mcp_models import RufusGetRequest
+from opscli.amazon_rufus.services.answer_report_formatter import AnswerReportFormatter
 from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
+from opscli.amazon_rufus.services.answer_report_writer import AnswerReportWriter
 from opscli.amazon_rufus.services.mcp_manager import RufusMcpManager
 from opscli.mcp.context import mcp_request_ctx
 from opscli.mcp.tools import amazon_rufus as amazon_rufus_tools
@@ -70,13 +74,49 @@ class _FailingUploadClient:
         raise RuntimeError("upload failed")
 
 
-def _real_manager(upload_client=None) -> RufusMcpManager:
-    """构造只打桩外部依赖的真实 RufusMcpManager。"""
-    return RufusMcpManager(
-        rufus_manager=_StubRufusManager(),
-        remote_consent_store=None,  # get() 不使用远程授权偏好
-        report_publisher=AnswerReportPublisher(file_upload_client=upload_client or _StubUploadClient()),
+class _EmptyAnswerRufusManager:
+    """模拟 Rufus 空答：唯一一题没有正文且带 errorReason，发布时判 RUFUS_REPORT_EMPTY_CONTENT。"""
+
+    def get_backend(self, **kwargs):
+        """返回无正文的获取结果。"""
+        return {
+            "asin": kwargs["asin"],
+            "country": kwargs["country"],
+            "question_count": 1,
+            "questions": [kwargs.get("question") or "这是什么商品？"],
+            "answers": [{"text": "", "isSuccess": False, "errorReason": "empty_answer", "summaryText": ""}],
+        }
+
+
+class _DropAllBodiesFormatter(AnswerReportFormatter):
+    """模拟报告渲染回归：所有正文字段都没进报告，发布时判 RUFUS_REPORT_RENDER_LOSS。"""
+
+    def format_data(self, data: dict) -> str:
+        """清空正文后按原渲染器输出，题目与模板文字照常保留。"""
+        answers = [{**answer, "text": "", "summaryText": ""} for answer in data["answers"]]
+        return super().format_data({**data, "answers": answers})
+
+
+def _real_manager(upload_client=None, *, rufus_manager=None, formatter=None) -> RufusMcpManager:
+    """构造只打桩外部依赖的真实 RufusMcpManager；可替换获取结果与报告渲染器以触发正文校验错误。"""
+    # 只在需要时替换渲染器，写入器其余参数与发布器默认值一致（唯一文件名 + BOM）；None 时用发布器默认写入器
+    writer = (
+        AnswerReportWriter(formatter=formatter, unique_filenames=True, encoding="utf-8-sig")
+        if formatter is not None
+        else None
     )
+    return RufusMcpManager(
+        rufus_manager=rufus_manager or _StubRufusManager(),
+        remote_consent_store=None,  # get() 不使用远程授权偏好
+        report_publisher=AnswerReportPublisher(writer=writer, file_upload_client=upload_client or _StubUploadClient()),
+    )
+
+
+# 两类正文校验错误的触发方式：EMPTY_CONTENT 由 Rufus 空答触发，RENDER_LOSS 由渲染器丢正文触发
+_CONTENT_ERROR_CASES = {
+    RufusReportContentError.EMPTY_CONTENT: {"rufus_manager": _EmptyAnswerRufusManager()},
+    RufusReportContentError.RENDER_LOSS: {"formatter": _DropAllBodiesFormatter()},
+}
 
 
 @pytest.fixture
@@ -249,3 +289,105 @@ def test_cli_get_backend_output_is_unchanged(monkeypatch, tmp_path: Path):
     assert f"Rufus 答案报告地址：{_OSS_PREFIX}{report_files[0].name}" in result.stdout
     for key in ("storage_scope", "local_readable", "download_url", "next_action"):
         assert key not in result.stdout
+
+
+# 远端 HTTP 上下文：带 API Key 的远端调用，以及不带 API Key 的可信上游（internal），两者都不是 stdio
+_REMOTE_CTXS = {
+    "api_key": {"api_key": "mcp_key_demo", "auth_mode": "remote"},
+    "trusted_upstream": {"api_key": None, "auth_mode": "internal", "email": "user@example.com"},
+}
+
+
+@pytest.mark.parametrize("ctx", list(_REMOTE_CTXS))
+@pytest.mark.parametrize("code", list(_CONTENT_ERROR_CASES))
+def test_remote_content_error_hides_server_report_path(monkeypatch, tmp_path: Path, mcp_ctx, caplog, code, ctx):
+    """远端正文校验失败：错误不带服务端路径、文案不说「保留在本地」，题号与 answer_error_reasons 原样保留。"""
+    monkeypatch.chdir(tmp_path)
+    mcp_ctx(_REMOTE_CTXS[ctx])
+
+    with caplog.at_level(logging.WARNING, logger="opscli.amazon_rufus.services.mcp_manager"):
+        with pytest.raises(RufusReportContentError) as exc_info:
+            _get(_real_manager(**_CONTENT_ERROR_CASES[code]))
+
+    error = exc_info.value.to_dict()
+    assert error["code"] == code
+    assert "report_path" not in error
+    assert "远端 MCP 服务器" in error["message"]
+    assert "本地" not in error["message"]
+    # Skill 规则依赖的字段必须保留：EMPTY_CONTENT 靠 error_reason 区分空答与拒答，RENDER_LOSS 靠题号如实反馈
+    if code == RufusReportContentError.EMPTY_CONTENT:
+        assert error["empty_question_indexes"] == [1]
+        assert error["lost_question_indexes"] == []
+        assert error["answer_error_reasons"] == [{"question_index": 1, "error_reason": "empty_answer"}]
+    else:
+        assert error["empty_question_indexes"] == []
+        assert error["lost_question_indexes"] == [1]
+        assert error["answer_error_reasons"] == [{"question_index": 1, "error_reason": ""}]
+    # 服务端路径只写服务端日志，供审计排障
+    assert any("output/amazon-rufus/B0FL2B5HZS-" in record.getMessage() for record in caplog.records)
+
+
+@pytest.mark.parametrize("code", list(_CONTENT_ERROR_CASES))
+def test_remote_content_error_mcp_response_has_no_server_path(monkeypatch, tmp_path: Path, mcp_ctx, code):
+    """经 MCP 工具层 _err 序列化后（含反馈草案），响应中任何位置都不出现服务端报告路径。"""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        amazon_rufus_tools,
+        "_rufus_mcp_manager_for_current_request",
+        lambda **kwargs: _real_manager(**_CONTENT_ERROR_CASES[code]),
+    )
+    mcp_ctx({"api_key": "mcp_key_demo", "auth_mode": "remote"})
+
+    result = asyncio.run(amazon_rufus_tools.amazon_rufus_get("B0FL2B5HZS", "US", question="这是什么商品？"))
+
+    assert result["success"] is False
+    assert result["error"]["code"] == code
+    expected_reason = "empty_answer" if code == RufusReportContentError.EMPTY_CONTENT else ""
+    assert result["error"]["answer_error_reasons"] == [{"question_index": 1, "error_reason": expected_reason}]
+    serialized = json.dumps(result, ensure_ascii=False)
+    assert "report_path" not in serialized
+    assert "output/amazon-rufus" not in serialized
+    assert tmp_path.as_posix() not in serialized
+
+
+@pytest.mark.parametrize("code", list(_CONTENT_ERROR_CASES))
+def test_stdio_content_error_returns_absolute_report_path(monkeypatch, tmp_path: Path, code):
+    """本地 stdio 正文校验失败：错误给本机绝对路径，文案保持「保留在本地」原样。"""
+    monkeypatch.chdir(tmp_path)
+    assert mcp_request_ctx.get() is None  # 无 HTTP 请求上下文即 stdio
+
+    with pytest.raises(RufusReportContentError) as exc_info:
+        _get(_real_manager(**_CONTENT_ERROR_CASES[code]))
+
+    error = exc_info.value.to_dict()
+    report_path = Path(error["report_path"])
+    assert error["code"] == code
+    assert report_path.is_absolute()
+    assert report_path.exists()
+    assert "远端 MCP 服务器" not in error["message"]
+    assert "本地" in error["message"]
+    assert len(error["answer_error_reasons"]) == 1
+
+
+def test_cli_content_error_keeps_relative_report_path(monkeypatch, tmp_path: Path):
+    """CLI 在调用方本机运行，正文校验失败时仍输出相对报告路径，不受 MCP 模式改写影响。"""
+    monkeypatch.setattr("opscli.amazon_rufus.commands.cli.RufusManager", lambda: _EmptyAnswerRufusManager())
+    monkeypatch.setattr(
+        "opscli.amazon_rufus.services.answer_report_publisher.FileUploadClient",
+        _StubUploadClient,
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["get-backend", "B0FL2B5HZS", "US", "-q", "这是什么商品？", "--no-upload-payload"],
+    )
+
+    report_files = list((tmp_path / "output" / "amazon-rufus").glob("B0FL2B5HZS-*.md"))
+    error = json.loads(result.stdout)["error"]
+    assert result.exit_code == 1
+    assert len(report_files) == 1
+    assert error["code"] == RufusReportContentError.EMPTY_CONTENT
+    assert error["report_path"] == report_files[0].relative_to(tmp_path).as_posix()
+    assert "报告已保留在本地但未上传" in error["message"]
+    assert error["answer_error_reasons"] == [{"question_index": 1, "error_reason": "empty_answer"}]
