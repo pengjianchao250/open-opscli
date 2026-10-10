@@ -115,6 +115,7 @@ amazon_rufus_login_status(country="US")
 - `can_get_backend=true`：已有可用于 Rufus 后端/headless 获取的亚马逊 Rufus 登录态，继续调用 `amazon_rufus_get`。
 - 登录态过期、`can_get_backend=false` 或 `status=missing/invalid`：没有可用亚马逊 Rufus 登录态，执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理。
 - OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401：执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理；本分支不允许 CLI fallback。
+- `RUFUS_PLATFORM_COOKIE_UNAVAILABLE`（`retryable=true`，OPS 登录态接口临时不可用或无法访问）或旧版 `RUFUS_BAD_REMOTE_JSON`（可能为同一接口临时不可用）：不代表登录态失效，不进入登录采集入口；按[瞬时错误同路径重试](../SKILL.md#瞬时错误同路径重试)处理。
 
 `amazon_rufus_login_status` 只输出 `status`、`has_login_state`、`can_get_backend`、`session_cookie_count`、`has_streaming_request` 等脱敏摘要。不要让 Agent 读取或展示 OPS 平台 Cookie 接口 content 原文。
 
@@ -158,7 +159,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 
 ## 回答质量判断与问题重写重试
 
-每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须读取本次 `report_path` 做回答质量判断，并保留同次返回的 `report_url`。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
+每次 `amazon_rufus_get` 或 CLI `get-backend` 成功后，Agent 必须按[输出要求](#输出要求)的 `storage_scope` 规则读取本次报告正文做回答质量判断，并保留同次返回的 `report_url`。本判断只使用本次报告，不读取历史 ASIN 报告，不使用 IDE 打开的旧文件。多问题获取属于同一个 Rufus 对话，判断和重试都按题目逐项处理，但重新请求时保持完整问题列表。
 
 ### 不合格判断
 
@@ -170,7 +171,18 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 4. 回答没有覆盖问题意图。例如问题询问差评、风险、评价、适配人群、广告投放、对比、场景判断或优化建议，但答案只描述商品详情、规格参数或基础卖点。
 5. 多题场景中某一题答案串题、漏题，或回答内容明显属于另一道题。
 
-成功但 `answer_count=0` 不再按正常 0 答案报告直接结束；必须进入本节的回答质量判断与问题重写重试流程。
+`answer_count=0` 或所有题都没有正文时，获取返回 `RUFUS_REPORT_EMPTY_CONTENT` 错误而不是成功，按下方[报告正文校验错误](#报告正文校验错误)进入问题重写重试流程。
+
+### 报告正文校验错误
+
+`amazon_rufus_get` 与 CLI `get-backend` 上传前会比对 Rufus 返回的正文与渲染后的报告；未通过时报告只保留在本地，不上传，也没有 `report_url`。
+
+| 错误码 | 含义 | 处理 |
+|---|---|---|
+| `RUFUS_REPORT_RENDER_LOSS` | Rufus 有正文，但整份报告的答案正文都在渲染中丢失（只剩链接和占位），`lost_question_indexes` 列出各题 | 报告渲染问题，不进入问题重写重试，直接如实反馈错误码和题号 |
+| `RUFUS_REPORT_EMPTY_CONTENT` | 所有题都没有拿到答案正文（空答、只有商品链接、思考中或错误占位，含 `answer_count=0`） | 视为题目下没有实际答案，参考 `answer_error_reasons` 中每题的 `error_reason`，在每题 10 次上限内按本节规则改写重试 |
+
+部分题没有正文或疑似渲染丢失时获取仍然成功：MCP 返回 `empty_question_indexes` / `render_loss_question_indexes` 和 `warning`，CLI 额外输出一行「Rufus 答案报告告警」。`empty_question_indexes` 中的题按本节规则判为不合格；`render_loss_question_indexes` 中的题是渲染问题，向用户如实说明，不改写重试。
 
 ### 子 agent 改写规则
 
@@ -279,6 +291,8 @@ RUFUS_SECRET_NOT_READY
 
 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401 执行[登录采集入口](#登录采集入口)，沿用 MCP 路径，不要求预清理；本分支不允许 CLI fallback。
 
+`RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 不进入登录采集恢复，按[瞬时错误同路径重试](../SKILL.md#瞬时错误同路径重试)处理。
+
 `RUFUS_HEADLESS_REQUEST_ERROR` 的 message 可能是 `Rufus 请求失败: 403`。此时不要把 403 当作 MCP 服务不可用，也不要直接重复调用 `amazon_rufus_get`；按授权或页面上下文失效处理，进入一次登录采集恢复。
 
 ### 恢复步骤
@@ -295,17 +309,23 @@ CLI fallback 只由 `mcp_tools_unavailable` 或 `remote_consent_denied` 触发�
 
 ## 输出要求
 
-MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` 和 `report_url`。完整答案报告写入运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 用于隔离同一 ASIN 的并发请求，随后上传并返回远程地址。
+MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` 和 `report_url`。完整答案报告写入生成方（MCP 服务进程或 CLI）运行目录下的 `output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS-<UUID>.md`，UUID 用于隔离同一 ASIN 的并发请求，随后上传并返回远程地址。
+
+`amazon_rufus_get` 按 `storage_scope` 说明报告能否在调用方本地读取：
+
+- `storage_scope=remote`（远端 HTTP/SSE MCP，多客户端共享部署）：报告文件在 MCP 服务器上，`report_path` 为空、`local_readable=false`。不要在本地文件系统 cat/find 查找；需要正文时用 `curl -fsSL "<download_url>" -o <本地文件>` 下载后读取，`-f` 不可省略，避免链接失效时把错误页当成报告；下载失败时如实返回错误。
+- `storage_scope=local`（本地 stdio MCP）：`report_path` 是本机绝对路径，直接读取。
+- CLI `get-backend` 输出的是 CLI 运行目录下的相对路径，只在执行 CLI 的同一环境可读。
 
 ### 报告新鲜度约束
 
-最终回复用户时固定使用 `Rufus 报告：<report_url>`。本地 `report_path` 只用于读取正文和回答质量判断，不向用户展示。
+最终回复用户时固定使用 `Rufus 报告：<report_url>`。`report_path` 或从 `download_url` 下载的本地副本只用于读取正文和回答质量判断，不向用户展示。
 
-禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果。
+禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果；`storage_scope=remote` 时本地 `output/amazon-rufus/` 中的同 ASIN 文件都不是本次结果。
 
 登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须使用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不得混用不同调用的路径和 URL。
 
-当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。
+当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。`RUFUS_REPORT_EMPTY_CONTENT` 例外，按[报告正文校验错误](#报告正文校验错误)改写重试。
 
 除非用户明确要求排障，不输出：
 

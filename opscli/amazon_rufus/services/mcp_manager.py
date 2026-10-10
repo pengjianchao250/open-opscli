@@ -2,21 +2,37 @@
 
 from __future__ import annotations
 
+import logging
+import shlex
 from pathlib import Path
 from typing import Any
 
+from opscli.amazon_rufus.domain.exceptions import RufusReportUploadError
 from opscli.amazon_rufus.domain.mcp_models import (
     RufusGetRequest,
     RufusMcpResult,
     RufusRemoteConsentRequest,
     RufusWatchLoginRequest,
 )
-from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
+from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher, report_warning_fields
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 from opscli.amazon_rufus.transport.client import RufusTransportClient
 from opscli.auth import AuthClient
+from opscli.mcp.context import get_current_api_key, get_current_auth_mode
 from opscli.shared.file_uploads import FileUploadClient
+
+_logger = logging.getLogger(__name__)
+
+
+def _is_remote_mcp_request() -> bool:
+    """判断当前 Tool 调用是否来自 HTTP/SSE 远端 MCP 请求。
+
+    与 helpers._get_credential_dir 相同，以 API Key 判定远端；另外认证中间件会为可信上游
+    （internal 等）写入 auth_mode 但不带 API Key，这类请求同样经 HTTP 到达，不能当成 stdio
+    （与 permissions 的判定口径一致）。stdio 模式两者皆为空。
+    """
+    return bool(get_current_api_key() or get_current_auth_mode())
 
 
 class RufusMcpManager:
@@ -228,18 +244,69 @@ class RufusMcpManager:
         ))
 
     def get(self, request: RufusGetRequest) -> dict[str, Any]:
-        """获取 Rufus 回答、发布报告，并返回 MCP-safe 报告摘要。"""
+        """获取 Rufus 回答、发布报告，并按 MCP 运行模式返回报告摘要。
+
+        报告由 MCP 进程写在自身工作目录下：
+        - 远端 HTTP/SSE 模式（多客户端共享部署）：文件在 MCP 服务器上，调用方读不到，
+          因此 report_path 置空、只给 download_url 和下载指引；服务端路径只写服务端日志，
+          不放进响应，避免再次诱导调用方去本地读取；
+        - 本地 stdio 模式：与调用方同机，返回绝对路径，避免子进程 CWD 与调用方不同导致相对路径失效。
+
+        Returns:
+            MCP-safe 报告摘要，含 storage_scope / local_readable / next_action 等字段。
+
+        Raises:
+            RufusReportUploadError: 上传失败；远端模式不带 report_path，stdio 模式带绝对路径。
+        """
         data = self.rufus_manager.get_backend(**request.to_backend_kwargs())
-        published_report = self.report_publisher.publish(data)
+        remote = _is_remote_mcp_request()
+        try:
+            published_report = self.report_publisher.publish(data)
+        except RufusReportUploadError as exc:
+            # 上传失败同样按模式改写路径：远端文件调用方不可读，只记服务端日志；stdio 给绝对路径。
+            if remote:
+                _logger.warning("Rufus 报告上传失败，报告仅保留在 MCP 服务器：%s", exc.report_path)
+            raise RufusReportUploadError(
+                None if remote else exc.report_path.resolve(),
+                upload_error=exc.upload_error,
+            ) from exc
         answers = data.get("answers")
+        report_url = published_report.url
+        if remote:
+            # 服务端报告路径仅用于审计排障，记日志而不下发给调用方。
+            _logger.info("Rufus 报告已写入 MCP 服务器：%s", published_report.path.as_posix())
+            report_fields = {
+                "report_path": None,
+                "report_url": report_url,
+                "storage_scope": "remote",
+                "local_readable": False,
+                "download_url": report_url,
+            }
+            # curl 必须带 -f：链接失效时以非 0 退出，避免把 OSS 错误页当成报告写入本地；
+            # URL 经 shlex.quote 引用，防止 $、反引号等字符在调用方 shell 中被展开执行。
+            next_action = (
+                "报告保存在远端 MCP 服务器，调用方本地不存在该文件，不要在本地文件系统查找"
+                "（report_path 为空）；需要阅读内容时用 "
+                f"curl -fsSL {shlex.quote(report_url)} -o <本地文件> "
+                "下载后再做回答质量判断，下载失败时如实返回错误；最终向用户返回 report_url。"
+            )
+        else:
+            report_fields = {
+                "report_path": published_report.path.resolve().as_posix(),
+                "report_url": report_url,
+                "storage_scope": "local",
+                "local_readable": True,
+            }
+            next_action = "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。"
         return self._result({
-            "report_path": published_report.path.as_posix(),
-            "report_url": published_report.url,
+            **report_fields,
             "asin": str(data.get("asin") or "").strip().upper(),
             "country": str(data.get("country") or "").strip().upper(),
             "question_count": int(data.get("question_count") or len(data.get("questions") or [])),
+            # 部分题无正文或疑似渲染丢失时成功但附带题号告警；无告警时不加字段，响应结构保持不变（Bug 12136）
+            **report_warning_fields(published_report),
             "answer_count": len(answers) if isinstance(answers, list) else 0,
-            "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+            "next_action": next_action,
         })
 
     def _result(

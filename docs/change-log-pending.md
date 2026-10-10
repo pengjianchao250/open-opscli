@@ -11905,3 +11905,65 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条涉及的目录、元数据、Skill 参考和测试；不涉及数据库、凭据或远端配置。
 
 ---
+
+## 2026-10-10 amazon_rufus + shared/http - Bug 12133 读登录态遇网关非 JSON 响应误报 RUFUS_BAD_REMOTE_JSON
+
+**变更原因**：Codex 用 Alexa 分析 B0GVNKNFND 时，get-backend 第一步读 `GET {ops_url}/v1/platform-cookies?platform=amazon` 拿到 OPS 网关返回的非 JSON 响应（推测 nginx 502/504 HTML），公共解析函数先解 JSON 后看状态码，把网关超时、5xx 文本、空 body 全部压成 `RUFUS_BAD_REMOTE_JSON`，状态码、Content-Type、接口路径全部丢失；读登录态是幂等请求却不重试且超时 180 秒；内置 Skill 规定「CLI fallback 失败直接返回错误」，一次瞬时故障变成硬失败，Agent 还误以为是 Amazon 侧问题。
+**改动点**：
+- `opscli/shared/http.py`：`parse_remote_response` JSON 解码失败时先看状态码，`>=400` 抛 `http_error_cls`（保留业务语义），2xx/3xx 才抛 `bad_json_error_cls`；新增 `describe_non_json_response`，消息带 Content-Type、请求 path（不含 query）、空 body 标记；仅当 Content-Type 含 html 且状态码 >=400 时摘 `<title>`（≤80 字），标题命中 cookie/session/token/curl/= 等敏感模式时替换为「（已隐藏）」；2xx 与非 HTML 正文一律不回显 body。消息不写 body 字节数，避免反馈按「错误码+消息」去重的指纹随字节数漂移；未改成结构化字段，因为 11 个调用方模块的异常类 `to_dict` 都要改，改动面过大。
+- `opscli/amazon_rufus/transport/client.py`：`get_platform_cookie` 超时 180→60 秒；遇 502/503/504、非 JSON 的 5xx，或瞬时网络故障（`TimeoutException`、`ConnectError`、`ReadError`、`WriteError`、`RemoteProtocolError`）按 2s、5s 退避自动重试 2 次，耗尽抛新错误码；`UnsupportedProtocol`、`InvalidURL`、`ProxyError`、`LocalProtocolError` 等配置/本机错误不重试，原异常直接抛出。网络异常保留「类型: 原文」，原文去掉 URL 与 query 后截断到 120 字（SSL `CERTIFICATE_VERIFY_FAILED` 等根因可见）。应用层 500 JSON、401、业务码、2xx 非 JSON 不重试；`save_platform_cookie`、`submit_upload_payload` 与 Amazon 抓取请求均不加重试。
+- `opscli/amazon_rufus/domain/exceptions.py`：新增 `RufusPlatformCookieUnavailableError`（`RUFUS_PLATFORM_COOKIE_UNAVAILABLE`），沿用 `mcp/upstream.py` 的类属性 `retryable = True` 表达方式，`to_dict` 输出 `retryable`、`attempts`、`status_code`（网络异常时省略）。文案按来源区分：有 HTTP 状态码时为「OPS 后端读取亚马逊登录态临时不可用」，网络异常时为「OPS 登录态接口无法访问（可能是 OPS 后端、网关或本机网络/代理问题）」，均注明不是 Amazon 的问题、无需重新登录、可稍后重试，并附最后一次失败诊断。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents` 安装副本逐字节同步）：SKILL.md 新增「瞬时错误同路径重试」节，适用错误仅限 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 与旧版 `RUFUS_BAD_REMOTE_JSON`（旧码表述为「可能为同一接口临时不可用」），明确不适用于报告下载失败、`RUFUS_REPORT_*`、`RUFUS_HEADLESS_*`；等待后原命令原路径重试 1 次，不切 MCP/CLI、不触发 logout/watch-login、不计入回答质量重试；主流程第 13 步改为「仅上述两个错误码」，CLI fallback 子流程第 5 条与 fallback 边界补充衔接措辞；`references/rufus-mcp-workflow.md` 登录态检查与登录采集恢复两处声明这两个错误码不进入登录采集。VERSION.json 未改（该模板既有惯例：文档改动不随改版本号，且 `skills upgrade` 只写题库与 VERSION.json，单独升版会造成「版本新、文档旧」假象）。
+- `docs/guide/AmazonRufus功能说明.md`：错误码表新增 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE`、更新 `RUFUS_BAD_REMOTE_JSON` 含义，失败处理补一条。
+- 测试：新增 `tests/shared/test_http_non_json.py`（离线复现 8 种响应参数化、消息不含字节数、2xx 不回显 body、text/plain 的 4xx 不摘 title、敏感标题占位、极简桩对象、11 个调用方模块的 504 HTML 均映射为 HTTP 错误）；`tests/amazon_rufus/test_transport.py` 新增 8 种响应参数化（含不泄露 Cookie 反向断言）、504→200 重试成功、连续 504 抛可重试错误码、6 类瞬时网络异常重试且保留原文、配置类异常不重试、SSL 错误原文保留且去掉 URL/query、应用层 500 JSON 不重试、保存不重试、CLI get-backend 端到端；原 `test_get_platform_cookie_sends_platform_query` 断言 `timeout == 10` 与实现 180 不符（release 既有失败），改为断言新值 60；新增 `tests/skills/test_ops_amazon_rufus_transient_retry_docs.py` 文档契约。
+**验证结果**：先在 release f9c99303 原始代码副本上跑新测试复现缺陷（25 failed/10 passed）；审查返修的新增用例在返修前实现上 18 failed，返修后通过。修复后 worktree 根目录 `python -m pytest`：tests/amazon_rufus 166 passed、tests/shared 183 passed、tests/query 855 passed、tests/amazon 21 passed、tests/feedback 29 passed、tests/baiyi 31 passed、tests/asin_data 124 passed、tests/seller_sprite 594 passed、tests/yingyan 5 passed、tests/skills 395 passed/9 failed、tests/mcp（排除收集期即 ImportError 的 test_shopify_tools.py）546 passed/2 failed、tests/asin_data_collector 19 passed/5 failed、tests/google_trends 84 passed/1 failed、tests/canopy 10 passed/1 failed。以上 18 条失败与 release f9c99303 原始副本同命令复跑的失败清单逐条 diff 一致，属既有基线失败（skills 9：dashboard/manager/reviews/app_build_spec/feedback_report_server/methods_card；mcp 2：test_keepa_registration、test_seller_sprite_tools；asin_data_collector 5；google_trends、canopy 的 test_cli_split 各 1），与本次改动无关。新错误文案已校验 GBK 可编码。
+**影响范围**：
+- 所有走 `parse_remote_response` 的模块（query、amazon、feedback、amazon_rufus、asin_review、baiyi、asin_data 的 category_top/bi_report_data/report_files、shared/integration_accounts、mcp_client/config_client、ops-cli-view-runner 脚本）遇「非 JSON 的 4xx/5xx」时，错误码由 `*_BAD_JSON`/`BAD_REMOTE_JSON` 变为对应 `*_HTTP_ERROR` 并带 `status_code`；2xx 非 JSON 仍为 bad_json，消息文案追加诊断括号（前缀不变）。仓内无代码按 `BAD_REMOTE_JSON` 字面值分支，ops-agent control_plane/database/scripts 亦无引用。
+- Rufus 读登录态最坏等待由 180 秒变为约 187 秒（3×60+7）。
+- Skill 文档生效路径：`opscli skills upgrade ops-amazon-rufus-or-alexa` 只同步题库与 VERSION.json，不更新 SKILL.md/references；已安装用户需升级到含本修复的 opscli 后执行 `opscli skills install ops-amazon-rufus-or-alexa --force`，或由技能广场重新发布后安装，才能拿到新 SKILL.md。旧版 opscli 用户执行 `skills upgrade` 拿不到新规则，`install --force` 也只会装回旧版内置模板；只有通过广场发布新版 Skill，旧客户端用户才能用上兼容 `RUFUS_BAD_REMOTE_JSON` 的重试规则。
+- feedtask、shopify 自带的解析器未走公共函数，仍有同类问题，未在本次修改。
+**回滚方式**：回退本条对应 commit；仅回滚 Rufus 重试可单独还原 `transport/client.py` 与 `domain/exceptions.py`，公共解析与 Skill 文案可独立保留。
+
+---
+
+## 2026-10-10 Amazon Rufus MCP - Bug 12138 远端模式报告不再指示读取服务端本地路径
+
+**变更原因**：远端 HTTP MCP（多客户端共享部署）调用 `amazon_rufus_get` 成功后，`report_path` 是 MCP 服务进程工作目录下的相对路径，`next_action` 却固定要求「读取 report_path」；Agent 在沙箱内 cat/全盘 find 均扑空（QA 会话 1057444 seq 5124/5208/5350 浪费 3 轮 LLM 往返），并有误读 CLI 历史同 ASIN 报告的风险。服务端本可识别远端模式但响应未区分。
+**改动点**：
+- `opscli/amazon_rufus/services/mcp_manager.py`：新增 `_is_remote_mcp_request()`（API Key 或认证中间件写入的 auth_mode 任一存在即远端，覆盖不带 API Key 的可信上游 internal 模式）；`get()` 按模式分流——远端返回 `storage_scope="remote"`、`local_readable=false`、`report_path=null`、`download_url`（= report_url），服务端报告路径只写服务端 logger、不下发，`next_action` 改为「不要在本地文件系统查找，用 `curl -fsSL <shlex.quote(url)> -o <本地文件>` 下载后判断，失败如实报错，最终向用户返回 report_url」；本地 stdio 返回 `storage_scope="local"`、`local_readable=true`、绝对路径 `report_path`。`report_url` 字段保持不变。上传失败（`RufusReportUploadError`）在 MCP 层按模式改写：远端去掉 `report_path` 并记服务端日志，stdio 改为 resolve 后的绝对路径。
+- `opscli/amazon_rufus/domain/exceptions.py`：`RufusReportUploadError` 允许 `report_path=None`（仅远端 MCP 使用），此时文案为「报告只保存在远端 MCP 服务器上，调用方无法读取，请稍后重试获取」且错误结构不含 `report_path`；有路径时文案保持原「已保留本地文件」，CLI 行为不变。
+- `opscli/mcp/tools/amazon_rufus.py`：`amazon_rufus_get` 工具描述去掉「返回本地路径」，补充按 storage_scope 的读取说明。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本同步）：SKILL.md 主流程第 10/11/14/22 步与回答质量判断第 1 步、`references/rufus-mcp-workflow.md` 回答质量判断与「输出要求/报告新鲜度约束」、README「报告与安全」改为按 storage_scope 读取报告，remote 时 `report_path` 为 null、禁止本地查找并用 `curl -fsSL` 下载 report_url。
+- 文档：`docs/design/rufus-report-upload-errors.md` 补充远端/本地两种上传失败结构与示例；`docs/guide/AmazonRufus功能说明.md` 5.3、7、14.2 节「只返回/读取 report_path」改为按 storage_scope 说明。
+- 测试：新增 `tests/amazon_rufus/test_mcp_report_storage_scope.py` 8 条（远端 API Key、可信上游无 API Key、本地 stdio 绝对路径、URL 含 `$`/反引号时 curl 命令安全引用、远端上传失败不带路径、stdio 上传失败给绝对路径、工具层线程内上下文传递、CLI 输出不变）；更新 `test_mcp_manager.py`、`test_amazon_rufus_tools.py` 中写死旧 next_action 文案的断言。
+- 程序化消费方核查：在 opscli、ops-agent、ops-agent-browser-ext、opscli-claude 中检索，MCP `amazon_rufus_get` 的 `report_path` 无程序化消费方（asin_data 采集器解析的是 CLI stdout，ops-agent 仅提示词文本提及），故远端模式置为 null。
+**验证结果**：修复前新增用例 4 failed、1 passed（CLI 用例），复现远端响应无 storage_scope 且仍指示读取 report_path；返修后在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus/ tests/mcp/test_amazon_rufus_tools.py tests/skills/ -q`：568 passed、10 failed；10 条失败（`test_transport.py::test_get_platform_cookie_sends_platform_query` 及 `tests/skills/` 下 dashboard/manager/reviews/app_build_spec/feedback_report_server/methods_card 9 条）在主工作区 release f9c99303 原始代码上同一命令同样失败（560 passed、10 failed），失败清单逐条一致，属既有基线。另跑 `tests/mcp/test_asin_data_tools.py tests/mcp/test_tool_catalog.py tests/mcp/test_context.py tests/shared/test_file_uploads.py` 39 passed。`git diff --check` 通过。测试全部打桩 Amazon 抓取与 OSS 上传，未访问真实网络。
+**影响范围**：`amazon_rufus_get` MCP 成功响应结构（远端模式 `report_path` 由字符串变为 null，新增 storage_scope/local_readable/download_url；本地模式 report_path 变为绝对路径）与上传失败错误结构（远端不再含 report_path）、工具描述、内置 Skill 与说明文档；CLI `get-backend` 输出与错误不变。远端 MCP 服务需重新部署才生效，stdio/CLI 随下一版 opscli 发布生效；旧版 Skill 模板过渡期依靠 next_action 引导。
+**回滚方式**：回退本条对应提交（mcp_manager、异常类、工具描述、Skill 模板与安装副本、设计/说明文档、相关测试）。
+**后续事项（未在本次范围）**：远端模式报告仍写入 MCP 服务器 `output/amazon-rufus/`，上传后未删除，可能持续累积多租户报告文件，待确认服务端磁盘策略后再决定是否改为临时目录并上传后清理。
+
+---
+
+## 2026-10-10 Amazon Rufus - Bug 12136 报告正文保真校验与正文/链接分开渲染
+
+**变更原因**：答案报告无论正文是否丢失都会「写完即上传」，CLI 输出「已保存」、MCP 返回 `success:true`，空壳报告（只剩商品链接和大量「无」）被当成交付物；formatter 仍把 productLinks 当正文最后兜底，诊断模板不单独渲染链接，summaryText 与正文相同时整段重复输出。
+**改动点**：
+- `services/report_validator.py` 新增 `AnswerReportFidelityChecker` 与 `skeleton_report_data()`：
+  - 骨架报告：把每题正文字段（answer、text、blocks、summaryText）与结构化诊断报告字段清空后，用同一渲染器渲染一份骨架；报告中与骨架相同的行（题目标题、小节标题、诊断表头、「未获取到答案」、相关产品与推荐 ASIN 等模板文字）不参与比对。
+  - 源正文侧对称过滤：与骨架行规整后相同且像标题（不少于 8 个字符或以「N、」开头）的回显行、「模板标题：占位词」同行写法不算正文；剩余行全是占位词（无、暂无、暂无数据、没有、未提供、none、na、n/a）、`isSuccess=false` 且 text 为空、或 errorReason 为 `thinking_placeholder` / `official_error_placeholder` 时按无正文处理。
+  - 指纹：每题取全部正文来源，逐行生成整行、去「标签：」前缀、按竖线拆单元格三类 24 字符片段，两侧链接只按 ASCII 剔除，在本题「## 」章节内任一命中即视为正文在。
+  - 判定：所有题都没有正文（含缺答案的题，题号按题目数填全）→ `RUFUS_REPORT_EMPTY_CONTENT`；有正文的题全部找不到（原 Bug 的空壳形态）→ `RUFUS_REPORT_RENDER_LOSS`；只有部分题找不到或无正文时照常通过并返回题号供告警。不设报告级字数下限。
+- `services/answer_report_publisher.py`：`publish()` 上传前生成骨架并校验（CLI 与 MCP 共用入口），骨架渲染异常时记 warning（带 report_path）并退化为不剔除模板行的校验，不让发布失败；未通过抛 `RufusReportContentError`，保留本地文件、不上传；`PublishedAnswerReport` 增加 `empty_question_indexes`、`render_loss_question_indexes`，新增 `report_warning_fields()` 供 CLI/MCP 共用告警文案。
+- `domain/exceptions.py` 新增 `RufusReportContentError`（两个错误码，`to_dict` 含 `report_path`、`lost_question_indexes`、`empty_question_indexes` 与按题序的 `answer_error_reasons`）。
+- `commands/cli.py`：校验失败走既有错误分支（exit 1，不输出「已保存」）；部分题无正文或疑似渲染丢失时多输出一行「Rufus 答案报告告警：…」。
+- `services/mcp_manager.py`：失败沿用 `_err` 通用映射（`success:false` + 错误码）；成功响应仅在有告警时追加 `empty_question_indexes` / `render_loss_question_indexes` 与 `warning`，其余字段不变。
+- `services/answer_report_formatter.py`：新增 `compact_for_compare()` 比对口径；`_answer_text` 去掉商品链接兜底正文；诊断模板在固定小节前追加独立「### 相关产品」；自定义题 summaryText 与 text 原文相同且渲染后的答案就是这段文本时不再输出「### 总结」。`_split_numbered_sections` 保持 release 原逻辑不变。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本同步）：`SKILL.md` 在「回答质量判断与问题重写重试」节末补一段（RENDER_LOSS 表示整份报告正文丢失，不得改写重试；部分题疑似丢失为告警，如实说明、不改写重试；EMPTY_CONTENT 视为题目下没有实际答案，可参考 `answer_error_reasons` 在每题 10 次上限内改写重试），第 13、22 条注明 EMPTY_CONTENT 例外；`references/rufus-mcp-workflow.md` 新增「报告正文校验错误」小节，`answer_count=0` 的旧描述与「失败直接返回」一段同步注明。
+- 测试：新增 `tests/amazon_rufus/test_report_fidelity.py`、6 题真实正文 fixture `b0fl2b5hzs_6q.json` 与中文诊断格式 fixture `diagnosis_zh_7q.json`。既有短答用例（「适合送礼」「适合」「答案：…」）保持原样通过；`test_report_publisher.py`、`test_mcp_manager.py` 中发布零个答案、或假写入器/假渲染器不输出答案正文的用例，改为一条短答「适合」并让假报告包含它。
+**验证结果**：`python -m pytest tests/amazon_rufus/ tests/mcp/test_amazon_rufus_tools.py tests/asin_data tests/asin_data_collector tests/skills -q` 为 766 passed、15 failed；同一命令在 release `f9c99303` 干净导出目录中为 703 passed、15 failed，失败清单逐条一致（多出的 63 条为新增保真测试），属于既有基线。新增用例覆盖：正文来源 × 有无链接 × 自定义题/诊断题矩阵；中文/英文短答与拒答照常上传；中文诊断编号与推断格式不误判；链接覆盖正文、丢掉全部正文时判 RENDER_LOSS（含中文编号诊断第 1~7 题、一字短答且问题含该字、正文首行复述问题、推荐 ASIN 描述与正文同句）；只丢一题时成功并告警；回显格式模板、只写小节标题、小节标题加「无」的 6 种形态（部分题为无正文告警、整体回显通过、全部只有标题时 EMPTY_CONTENT）；零个答案、全是占位、每题只答「无」、单元格为 None 判 EMPTY_CONTENT 且题号按题目数填全；骨架渲染失败退化且发布成功；同一 fixture 经 CLI 与 MCP 工具两条路径报告字节一致、成功/告警/错误码一致。第三轮复审脚本：原 Bug 27 组回归（3 种缺陷渲染器 × 自定义/诊断/中英文/blocks/无题目）全部 RENDER_LOSS 且列出全部题号；`split_cmp.py` 12 种编号变体的渲染与 release 完全一致。离线复现脚本回放：真实形态（text+summaryText）报告从 23099 字符降到 12160 字符，正文标记 18/18。
+**影响范围**：`opscli amazon-rufus get-backend` 与 MCP `amazon_rufus_get` 的报告发布结果。行为变化：① 有正文的题在报告里全部找不到时报 `RUFUS_REPORT_RENDER_LOSS`、不上传，以前照常上传空壳；② 只有部分题找不到时照常上传，并以 `render_loss_question_indexes` + 告警提示（启发式误判最多产生告警，不阻断报告）；③ 所有题都没有正文（全部空答、只返回链接、全是思考中/错误占位、只回显格式模板或小节标题、每题只答「无」、零个答案）报 `RUFUS_REPORT_EMPTY_CONTENT`、不上传，Skill 允许按原规则在每题 10 次上限内改写重试；④ 部分题无正文时照常上传并以 `empty_question_indexes` + 告警提示。formatter 改动（链接不再当正文、相关产品小节、总结去重）同时影响批量诊断与 asin_data 的 Rufus 报告渲染。需随 opscli 新版本发布及远端 MCP 重新部署后生效。
+**风险**：EMPTY_CONTENT 是工具调用失败，Agent 按 Skill 改写重试时，同一错误在会话内连续出现可能触发全局「工具失败自动反馈」规则自动提交反馈；部分题真实丢失时只告警不阻断，依赖 Agent 按 Skill 如实告知用户；骨架渲染失败时退化为不剔除模板行的比对，检测力下降但不影响发布。
+**后续事项（本次不修）**：formatter 既有缺陷——回答全用「1、2、3、」列内容条目时被 `_split_numbered_sections` 当作小节标记吞掉整段内容，小节内「1、2、3、」要点被 `_drop_intro_and_headers` 丢弃。本次保真校验会把这类部分题丢失报为渲染丢失告警。修复思路见复审原型 `review12136_r3/proto_split.py`：编号小节识别改为「标题匹配，或序号递增且短标题样式」，小节内非标题的「N、」条目加保护前缀后再进入旧规则；需同时用 `split_cmp.py` 的 12 种编号变体与批量诊断校验器回归，确保不比现状倒退。
+**回滚方式**：回退本条对应提交，恢复 publisher 无校验上传、formatter 链接兜底与总结重复输出，移除新增异常、测试与 fixture、Skill 与参考文档新增内容。
+
+---

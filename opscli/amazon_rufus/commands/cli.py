@@ -13,7 +13,7 @@ from opscli.amazon_rufus.domain.exceptions import (
     InvalidRufusPlatformError,
     RufusError,
 )
-from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher
+from opscli.amazon_rufus.services.answer_report_publisher import AnswerReportPublisher, report_warning_fields
 from opscli.amazon_rufus.services.manager import RufusManager
 from opscli.amazon_rufus.services.remote_consent import RemoteConsentStore
 
@@ -42,10 +42,14 @@ def _emit(payload: dict, pretty: bool) -> None:
 
 
 def _emit_answer_report(data: dict) -> None:
-    """写入并发布 Rufus 答案报告。"""
+    """写入并发布 Rufus 答案报告；正文校验未通过时 publish 抛错，不会输出「已保存」。"""
     report = AnswerReportPublisher().publish(data)
     typer.echo(f"Rufus 答案报告已保存：{report.path.as_posix()}")
     typer.echo(f"Rufus 答案报告地址：{report.url}")
+    # 部分题没有正文或疑似渲染丢失时仍算成功，但要明确告诉调用方是哪几题（Bug 12136）。
+    warning = report_warning_fields(report).get("warning")
+    if warning:
+        typer.echo(f"Rufus 答案报告告警：{warning}")
 
 
 def _error_payload(command: str, exc: Exception) -> dict:

@@ -82,21 +82,74 @@ class HeadlessRufusRequestError(RufusError):
 
 
 class RufusReportUploadError(RufusError):
-    """Rufus 报告上传失败，本地文件仍然保留。"""
+    """Rufus 报告上传失败；调用方可读时保留本地文件路径。"""
 
     code = "RUFUS_REPORT_UPLOAD_ERROR"
 
-    def __init__(self, report_path: str | Path, *, upload_error: dict | None = None) -> None:
-        super().__init__("Rufus 报告上传失败，已保留本地文件")
-        self.report_path = Path(report_path)
+    def __init__(self, report_path: str | Path | None, *, upload_error: dict | None = None) -> None:
+        # report_path 为 None 表示报告只在远端 MCP 服务器上，调用方读不到，不能再提示「已保留本地文件」。
+        super().__init__(
+            "Rufus 报告上传失败，已保留本地文件" if report_path is not None
+            else "Rufus 报告上传失败，报告只保存在远端 MCP 服务器上，调用方无法读取，请稍后重试获取"
+        )
+        self.report_path = Path(report_path) if report_path is not None else None
         self.upload_error = upload_error
 
     def to_dict(self) -> dict:
-        """返回包含本地报告路径的稳定错误结构。"""
+        """返回稳定错误结构；仅在调用方可读时包含报告路径。"""
         payload = super().to_dict()
-        payload["report_path"] = self.report_path.as_posix()
+        if self.report_path is not None:
+            payload["report_path"] = self.report_path.as_posix()
         if self.upload_error is not None:
             payload["upload_error"] = self.upload_error
+        return payload
+
+
+class RufusReportContentError(RufusError):
+    """Rufus 报告正文校验未通过：保留本地文件供排查，但不上传、不视为成功。
+
+    RENDER_LOSS：有正文的题在报告里全部找不到（只剩链接和占位的空壳），是报告渲染问题，改写问题重试无效；
+    只有部分题找不到时不抛错，由发布结果告警；
+    EMPTY_CONTENT：所有题都没有拿到答案正文（Rufus 返回为空、只有商品链接或只是占位内容），
+    可结合 answer_error_reasons 中每题的 error_reason 区分空答与拒答，按回答质量规则改写重试。
+    """
+
+    RENDER_LOSS = "RUFUS_REPORT_RENDER_LOSS"
+    EMPTY_CONTENT = "RUFUS_REPORT_EMPTY_CONTENT"
+    code = EMPTY_CONTENT
+
+    def __init__(
+        self,
+        code: str,
+        report_path: str | Path,
+        *,
+        lost_question_indexes: tuple[int, ...] | list[int] = (),
+        empty_question_indexes: tuple[int, ...] | list[int] = (),
+        answer_error_reasons: list[str] | None = None,
+    ) -> None:
+        if code == self.RENDER_LOSS:
+            lost = "、".join(str(index) for index in lost_question_indexes)
+            message = f"Rufus 报告渲染丢失了全部答案正文（第 {lost} 题），已保留本地文件但未上传；这是报告渲染问题，不要改写问题重试"
+        else:
+            message = "Rufus 所有题都没有返回答案正文（回答为空、只有商品链接或只是占位内容），报告已保留在本地但未上传"
+        super().__init__(message)
+        self.code = code
+        self.report_path = Path(report_path)
+        self.lost_question_indexes = list(lost_question_indexes)
+        self.empty_question_indexes = list(empty_question_indexes)
+        # 按题序保存 Rufus 回答的 errorReason（如 empty_answer、shopping_scope_refusal），空串表示未标记原因
+        self.answer_error_reasons = list(answer_error_reasons or [])
+
+    def to_dict(self) -> dict:
+        """返回包含本地报告路径、丢失/无正文题号与每题 error_reason 的稳定错误结构。"""
+        payload = super().to_dict()
+        payload["report_path"] = self.report_path.as_posix()
+        payload["lost_question_indexes"] = self.lost_question_indexes
+        payload["empty_question_indexes"] = self.empty_question_indexes
+        payload["answer_error_reasons"] = [
+            {"question_index": index, "error_reason": reason}
+            for index, reason in enumerate(self.answer_error_reasons, start=1)
+        ]
         return payload
 
 
@@ -177,6 +230,38 @@ class RufusPlatformCookieAuthError(RufusError):
         """转换为包含 HTTP 状态码的稳定 JSON 错误结构。"""
         payload = super().to_dict()
         payload["status_code"] = self.status_code
+        return payload
+
+
+class RufusPlatformCookieUnavailableError(RufusError):
+    """OPS 平台 Cookie 接口读登录态遇网关 5xx 或瞬时网络故障，自动重试耗尽后仍失败。"""
+
+    code = "RUFUS_PLATFORM_COOKIE_UNAVAILABLE"
+    # 与 opscli/mcp/upstream.py 一致用类属性 + to_dict 字段表达可重试，Skill 据此做同路径重试
+    retryable = True
+
+    def __init__(self, *, attempts: int, last_error: str, status_code: int | None = None) -> None:
+        # 有 HTTP 状态码说明请求到达了 OPS 网关，确属后端临时不可用；没有状态码是网络层失败，
+        # 也可能是本机网络/代理/证书问题，不能断言是后端故障
+        if status_code is None:
+            summary = "OPS 登录态接口无法访问（可能是 OPS 后端、网关或本机网络/代理问题）"
+        else:
+            summary = "OPS 后端读取亚马逊登录态临时不可用"
+        # 文案先给结论（OPS 侧、可重试、不用重新登录），诊断细节放括号里供反馈定位
+        super().__init__(
+            f"{summary}，不是 Amazon 的问题，也无需重新登录，可稍后重试"
+            f"（已尝试 {attempts} 次；最后一次失败：{last_error}）"
+        )
+        self.attempts = attempts
+        self.status_code = status_code
+
+    def to_dict(self) -> dict:
+        """转换为带可重试标记、尝试次数和 HTTP 状态码（网络异常时无）的稳定错误结构。"""
+        payload = super().to_dict()
+        payload["retryable"] = self.retryable
+        payload["attempts"] = self.attempts
+        if self.status_code is not None:
+            payload["status_code"] = self.status_code
         return payload
 
 
