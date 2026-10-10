@@ -96,16 +96,18 @@ def test_mcp_manager_get_publishes_report_and_filters_sensitive(monkeypatch, tmp
     assert captured["include_upload_payload"] is False
     assert captured["timeout_seconds"] == 180
     assert captured["published_data"]["asin"] == "B0TEST1234"
+    # 无 MCP 请求上下文即 stdio 本地模式：report_path 为本机绝对路径（Bug 12138）。
     assert result == {
-        "report_path": result["report_path"],
+        "report_path": (tmp_path / "output/amazon-rufus/B0TEST1234-test.md").resolve().as_posix(),
         "report_url": "https://files.example.com/B0TEST1234-test.md",
+        "storage_scope": "local",
+        "local_readable": True,
         "asin": "B0TEST1234",
         "country": "US",
         "question_count": 1,
         "answer_count": 1,
-        "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+        "next_action": "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。",
     }
-    assert result["report_path"].startswith("output/amazon-rufus/B0TEST1234-")
     combined = json.dumps(result, ensure_ascii=False).lower()
     assert "cookie" not in combined
     assert "storage_state" not in combined

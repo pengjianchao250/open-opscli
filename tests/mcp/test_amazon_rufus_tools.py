@@ -153,7 +153,7 @@ def test_amazon_rufus_get_writes_report_and_filters_sensitive(monkeypatch, tmp_p
                 "country": "US",
                 "question_count": 1,
                 "answer_count": 1,
-                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+                "next_action": "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。",
             }
 
     monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda **kwargs: DummyManager())
@@ -179,7 +179,7 @@ def test_amazon_rufus_get_writes_report_and_filters_sensitive(monkeypatch, tmp_p
         "country": "US",
         "question_count": 1,
         "answer_count": 1,
-        "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+        "next_action": "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。",
     }
 
 
@@ -197,7 +197,7 @@ def test_amazon_rufus_get_accepts_multiple_questions(monkeypatch, tmp_path: Path
                 "country": "US",
                 "question_count": len(request.questions),
                 "answer_count": len(request.questions),
-                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+                "next_action": "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。",
             }
 
     monkeypatch.setattr(amazon_rufus_tools, "_rufus_mcp_manager_for_current_request", lambda **kwargs: DummyManager())
@@ -718,7 +718,7 @@ def test_amazon_rufus_get_runs_manager_outside_event_loop(monkeypatch, tmp_path:
                 "country": request.country,
                 "question_count": 1,
                 "answer_count": 1,
-                "next_action": "请读取 report_path 做回答质量判断，最终向用户返回 report_url。",
+                "next_action": "请读取 report_path（本机绝对路径）做回答质量判断，最终向用户返回 report_url。",
             }
 
     async def scenario():

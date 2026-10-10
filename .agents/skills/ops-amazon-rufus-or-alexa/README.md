@@ -39,7 +39,7 @@ ops-amazon-rufus-or-alexa/
 
 ## 报告与安全
 
-`report_path` 和 `report_url` 是不可拆分的一对：本地路径用于质量判断，最终回复使用本次报告地址，不得返回历史 ASIN 报告或历史 URL。详细要求见[报告新鲜度约束](references/rufus-mcp-workflow.md#报告新鲜度约束)。
+`report_path` 和 `report_url` 是不可拆分的一对：报告正文用于质量判断（`storage_scope=local` 读本机 `report_path`；`remote` 时 `report_path` 为空，用 `curl -fsSL` 下载 `download_url` 后读取，不在本地查找），最终回复使用本次报告地址，不得返回历史 ASIN 报告或历史 URL。详细要求见[报告新鲜度约束](references/rufus-mcp-workflow.md#报告新鲜度约束)。
 
 不向报告、回复、反馈或普通日志输出亚马逊登录态及 OPS 凭证；排障工具使用边界见 [SKILL.md](SKILL.md#排障初始化-mcp-工具边界)。
 

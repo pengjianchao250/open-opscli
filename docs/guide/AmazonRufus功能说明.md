@@ -157,7 +157,7 @@ amazon_rufus_watch_login / opscli amazon-rufus watch-login
 output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
 ```
 
-报告写入器是 `AnswerReportWriter`，格式化器是 `AnswerReportFormatter`。MCP 成功返回时只返回本次 `report_path` 及摘要字段，不会回传完整答案上下文中的敏感请求材料。
+报告写入器是 `AnswerReportWriter`，格式化器是 `AnswerReportFormatter`。MCP 成功返回时只返回本次报告地址（`report_url`）、报告读取方式（`storage_scope` 等）及摘要字段，不会回传完整答案上下文中的敏感请求材料。远端 HTTP/SSE MCP 的报告写在 MCP 服务器上，`report_path` 为 null；只有本地 stdio MCP 返回本机绝对路径 `report_path`。
 
 ## 6. CLI 命令说明
 
@@ -220,7 +220,10 @@ MCP 层通过 `RufusMcpManager` 做两件事：
 
 比如 `amazon_rufus_get` 最终只返回：
 
-- `report_path`
+- `report_url`：本次报告地址，最终回复用户时使用
+- `storage_scope` / `local_readable`：`remote` 表示报告在远端 MCP 服务器、调用方本地不可读；`local` 表示本地 stdio MCP、可直接读取
+- `report_path`：仅 `storage_scope=local` 时为本机绝对路径；`remote` 时为 null
+- `download_url`：仅 `remote` 时返回，与 `report_url` 相同，用于 `curl -fsSL` 下载正文
 - `asin`
 - `country`
 - `question_count`
@@ -458,7 +461,7 @@ auth_is_authenticated / auth_mcp_login
   -> amazon_rufus_login_status(country)
   -> 必要时 amazon_rufus_watch_login(asin, country, close_browser=true)
   -> amazon_rufus_get(asin, country, question/questions/skills_dir)
-  -> 读取本次返回的 report_path
+  -> 读取本次报告：storage_scope=local 读 report_path；remote 时用 curl -fsSL 下载 report_url
 ```
 
 单题示例：
@@ -494,7 +497,7 @@ amazon_rufus_get(
 )
 ```
 
-MCP 成功返回后，只使用本次响应里的 `report_path`。不要按 ASIN 去 `output/amazon-rufus/` 目录中挑历史报告。
+MCP 成功返回后，只使用本次响应里的报告：`storage_scope=local` 读 `report_path`；`storage_scope=remote` 时 `report_path` 为 null，不要在本地查找，用 `curl -fsSL` 下载同次 `report_url` 后读取。不要按 ASIN 去 `output/amazon-rufus/` 目录中挑历史报告。
 
 ### 14.3 推荐运行流程：CLI fallback
 
