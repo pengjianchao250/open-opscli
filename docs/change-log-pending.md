@@ -11967,3 +11967,19 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条对应提交，恢复 publisher 无校验上传、formatter 链接兜底与总结重复输出，移除新增异常、测试与 fixture、Skill 与参考文档新增内容。
 
 ---
+
+## 2026-10-10 Amazon Rufus MCP - 集成审查 M4 远端模式正文校验错误不再带出服务端报告路径（Bug 12136 × 12138）
+
+**变更原因**：12138 已在 `RufusMcpManager.get()` 按运行模式分流成功响应与 `RufusReportUploadError`，但同日 12136 新增的 `RufusReportContentError`（`RUFUS_REPORT_EMPTY_CONTENT` / `RUFUS_REPORT_RENDER_LOSS`）从 `publish()` 抛出后原样透传，经 `_err` → `to_dict()` 把 MCP 服务进程工作目录下的相对 `report_path` 交给调用方：远端模式调用方读不到，Agent 又会去本地 cat/find（正是 12138 要消除的情形），文案「报告已保留在本地」同样误导；stdio 模式下也是相对路径而非绝对路径。
+**改动点**：
+- `opscli/amazon_rufus/domain/exceptions.py`：`RufusReportContentError` 允许 `report_path=None`（仅远端 MCP 使用），此时 `to_dict` 不输出 `report_path`，文案改为「报告只保存在远端 MCP 服务器上、调用方无法读取，且未上传」；有路径时文案与字段保持原样，CLI 行为不变。
+- `opscli/amazon_rufus/services/mcp_manager.py`：`get()` 新增捕获 `RufusReportContentError`，复用上传失败的做法——远端模式把服务端路径（含错误码）只写服务端 warning 日志、重新抛出不带路径的错误；stdio 改为 `resolve()` 后的绝对路径。错误码、`lost_question_indexes`、`empty_question_indexes`、`answer_error_reasons` 原样保留（Skill 依赖它们判断能否改写重试）。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本逐字节同步）：`SKILL.md` 主流程第 10 步补「登录态检查返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 时不进入登录采集入口，按瞬时错误同路径重试处理」；第 18 步与 `references/rufus-mcp-workflow.md`「报告新鲜度约束」中的「`report_path` 和 `report_url` 成对替换」改为「按 `storage_scope` 用最新响应的读取入口（`report_path` 或 `download_url`；CLI 为 `report_path`）和 `report_url` 同步替换旧值」（reference 同一处陈旧措辞一并修正，避免两份文档互相矛盾）；回答质量节末补「改写重试全部耗尽仍从未成功、没有任何成功的 `report_url` 时，如实返回最后一次 `RUFUS_REPORT_EMPTY_CONTENT` 错误与各题 `error_reason`，不展示报告链接；曾有成功调用时以主流程第 21 步为准（展示最新一次成功的 `report_url` 并说明相应题目已达重试上限）」，reference「报告新鲜度约束」中 EMPTY_CONTENT 例外句同步补上这两个分支，消除与第 21/22 步「失败不得用历史 report_url 兜底」的既有歧义；reference「报告正文校验错误」小节开头「未通过时报告只保留在本地」改为「只保留在生成方所在机器（CLI 与 stdio MCP 为本机、远端 MCP 为服务器，远端调用方不可读）」。
+- `docs/guide/AmazonRufus功能说明.md`：错误码表补 `RUFUS_REPORT_RENDER_LOSS`、`RUFUS_REPORT_EMPTY_CONTENT`，并说明两类错误中的 `report_path` 只在 CLI（相对路径）与本地 stdio MCP（绝对路径）返回，远端 MCP 不返回。
+- 测试：`tests/amazon_rufus/test_mcp_report_storage_scope.py` 新增 9 条——远端 EMPTY_CONTENT / RENDER_LOSS 错误在 API Key 远端与可信上游（internal，无 API Key）两种上下文下都不含 `report_path`、文案不提「本地」、题号与 `answer_error_reasons` 保留、服务端路径进日志（4 条）；两类错误经 MCP 工具层 `_err`（含反馈草案）序列化后任何位置都不出现 `report_path` 与服务端路径（2 条）；stdio 两类错误为存在的绝对路径；CLI `get-backend` 正文校验失败仍输出相对路径与原文案。`tests/skills/test_ops_amazon_rufus_updater.py` 把「成对替换旧值」断言改为新措辞并断言旧措辞已移除，新增第 10 步瞬时错误分流、EMPTY_CONTENT 耗尽时「从未成功 / 曾有成功」两个分支、reference 正文校验错误小节不再写「只保留在本地」的契约断言。
+- 同一 `get()` 内其他可能带出服务端路径的异常（本次未改，仅列出）：`QuestionBankNotReadyError` 在服务端题库 JSON 格式错误时消息含题库文件路径；写报告/读报告的 `OSError` 走 `_err` 兜底时 `str(exc)` 可能含路径。二者都不是报告读取入口、不会诱导 Agent 去读报告，且均为服务端故障形态。Rufus MCP 工具只有 `amazon_rufus_get` 生成报告；批量获取（`batch_backend`）与诊断校验（`RufusDiagnosisReportValidator`）仅由 CLI / `asin_data` 日常流水线使用，没有 MCP 入口，不存在同类问题。
+**验证结果**：修复前首批新增用例 5 failed、1 passed（CLI 用例），远端错误结构含 `report_path: output/amazon-rufus/...`、stdio 为相对路径，复现问题；修复后在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus tests/mcp/test_amazon_rufus_tools.py tests/skills -q`：668 passed、9 failed；9 条失败（`tests/skills/` 下 dashboard×2、manager×3、reviews、app_build_spec、feedback_report_server、methods_card）在 release `f07b6c60` 干净导出目录中逐条同样失败，属既有基线。另跑 `tests/mcp/test_context.py tests/mcp/test_tool_catalog.py` 13 passed；`git diff --check` 通过；新文案 `encode("gbk")` 通过。测试全部打桩 Amazon 抓取与 OSS 上传，未访问真实网络。
+**影响范围**：MCP `amazon_rufus_get` 正文校验失败时的错误结构——远端模式不再含 `report_path`、文案改为远端口径；stdio 模式 `report_path` 变为绝对路径。成功响应、上传失败结构与 CLI `get-backend` 输出不变。远端 MCP 需重新部署、stdio 随下一版 opscli 发布生效；Skill 文档随模板升级生效。
+**回滚方式**：回退本条对应提交（异常类、mcp_manager、Skill 模板与安装副本、功能说明、相关测试）。
+
+---
