@@ -19,6 +19,15 @@ from opscli.amazon_rufus.services.browser_state_store import RufusBrowserStateSt
 from opscli.amazon_rufus.services.curl_parser import RufusCurlParser
 from opscli.amazon_rufus.transport.client import RufusTransportClient
 
+# RUFUS_SECRET_NOT_READY 的统一恢复提示（QA E2E N7）：未加载 Skill 的 Agent 只能看到报错文案，
+# 旧文案「授权状态初始化」曾诱导 Agent 擅自改远程授权偏好，这里给出具体登录入口并明确与授权偏好无关。
+# 用法与 docs/guide/AmazonRufus功能说明.md 一致；Linux AI 助手环境没有本机浏览器，须由用户在自己电脑上执行。
+_LOGIN_STATE_RECOVERY_HINT = (
+    "请执行 opscli amazon-rufus watch-login <ASIN> <COUNTRY> --close-browser"
+    "（MCP 为 amazon_rufus_watch_login；Linux AI 助手环境请让用户在自己的 Windows/Mac 电脑上执行）"
+    "重新采集亚马逊 Rufus 登录态；该错误与远程授权偏好（remote-consent）无关，修改授权偏好不能解决。"
+)
+
 
 @dataclass(frozen=True)
 class RufusSecret:
@@ -61,7 +70,7 @@ class RufusBackendSecretProvider:
         resolve_marketplace(normalized_country)
         record = self.browser_state_store.load(normalized_country)
         if not isinstance(record, dict):
-            raise RufusSecretNotReadyError("未找到可用 Rufus 后端凭证，请先完成 Rufus 授权状态初始化。")
+            raise RufusSecretNotReadyError(f"未找到可用 Rufus 后端凭证：尚未保存可用的亚马逊 Rufus 登录态。{_LOGIN_STATE_RECOVERY_HINT}")
 
         raw_curl = self._normalize_curl(record.get("curl"))
         parsed = self._parse_curl(raw_curl)
@@ -159,9 +168,9 @@ class RufusBackendSecretProvider:
         """读取并校验新结构 cURL 命令。"""
         raw_curl = str(value or "").strip()
         if not raw_curl:
-            raise RufusSecretNotReadyError("Rufus 后端凭证缺少 curl 命令，请重新完成授权状态初始化。")
+            raise RufusSecretNotReadyError(f"Rufus 后端凭证缺少 curl 命令。{_LOGIN_STATE_RECOVERY_HINT}")
         if not raw_curl.lower().startswith("curl "):
-            raise RufusSecretNotReadyError("Rufus 后端凭证 curl 命令格式无效，请重新完成授权状态初始化。")
+            raise RufusSecretNotReadyError(f"Rufus 后端凭证 curl 命令格式无效。{_LOGIN_STATE_RECOVERY_HINT}")
         return raw_curl
 
     def _parse_curl(self, raw_curl: str) -> Any:
@@ -169,4 +178,4 @@ class RufusBackendSecretProvider:
         try:
             return self.curl_parser.parse(raw_curl)
         except InvalidRufusCurlError as exc:
-            raise RufusSecretNotReadyError("Rufus 后端凭证 curl 命令不可用，请重新完成授权状态初始化。") from exc
+            raise RufusSecretNotReadyError(f"Rufus 后端凭证 curl 命令不可用。{_LOGIN_STATE_RECOVERY_HINT}") from exc

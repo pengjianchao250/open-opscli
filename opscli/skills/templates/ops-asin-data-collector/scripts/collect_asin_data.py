@@ -837,7 +837,12 @@ def collect_rufus_data(
             asin=asin,
             country=country,
             questions=questions,
-            reason="Rufus remote consent is not configured; run opscli amazon-rufus remote-consent set first",
+            # 授权偏好属于用户授权，提示语不能直接指挥 Agent 执行 set（QA E2E N7）
+            reason=(
+                "Rufus remote consent is not configured; ask the user whether to allow saving and reusing "
+                "the Amazon Rufus login state first, then run opscli amazon-rufus remote-consent set "
+                f"{country} --allow only after the user explicitly agrees (--deny if the user refuses)"
+            ),
             remote_consent=remote_consent,
             login_status=compact_json_command_result(login_result),
         )

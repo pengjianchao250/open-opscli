@@ -273,11 +273,16 @@ def remote_consent_status(
 @remote_consent_app.command("set")
 def remote_consent_set(
     country: str = typer.Argument(..., help="国家名，如 US、UK、DE、JP"),
-    allow: bool = typer.Option(False, "--allow", help="允许 MCP/headless 链路复用亚马逊 Rufus 登录态"),
+    # 帮助文本是未加载 Skill 的 Agent 唯一能看到的说明（QA E2E N7），必须写明须经用户明确同意
+    allow: bool = typer.Option(
+        False,
+        "--allow",
+        help="允许 MCP/headless 链路复用亚马逊 Rufus 登录态；仅在用户明确回复同意后使用，状态未知时先询问用户",
+    ),
     deny: bool = typer.Option(False, "--deny", help="拒绝 MCP/headless 链路复用亚马逊 Rufus 登录态"),
     pretty: bool = typer.Option(False, "--pretty", help="格式化输出"),
 ):
-    """保存指定国家站点的远程授权偏好。"""
+    """保存指定国家站点的远程授权偏好（--allow 须经用户明确同意）。"""
     try:
         if allow == deny:
             raise ValueError("必须且只能指定 --allow 或 --deny")

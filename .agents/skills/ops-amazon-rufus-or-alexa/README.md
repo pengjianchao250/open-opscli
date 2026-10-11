@@ -43,6 +43,8 @@ ops-amazon-rufus-or-alexa/
 
 不向报告、回复、反馈或普通日志输出亚马逊登录态及 OPS 凭证；排障工具使用边界见 [SKILL.md](SKILL.md#排障初始化-mcp-工具边界)。
 
+远程授权偏好属于用户授权：只有用户对“是否允许保存并复用该站点的亚马逊 Rufus 登录状态”明确回复“允许”后才能保存为允许；状态未知时先询问，用户暂不继续或未回复时不得修改，详见[远程授权偏好修改边界](SKILL.md#远程授权偏好修改边界)。
+
 ## 文件边界
 
 本 Skill 只承载文档、题库数据和 reference，不包含 Rufus 获取脚本。获取实现位于 `opscli/amazon_rufus/` 和 `opscli/mcp/tools/amazon_rufus.py`。

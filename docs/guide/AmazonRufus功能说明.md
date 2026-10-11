@@ -191,6 +191,7 @@ output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
 
 - `remote-consent set <COUNTRY> --allow/--deny`
   - 保存远程授权偏好。
+  - `--allow` 只能在用户明确回复同意保存并复用该站点亚马逊 Rufus 登录态之后执行；状态未知时先询问，用户暂不继续或未回复时不得修改。
 
 ### 6.3 初始化/排障命令
 
@@ -462,7 +463,7 @@ Agent 默认应走 MCP-first 流程。逻辑顺序是：
 auth_is_authenticated / auth_mcp_login
   -> auth_check_token / auth_token_refresh
   -> amazon_rufus_remote_consent_status(country)
-  -> 必要时 amazon_rufus_remote_consent_set(country, allowed=true)
+  -> 状态未知时先询问用户，用户明确回复允许后才 amazon_rufus_remote_consent_set(country, allowed=true)
   -> amazon_rufus_login_status(country)
   -> 必要时 amazon_rufus_watch_login(asin, country, close_browser=true)
   -> amazon_rufus_get(asin, country, question/questions/skills_dir)

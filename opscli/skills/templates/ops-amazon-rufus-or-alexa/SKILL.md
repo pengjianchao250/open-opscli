@@ -42,6 +42,16 @@ Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答
 4. 上述工具的错误反馈只能记录是否提供敏感参数和字符串长度，不得记录 content、raw cURL、cookie、headers、payload、`storage_state` 或请求种子。
 5. 即使 `amazon_rufus_platform_cookie_get(..., include_content=true)` 返回 content，也不得把 content 写入报告、最终回复、feedback 或普通日志。
 
+## 远程授权偏好修改边界
+
+`amazon_rufus_remote_consent_set` 与 CLI `amazon-rufus remote-consent set` 会修改用户保存的远程授权偏好，属于改状态操作，不是排障或初始化步骤：
+
+1. 设置为允许（`amazon_rufus_remote_consent_set(country, allowed=true)` 或 CLI `amazon-rufus remote-consent set <COUNTRY> --allow`）只能在用户对“是否允许保存并复用该站点的亚马逊 Rufus 登录状态”明确回复“允许”之后执行，且只设置本次询问的国家站点。
+2. 状态为 `unknown` 或 `invalid`（从未设置或无法读取）时，必须先按主流程第 5 步询问并等待用户回复；不得把未设置当作默认允许，不得先设为允许再询问或事后补问。
+3. 用户回复“拒绝”时，只能按主流程第 7 步保存 `allowed=false`。用户选择暂不继续、未回复、回复不明确或没有回答授权问题时，不得调用 `amazon_rufus_remote_consent_set(country, allowed=true)` 或 CLI `amazon-rufus remote-consent set <COUNTRY> --allow`，保持原状态，停止本次获取并说明需要用户先确认授权。
+4. `RUFUS_SECRET_NOT_READY` 表示缺少可用的亚马逊 Rufus 登录态，不是授权偏好未设置；获取链路不读取授权偏好，修改远程授权偏好不能解决该错误；MCP 路径按[三类 MCP 错误的登录采集恢复](references/rufus-mcp-workflow.md#三类-mcp-错误的登录采集恢复)处理，CLI 路径按[CLI fallback 子流程](#cli-fallback-子流程)处理。除主流程第 6、7 步外，CLI fallback、登录采集、排障和瞬时错误重试都不需要、也不得修改远程授权偏好。
+5. 最终回复必须如实说明本次是否修改过远程授权偏好（国家站点和修改后的值）；本次实际调用过设置操作时，不得声称“未改动账号或授权状态”。
+
 ## CLI fallback 边界
 
 只有以下两种情况允许 CLI fallback：
@@ -52,6 +62,8 @@ Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答
 其他错误不允许 CLI fallback，包括 `RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR`、`RUFUS_HEADLESS_REQUEST_ERROR`、OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401。
 
 瞬时错误按[瞬时错误同路径重试](#瞬时错误同路径重试)在原路径重试，不属于 CLI fallback。
+
+CLI fallback 路径不修改远程授权偏好，不得执行 CLI `amazon-rufus remote-consent set`；授权偏好只按[远程授权偏好修改边界](#远程授权偏好修改边界)在主流程第 6、7 步保存。
 
 CLI fallback 使用以下正式脱敏入口；需要登录时执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 CLI 路径：
 
@@ -70,7 +82,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 2. 检测必需 MCP Tool 是否可见。不可见时进入 CLI fallback，原因记为 `mcp_tools_unavailable`。
 3. 调用 `auth_is_authenticated()`。如果未登录，调用 `auth_mcp_login()`；随后调用 `auth_check_token(system="ops")`，Token 失效时调用 `auth_token_refresh(system="ops")`。
 4. 调用 `amazon_rufus_remote_consent_status(country)`，读取该站点的远程授权偏好。
-5. 如果状态为 `unknown` 或 `invalid`，先询问用户：
+5. 如果状态为 `unknown` 或 `invalid`（含从未设置），先询问用户并等待明确回复；回复前不得调用 `amazon_rufus_remote_consent_set`，也不得继续后续获取步骤：
 
 ```text
 本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许保存并复用该站点的亚马逊 Rufus 登录状态？
@@ -80,11 +92,12 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 - 亚马逊登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
 - 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
 - 如果拒绝，本次将改用本机获取 Rufus 报告。
+- 如果暂不决定或不回复，本次获取将停止，不会修改授权设置。
 
 请明确回复“允许”或“拒绝”。
 ```
 
-6. 用户回复“允许”时，调用 `amazon_rufus_remote_consent_set(country, allowed=true)`。
+6. 用户对第 5 步询问明确回复“允许”时，调用 `amazon_rufus_remote_consent_set(country, allowed=true)`；这是设置为允许的唯一入口。用户选择暂不继续、未回复或回复不明确时，不调用 `amazon_rufus_remote_consent_set`，保持原状态并停止本次获取，见[远程授权偏好修改边界](#远程授权偏好修改边界)。
 7. 用户回复“拒绝”时，调用 `amazon_rufus_remote_consent_set(country, allowed=false)`，然后进入 CLI fallback，原因记为 `remote_consent_denied`。
 8. 状态为 `denied` 时进入 CLI fallback，说明用户拒绝保存并复用该站点亚马逊 Rufus 登录态。
 9. 状态为 `allowed` 时，调用 `amazon_rufus_login_status(country)`。

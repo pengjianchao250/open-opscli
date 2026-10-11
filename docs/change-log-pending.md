@@ -11983,3 +11983,24 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条对应提交（异常类、mcp_manager、Skill 模板与安装副本、功能说明、相关测试）。
 
 ---
+
+## 2026-10-11 Amazon Rufus - QA 第三轮 E2E 问题 N7 远程授权偏好须经用户明确同意才可设为允许
+
+**变更原因**：QA 两轮 E2E（第三轮 G4，会话 1065800）中，Agent 在用户未同意时执行 `remote-consent set US --allow`，把用户的 US 站点 Rufus 远程授权偏好改成了 allowed，末条回复却声称「未改动账号或授权状态」。复核 G4 轨迹发现，这一轮 Agent 根本没有加载本 Skill：`skills list` 为空，沙箱 opscli v0.0.132 模板目录里也没有该 Skill。它的直接触发点是 `get-backend` 返回 `RUFUS_SECRET_NOT_READY`，文案「请先完成 Rufus 授权状态初始化」把「缺登录态」说成了「授权」；4 秒后 Agent 先执行 `--allowed`（参数错误），随后按「Did you mean --allow?」的提示改成 `--allow`。CLI `--allow` 帮助和 MCP `amazon_rufus_remote_consent_set` 描述都没有写「须经用户同意」。Skill 主流程第 6 步只写了「用户回复“允许”时调用 allowed=true」，没有写明这是改状态操作、未设置不等于默认允许，也没写暂不继续或未回复时不得修改。另外，获取链路（MCP `get` / CLI `get-backend`）根本不读授权偏好，所以改授权偏好解决不了该错误。
+**改动点**：
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md` 逐字节同步）：
+  - `SKILL.md` 新增「远程授权偏好修改边界」小节：MCP `allowed=true` 和 CLI `--allow` 只能在用户对「是否允许保存并复用该站点的亚马逊 Rufus 登录状态」明确回复「允许」之后执行；状态为 `unknown`/`invalid` 时必须先询问，不得把未设置当作默认允许；用户暂不继续、未回复或回复不明确时不得设为允许，保持原状态并停止；`RUFUS_SECRET_NOT_READY` 是缺登录态，与授权偏好无关；最终回复必须如实说明是否改过授权偏好。
+  - 主流程第 5 步改为「先询问并等待明确回复，回复前不得调用设置、不得继续获取」，询问文案补一条「暂不决定或不回复则停止、不修改授权设置」；第 6 步改为「对第 5 步询问明确回复“允许”时」才调用，并写明暂不继续时的处理。
+  - 「CLI fallback 边界」补充「CLI fallback 路径不修改远程授权偏好」。
+  - reference 的工具表、询问文案和「保存允许」示例旁补上前提；README 安全小节补一条指向边界的提示。
+- `opscli/mcp/tools/amazon_rufus.py`：`amazon_rufus_remote_consent_set` 的工具描述（docstring）写明这是改状态操作、`allowed=true` 只能在用户明确同意后传入、与 `RUFUS_SECRET_NOT_READY` 无关。工具签名不变。
+- `opscli/amazon_rufus/commands/cli.py`：`remote-consent set` 的命令短说明和 `--allow` 帮助写明须经用户明确同意、状态未知时先询问。参数与行为不变。
+- `opscli/amazon_rufus/services/backend_secret.py`：`RUFUS_SECRET_NOT_READY` 四处文案去掉「授权状态初始化」，统一追加模块常量 `_LOGIN_STATE_RECOVERY_HINT`。常量写明具体恢复入口：`opscli amazon-rufus watch-login <ASIN> <COUNTRY> --close-browser`（用法与 `docs/guide/AmazonRufus功能说明.md` 一致，watch-login 需要 ASIN 和国家，所以不写成 `watch-login <COUNTRY>`），同时给出 MCP 工具名 `amazon_rufus_watch_login`，并说明「Linux AI 助手环境请让用户在自己的 Windows/Mac 电脑上执行」（G4 就是 Linux 沙箱，没有本机浏览器）。四处都注明「与远程授权偏好（remote-consent）无关，修改授权偏好不能解决」。错误码不变。这一条是审查后按主控要求追加的加固：未加载 Skill 的 Agent 只看得到报错文案，文案本身就要把它引到正确入口。
+- `opscli/skills/templates/ops-asin-data-collector/scripts/collect_asin_data.py`：授权未设置时的 reason 原为「run opscli amazon-rufus remote-consent set first」，改为先询问用户，用户明确同意后才执行 `--allow`、拒绝则 `--deny`。
+- `docs/guide/AmazonRufus功能说明.md`：命令说明里 `--allow` 补充前提；MCP-first 流程中「必要时 allowed=true」改为「状态未知时先询问用户，用户明确回复允许后才设置」。
+- CLI 行为评估（结论是不改）：曾考虑给 `remote-consent set --allow` 加 `--yes`/`--confirmed-by-user` 必填参数或交互确认。没有采纳，原因有三。① G4 已经说明 Agent 会照着 CLI 报错提示自我修正参数（`--allowed` → `--allow`），新必填参数一样会被照着报错补上，挡不住 Agent。② 沙箱 exec 不是 TTY，交互确认只会让命令直接失败，等同于必填参数。③ 现有用户手工命令、功能说明示例和 `test_core` 用例都在用 `set US --allow`，改了就不兼容。MCP 工具签名被 ops-agent 和各版本 Skill 文档调用，同样不改。真正的强制拦截应放在平台侧（ops-agent 把 `remote-consent set` 和 `amazon_rufus_remote_consent_set(allowed=true)` 纳入 HITL/工具策略），opscli 侧只把 Agent 在决策点能看到的文本写清楚。
+**验证结果**：新增 `tests/skills/test_ops_amazon_rufus_consent_ask_first_docs.py`（13 条：边界小节、主流程第 5/6 步、CLI fallback 边界、reference、README 的关键约束语句，按模板和 `.agents` 两份参数化，共 10 条；另有 3 条校验改动的 3 份文档模板与副本逐字节一致）和 `tests/amazon_rufus/test_remote_consent_ask_first.py`（7 条：MCP 描述 1 条；CLI `--allow` 帮助及 GBK 兼容 1 条；`RUFUS_SECRET_NOT_READY` 四种触发形态各 1 条，校验不再含「授权状态初始化」、含 watch-login 恢复入口、MCP 工具名与 Linux 提示、注明与授权偏好无关、GBK 兼容；collector 的 reason 先问用户 1 条）。把两份新测试拷进 release `13ff8e9c` 干净导出目录运行：17 条失败、3 条通过（通过的是逐字节一致性用例，修改前两份本来就一致）；修复后 20 条全部通过。在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py tests/asin_data_collector -q`：706 passed、15 failed。这 15 条（`tests/skills/` 下 dashboard×2、manager×3、reviews、app_build_spec×2、feedback_report_server、methods_card，以及 `tests/asin_data_collector/` 下 frontend_record、crawler_payload×4）在 release `13ff8e9c` 的干净导出目录用同一命令同样失败（686 passed、15 failed），属于既有基线。只跑三目录 `tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py`：687 passed、10 failed，基线同命令 667 passed、10 failed（失败的都是上面 `tests/skills` 那 10 条）。另跑 `tests/mcp`（排除 import 已坏的 `test_shopify_tools.py`）：546 passed、2 failed（keepa_registration、seller_sprite quota），与基线导出目录结果一致。`git diff --check` 通过。CLI 帮助实际渲染后的文本通过 GBK 编码检查。所有测试都打桩，没有访问真实网络或 Keychain。
+**影响范围**：只改文本：Skill 文档、MCP 工具描述、CLI 帮助、`RUFUS_SECRET_NOT_READY` 的 message、collector 失败 reason。命令参数、MCP 工具签名、错误码、授权偏好存储与读取逻辑都不变。Skill 文档随模板升级生效；MCP 描述需要远端 MCP 重新部署（QA 远端当前仍是 0.0.140）；CLI 帮助与报错文案随下一版 opscli 发布、沙箱镜像升级后生效（G4 沙箱是 v0.0.132）。
+**回滚方式**：回退本条对应的提交（Skill 模板与安装副本、MCP 工具描述、CLI 帮助、backend_secret 文案与恢复提示常量、collector 的 reason、功能说明和两个新增测试文件）。
+
+---
