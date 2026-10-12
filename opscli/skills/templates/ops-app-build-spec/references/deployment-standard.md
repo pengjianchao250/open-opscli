@@ -14,17 +14,17 @@
 - `.gitignore` 必须忽略 `.opscli/`，`.opscli/app.json` 不得被 Git 跟踪或暂存；`app.yaml` 留在源码中。
 - 使用 SQLite 时保留 `database.kind: sqlite`、`database.path: /data/app.db`。应用只使用 `SQLITE_PATH`；模板库、本地运行库、容器运行库依次为 `data/app.db`、`.data/app.db`、`/data/app.db`。
 - 已初始化的空白 `data/app.db` 是必要模板资产，可以进入 Git 和镜像；本地运行库、真实业务数据、SQLite 伴生文件、`.env`、密钥和本地 binding 不得进入 Git 或构建上下文。不得把写入业务数据后的库当空白模板提交。
-- 保留模板入口 `backend/app.py`、依赖清单、唯一前端锁文件、`Dockerfile`、`nixpacks.toml`、忽略规则和项目实际使用的 `compose.apphub.yaml`；缺少必需资产时报告模板问题，不从 Skill 复制旧配置或生成替代文件。
+- 普通新建及标准模板项目保留模板入口 `backend/app.py`、依赖清单、唯一前端锁文件、`Dockerfile`、`nixpacks.toml`、忽略规则和项目实际使用的 `compose.apphub.yaml`；缺少必需资产时报告模板问题，不从 Skill 复制旧配置或生成替代文件。源码复制迁移改按迁移发布门禁检查，不强制补齐这些模板目录和 Nixpacks 资产。
 
 ## 构建与运行边界
 
-- AppHub 生产入口保持单应用进程合同：`uvicorn backend.app:app --host 0.0.0.0 --port 8000`，同一应用托管前端构建产物、API 和 `/__apphub_healthz`。健康检查须快速返回 200，不依赖业务取数。
+- 普通新建及标准模板项目保持单应用进程合同：`uvicorn backend.app:app --host 0.0.0.0 --port 8000`，同一应用托管前端构建产物、API 和 `/__apphub_healthz`。健康检查须快速返回 200，不依赖业务取数。源码复制迁移由根目录 Dockerfile 定义生产入口，不强制使用 FastAPI 或该模块路径。
 - 前端资源与 API 沿用模板相对地址、hash 路由和 Vite base，不硬编码 AppHub 公开前缀、appId、slug 或部署域名。
 - 不重新引入已废弃的 `opscli.app.migrate`、Nginx 双服务或项目侧公开路径拼接。
 - 普通业务开发不改平台端口、路由、网络、身份、存储挂载或保留变量。使用 `compose.apphub.yaml` 的项目保留平台校验结构与 `SQLITE_PATH` 注入；本地 `compose.yaml` 不替代平台配置。
-- Node 版本读取 `frontend/package.json` 的 `engines`，包管理器读取 `packageManager`；安装使用已有锁文件。不得通过忽略 engine 错误、删除锁文件或更换包管理器完成构建。
-- 依赖安装分工沿用实际模板。当前模板由 `requirements-app.txt` 声明业务依赖，`requirements.txt` 供本地与 Nixpacks 使用；Docker 的 SDK 由基础镜像提供。不要为满足旧文档再生成一套依赖清单或钉死 SDK 版本。
-- Dockerfile 和 Nixpacks 保持相同应用入口、前端产物、端口与健康路径；使用当前项目合同指定的构建入口，不假定所有项目都仅用 Nixpacks。保留精确 COPY 和构建缓存，必要构建资产不能被忽略。
+- 标准模板的 Node 版本读取 `frontend/package.json` 的 `engines`，包管理器读取 `packageManager`；安装使用已有锁文件。不得通过忽略 engine 错误、删除锁文件或更换包管理器完成构建。迁移项目从自身 manifest 和锁文件读取对应约束，不要求存在 `frontend/package.json`。
+- 普通新建及标准模板的依赖安装分工沿用实际模板。当前模板由 `requirements-app.txt` 声明业务依赖，`requirements.txt` 供本地与 Nixpacks 使用；Docker 的 SDK 由基础镜像提供。不要为满足旧文档再生成一套依赖清单或钉死 SDK 版本。迁移项目保留原依赖体系。
+- 普通新建及标准模板的 Dockerfile 和 Nixpacks 保持相同应用入口、前端产物、端口与健康路径；源码复制迁移以 Dockerfile 为 AppHub 生产入口，Nixpacks 仅在源项目原本使用时保留。两类项目都应保留精确 COPY 和构建缓存，必要构建资产不能被忽略。
 
 ## 交付验证
 
@@ -33,6 +33,8 @@
 3. 部署或持久化配置变化时补充相应构建、启动、重启持久化验证，遵守已有授权和宿主权限；日常文案改动不反复启动容器。未验证项与无关既有失败必须列明，不能宣称检查全部通过。
 4. 使用真实数据的应用再执行 `data-access-standard.md` 的发布检查，确认前端没有直连取数服务或持有凭证；不在本文件重复维护第三方接口清单。
 5. 检查 Git 已跟踪、已暂存及未跟踪文件，而不只看普通 diff；确认源码中没有本地运行数据、密钥、依赖目录和构建产物。
+
+源码复制迁移项目还必须执行 [迁移验证合同](migration-validation-contract.md)，并在 push 前确认三项合同全部通过、验证清单未因源码变化而过期。普通新建项目不读取该清单，继续使用本文件既有交付检查。
 
 ## 当前 opscli 流程
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from datetime import datetime, timezone
@@ -19,7 +20,11 @@ from opscli.app.services.manager import AppManager
 from opscli.app.services.migration_contract import (
     inspect_migration_frontend_build,
     inspect_migration_public_paths,
+    inspect_migration_release_assets,
     inspect_migration_runtime_assets,
+)
+from opscli.app.services.migration_runtime_adaptation import (
+    apply_migration_runtime_adaptations,
 )
 
 MIGRATION_SCHEMA_VERSION = 2
@@ -28,8 +33,12 @@ MIGRATION_ORIGIN_TYPE = "migration_copy"
 FINALIZE_JOURNAL_NAME = ".opscli-migration-finalize.json"
 EXCLUDED_PARTS = {
     ".git",
+    ".sites-checkout",
+    ".sites-runtime",
     ".opscli",
     ".venv",
+    ".vinext",
+    ".wrangler",
     "venv",
     "node_modules",
     "__pycache__",
@@ -51,6 +60,42 @@ LEGACY_STATE_FILES = {
     "audit-snapshot.json",
     "coverage-matrix.json",
     "ui-blueprint.json",
+}
+STARTUP_DOCUMENT_NAMES = ("README.md", "DEPLOY.md", "DEPLOYMENT.md")
+DOCUMENTED_NODE_COMMAND_RE = re.compile(
+    r"\b(?:pnpm(?:\s+run)?|npm\s+run|yarn(?:\s+run)?|bun(?:\s+run)?)"
+    r"\s+(?P<script>[A-Za-z0-9][A-Za-z0-9:._-]*)"
+)
+SCRIPT_PATH_RE = re.compile(
+    r"(?P<path>(?:[A-Za-z0-9_.-]+[\\/])*[A-Za-z0-9_.-]+\.(?:py|mjs|cjs|js|ts))"
+)
+ORCHESTRATOR_SOURCE_RE = re.compile(
+    r"\b(?:subprocess\.Popen|asyncio\.create_subprocess_exec|"
+    r"child_process\.(?:spawn|fork)|spawn\s*\(|fork\s*\()"
+)
+SERVER_COMMAND_RE = re.compile(
+    r"\b(?:vinext|vite|next\s+start|nuxt|serve|uvicorn|gunicorn|hypercorn|flask)\b|"
+    r"(?:^|[\\/])(?:server|run_local)\.(?:py|mjs|cjs|js|ts)\b",
+    re.IGNORECASE,
+)
+PORT_ARGUMENT_RE = re.compile(r"(?<![A-Za-z0-9_-])--port(?:\s+|=)(?P<port>\d+)\b")
+PORT_ENV_RE = re.compile(
+    r"(?:configured_port|os\.environ\.get|os\.getenv)\(\s*['\"]"
+    r"(?P<python>[A-Z][A-Z0-9_]*PORT)['\"]|"
+    r"process\.env\.(?P<node>[A-Z][A-Z0-9_]*PORT)"
+)
+RUNTIME_SCRIPT_NAMES = {
+    "start",
+    "start:prod",
+    "start:production",
+    "serve",
+    "preview",
+    "dev",
+    "dev:lan",
+    "dev:local",
+    "dashboard",
+    "web",
+    "app",
 }
 
 
@@ -134,6 +179,8 @@ class MigrationService:
             )
             if self._ensure_gitignore(staging):
                 state["generated_files"].append(".gitignore")
+            if self._ensure_dockerignore(staging):
+                state["generated_files"].append(".dockerignore")
             startup = self._scan_and_write_startup(staging, migration_key)
             if startup.get("wrapper_generated"):
                 state["generated_files"].append("scripts/start_app.py")
@@ -702,13 +749,28 @@ class MigrationService:
     def _scan_and_write_startup(self, root: Path, migration_id: str) -> dict[str, Any]:
         manifest_path = self._migration_dir(root, migration_id) / "startup-manifest.json"
         previous = self._read_json(manifest_path, required=False) or {}
+        docker = self._detect_docker_runtime(root)
         backend = self._detect_backend(root)
         frontend = self._detect_frontend(root)
-        status = "ready" if backend and frontend else "startup_manual_required"
+        runtime, launch_mode, selection_reason = self._select_runtime(
+            docker=docker,
+            backend=backend,
+            frontend=frontend,
+        )
+        status = "ready" if runtime else "startup_manual_required"
         manifest = {
             "schema_version": MIGRATION_SCHEMA_VERSION,
             "migration_id": migration_id,
             "status": status,
+            "runtime": runtime,
+            "runtime_candidates": self._runtime_candidates_for_manifest(
+                docker=docker,
+                backend=backend,
+                frontend=frontend,
+            ),
+            "launch_mode": launch_mode,
+            "selection_reason": selection_reason,
+            "docker": docker,
             "backend": backend,
             "frontend": frontend,
             "wrapper": str(root / "scripts" / "start_app.py"),
@@ -723,6 +785,45 @@ class MigrationService:
         self._write_json(manifest_path, manifest)
         return manifest
 
+    def _select_runtime(
+        self,
+        *,
+        docker: dict[str, Any] | None,
+        backend: dict[str, Any] | None,
+        frontend: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        if docker is not None:
+            return docker, "single", "docker_entry"
+        if frontend is not None and frontend.get("orchestrator") is True:
+            return frontend, "orchestrator", str(
+                frontend.get("selection_reason") or "orchestrator"
+            )
+        if backend is not None and frontend is not None:
+            return backend, "dual", "backend_frontend_pair"
+        if backend is not None:
+            return backend, "single", "single_backend"
+        if frontend is not None:
+            return frontend, "single", str(
+                frontend.get("selection_reason") or "single_frontend"
+            )
+        return None, None, None
+
+    def _runtime_candidates_for_manifest(
+        self,
+        *,
+        docker: dict[str, Any] | None,
+        backend: dict[str, Any] | None,
+        frontend: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        candidates = [item for item in (docker, backend) if isinstance(item, dict)]
+        if isinstance(frontend, dict):
+            node_candidates = frontend.get("candidate_scripts")
+            if isinstance(node_candidates, list):
+                candidates.extend(item for item in node_candidates if isinstance(item, dict))
+            else:
+                candidates.append(frontend)
+        return candidates
+
     def _scan_and_write_adaptation(
         self,
         root: Path,
@@ -730,21 +831,36 @@ class MigrationService:
         startup: dict[str, Any],
     ) -> dict[str, Any]:
         app_id = state.get("app_id")
+        runtime_adaptation = apply_migration_runtime_adaptations(root, startup)
+        for relative in runtime_adaptation["managed_files"]:
+            self._record_generated_file(state, relative)
         frontend_build = inspect_migration_frontend_build(root)
         public_paths = inspect_migration_public_paths(root)
         runtime_assets = inspect_migration_runtime_assets(root)
+        release_contract = (
+            inspect_migration_release_assets(root, expected_app_id=str(app_id))
+            if isinstance(app_id, str) and app_id
+            else None
+        )
+        managed_files = self._managed_adaptation_files(
+            root,
+            state,
+            startup=startup,
+            public_paths=public_paths,
+        )
         checks = {
             "startup_ready": startup.get("status") == "ready",
             "gitignore_present": (root / ".gitignore").is_file(),
             "start_wrapper_present": (root / "scripts" / "start_app.py").is_file(),
-            "backend_entry_present": (root / "backend" / "app.py").is_file(),
-            "frontend_manifest_present": (root / "frontend" / "package.json").is_file(),
             "dockerfile_present": (root / "Dockerfile").is_file(),
-            "nixpacks_present": (root / "nixpacks.toml").is_file(),
+            "runtime_adaptation_contract": (
+                runtime_adaptation["status"] != "adaptation_manual_required"
+            ),
             "frontend_build_contract": frontend_build["ready"],
             "public_path_contract": public_paths["ready"],
             "runtime_asset_contract": runtime_assets["ready"],
             "app_manifest_identity": self._manifest_matches(root, app_id),
+            "release_contract": release_contract is None or release_contract["ready"],
         }
         pre_registration_checks = {
             key: value for key, value in checks.items() if key != "app_manifest_identity"
@@ -762,11 +878,13 @@ class MigrationService:
             "migration_id": state["migration_id"],
             "status": status,
             "checks": checks,
+            "runtime_adaptation": runtime_adaptation,
             "frontend_build": frontend_build,
             "public_paths": public_paths,
             "runtime_assets": runtime_assets,
-            "managed_files": sorted(set(state.get("generated_files") or [])),
-            "generated_or_modified_files": sorted(set(state.get("generated_files") or [])),
+            "release_contract": release_contract,
+            "managed_files": managed_files,
+            "generated_or_modified_files": managed_files,
             "local_only_files": [
                 ".opscli/project.json",
                 f".opscli/migration/{state['migration_id']}/migration.json",
@@ -781,6 +899,151 @@ class MigrationService:
             manifest,
         )
         return manifest
+
+    def _managed_adaptation_files(
+        self,
+        root: Path,
+        state: dict[str, Any],
+        *,
+        startup: dict[str, Any],
+        public_paths: dict[str, Any],
+    ) -> list[str]:
+        """记录已验证薄适配允许修改的复制文件，继续阻止无关业务漂移。"""
+        managed = {
+            item
+            for item in state.get("generated_files") or []
+            if isinstance(item, str) and item
+        }
+        migration_id = state.get("migration_id")
+        if not isinstance(migration_id, str) or not migration_id:
+            return sorted(managed)
+        copy_manifest = self._read_json(
+            self._migration_dir(root, migration_id) / "copy-manifest.json",
+            required=False,
+        ) or {}
+        included = {
+            item
+            for item in copy_manifest.get("included_files") or []
+            if isinstance(item, str) and item
+        }
+        hashes = copy_manifest.get("file_hashes")
+        if not included or not isinstance(hashes, dict):
+            return sorted(managed)
+
+        candidates: set[str] = set()
+        candidates.update(
+            relative
+            for relative in (
+                "app.yaml",
+                "Dockerfile",
+                ".dockerignore",
+                ".gitignore",
+                "scripts/start_app.py",
+            )
+            if (root / relative).is_file()
+        )
+        candidates.update(
+            relative for relative in included if self._is_sensitive(Path(relative))
+        )
+        detail = public_paths.get("detail")
+        scanned_roots = detail.get("scanned_roots") if isinstance(detail, dict) else []
+        for scanned_root in scanned_roots or []:
+            if not isinstance(scanned_root, str) or not scanned_root:
+                continue
+            prefix = scanned_root.rstrip("/") + "/"
+            candidates.update(
+                relative
+                for relative in included
+                if relative == scanned_root or relative.startswith(prefix)
+            )
+            scan_root = root / scanned_root
+            if scan_root.is_dir():
+                candidates.update(
+                    path.relative_to(root).as_posix()
+                    for path in scan_root.rglob("*")
+                    if path.is_file() and not path.is_symlink()
+                )
+
+        for runtime in (
+            startup.get("runtime"),
+            startup.get("docker"),
+            startup.get("backend"),
+            startup.get("frontend"),
+        ):
+            if not isinstance(runtime, dict):
+                continue
+            evidence = runtime.get("evidence")
+            if isinstance(evidence, str):
+                evidence_path = Path(evidence).as_posix()
+                if (root / evidence_path).is_file():
+                    candidates.add(evidence_path)
+            cwd = runtime.get("cwd") if isinstance(runtime.get("cwd"), str) else "."
+            for token in runtime.get("command") or []:
+                if not isinstance(token, str) or not token:
+                    continue
+                direct = (Path(cwd) / token).as_posix().lstrip("./")
+                if (root / direct).is_file():
+                    candidates.add(direct)
+                module = token.split(":", 1)[0]
+                module_path = (Path(cwd) / (module.replace(".", "/") + ".py")).as_posix()
+                module_path = module_path.lstrip("./")
+                if (root / module_path).is_file():
+                    candidates.add(module_path)
+
+        for relative in candidates:
+            path = root / relative
+            expected_hash = hashes.get(relative)
+            if path.is_file() and not path.is_symlink() and relative not in included:
+                managed.add(relative)
+            elif (
+                isinstance(expected_hash, str)
+                and path.is_file()
+                and not path.is_symlink()
+                and hashlib.sha256(path.read_bytes()).hexdigest() != expected_hash
+            ):
+                managed.add(relative)
+        return sorted(managed)
+
+    def _detect_docker_runtime(self, root: Path) -> dict[str, Any] | None:
+        """优先使用 Dockerfile 已声明的生产启动命令作为运行证据。"""
+        dockerfile = root / "Dockerfile"
+        if not dockerfile.is_file():
+            return None
+        try:
+            content = dockerfile.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return None
+        matches = list(
+            re.finditer(r"(?im)^\s*(?P<kind>CMD|ENTRYPOINT)\s+(?P<value>.+)$", content)
+        )
+        if not matches:
+            return None
+        match = next(
+            (item for item in reversed(matches) if item.group("kind").upper() == "CMD"),
+            matches[-1],
+        )
+        raw_command = match.group("value").strip()
+        try:
+            parsed = json.loads(raw_command) if raw_command.startswith("[") else None
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, list) and parsed and all(
+            isinstance(item, str) and item for item in parsed
+        ):
+            command = parsed
+        else:
+            try:
+                command = shlex.split(raw_command, posix=True)
+            except ValueError:
+                return None
+        if not command:
+            return None
+        return {
+            "kind": "dockerfile_native",
+            "command": command,
+            "cwd": ".",
+            "evidence": "Dockerfile",
+        }
 
     def _detect_backend(self, root: Path) -> dict[str, Any] | None:
         candidates = (
@@ -797,18 +1060,75 @@ class MigrationService:
             content = candidate.read_text(encoding="utf-8", errors="replace")
             if re.search(r"\bapp\s*=\s*(?:FastAPI|Starlette)\s*\(", content):
                 return {
+                    "kind": "python_web",
                     "command": ["python", "-m", "uvicorn", f"{module}:app"],
                     "cwd": ".",
-                    "evidence": str(candidate.relative_to(root)),
+                    "evidence": candidate.relative_to(root).as_posix(),
                 }
         return None
 
     def _detect_frontend(self, root: Path) -> dict[str, Any] | None:
-        package_path = root / "frontend" / "package.json"
-        if not package_path.is_file():
-            package_path = root / "package.json"
-        if not package_path.is_file():
+        package_paths = self._frontend_package_candidates(root)
+        detected = [
+            runtime
+            for package_path in package_paths
+            if (runtime := self._node_runtime_from_package(root, package_path)) is not None
+        ]
+        if not detected:
             return None
+        if len(detected) == 1:
+            return detected[0]
+
+        dockerfile = root / "Dockerfile"
+        docker_content = (
+            dockerfile.read_text(encoding="utf-8", errors="replace")
+            if dockerfile.is_file()
+            else ""
+        )
+        referenced = [
+            runtime
+            for runtime in detected
+            if runtime["cwd"] != "." and runtime["cwd"] in docker_content.replace("\\", "/")
+        ]
+        if len(referenced) == 1:
+            return referenced[0]
+
+        package_priority = {"frontend/package.json": 2, "package.json": 1}
+        return max(
+            detected,
+            key=lambda runtime: (
+                int(runtime.get("selection_score") or 0),
+                package_priority.get(str(runtime.get("evidence")), 0),
+                -len(Path(str(runtime.get("evidence"))).parts),
+                str(runtime.get("evidence")),
+            ),
+        )
+
+    def _frontend_package_candidates(self, root: Path) -> list[Path]:
+        """扫描可运行的 package.json，兼容单仓库与任意深度的前端目录。"""
+        candidates: list[Path] = []
+        for current, directory_names, file_names in os.walk(root, topdown=True, followlinks=False):
+            directory_names[:] = sorted(
+                name for name in directory_names if name not in EXCLUDED_PARTS
+            )
+            if "package.json" in file_names:
+                candidates.append(Path(current) / "package.json")
+        priority = {"frontend/package.json": 0, "package.json": 1}
+        return sorted(
+            candidates,
+            key=lambda path: (
+                priority.get(path.relative_to(root).as_posix(), 2),
+                len(path.relative_to(root).parts),
+                path.relative_to(root).as_posix(),
+            ),
+        )
+
+    def _node_runtime_from_package(
+        self,
+        root: Path,
+        package_path: Path,
+    ) -> dict[str, Any] | None:
+        """从单个包清单提取有业务入口证据的 Node 启动命令。"""
         try:
             package = json.loads(package_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError):
@@ -816,31 +1136,239 @@ class MigrationService:
         scripts = package.get("scripts") if isinstance(package, dict) else None
         if not isinstance(scripts, dict):
             return None
-        script = next(
-            (
-                name
-                for name in ("start", "preview", "dev")
-                if isinstance(scripts.get(name), str) and scripts[name].strip()
-            ),
-            None,
-        )
-        if script is None:
-            return None
         frontend_root = package_path.parent
-        if (frontend_root / "pnpm-lock.yaml").exists():
+        lock_roots = [frontend_root, *frontend_root.parents]
+        lock_roots = [path for path in lock_roots if path == root or root in path.parents]
+        if any((path / "pnpm-lock.yaml").exists() for path in lock_roots):
             manager = "pnpm"
-        elif (frontend_root / "yarn.lock").exists():
+        elif any((path / "yarn.lock").exists() for path in lock_roots):
             manager = "yarn"
         else:
             manager = "npm"
-        command = [manager, "run", script] if manager != "yarn" else [manager, script]
-        return {
-            "command": command,
-            "cwd": str(frontend_root.relative_to(root)),
-            "script": script,
-            "script_command": scripts[script],
-            "evidence": str(package_path.relative_to(root)),
+        nonempty_scripts = [
+            command
+            for command in scripts.values()
+            if isinstance(command, str) and command.strip()
+        ]
+        documented_scripts = (
+            self._documented_node_scripts(root, frontend_root)
+            if len(nonempty_scripts) > 1
+            else {}
+        )
+        candidates: list[dict[str, Any]] = []
+        for script, raw_command in scripts.items():
+            if not isinstance(script, str) or not isinstance(raw_command, str):
+                continue
+            script_command = raw_command.strip()
+            if not script_command:
+                continue
+            documented_order = documented_scripts.get(script)
+            referenced_paths = self._referenced_script_paths(
+                root,
+                frontend_root,
+                script_command,
+            )
+            orchestrator = self._script_uses_process_orchestrator(referenced_paths)
+            if not self._is_runtime_node_script(
+                script,
+                script_command,
+                documented=documented_order is not None,
+                orchestrator=orchestrator,
+            ):
+                continue
+            command = [manager, "run", script] if manager != "yarn" else [manager, script]
+            port_match = PORT_ARGUMENT_RE.search(script_command)
+            port_adaptation: dict[str, Any] | None = None
+            if port_match is not None and port_match.group("port") != "8000":
+                command.extend(
+                    ["--port", "8000"]
+                    if manager == "yarn"
+                    else ["--", "--port", "8000"]
+                )
+                port_adaptation = {
+                    "kind": "cli_override",
+                    "source_port": int(port_match.group("port")),
+                    "target_port": 8000,
+                }
+            environment = self._runtime_environment_overrides(referenced_paths)
+            selection_reason = self._node_selection_reason(
+                documented=documented_order is not None,
+                orchestrator=orchestrator,
+            )
+            candidate: dict[str, Any] = {
+                "kind": "node_web",
+                "command": command,
+                "cwd": frontend_root.relative_to(root).as_posix(),
+                "script": script,
+                "script_command": script_command,
+                "evidence": package_path.relative_to(root).as_posix(),
+                "documented": documented_order is not None,
+                "orchestrator": orchestrator,
+                "selection_reason": selection_reason,
+                "selection_score": self._node_script_score(
+                    script,
+                    script_command,
+                    documented_order=documented_order,
+                    orchestrator=orchestrator,
+                ),
+            }
+            if environment:
+                candidate["env"] = environment
+            if port_adaptation is not None:
+                candidate["port_adaptation"] = port_adaptation
+            candidates.append(candidate)
+        if not candidates:
+            return None
+        candidates.sort(
+            key=lambda candidate: (
+                -int(candidate["selection_score"]),
+                int(documented_scripts.get(str(candidate["script"]), 1_000_000)),
+                str(candidate["script"]),
+            )
+        )
+        selected = dict(candidates[0])
+        selected["candidate_scripts"] = [dict(candidate) for candidate in candidates]
+        return selected
+
+    def _documented_node_scripts(self, root: Path, package_root: Path) -> dict[str, int]:
+        documented: dict[str, int] = {}
+        paths: list[Path] = []
+        for directory in dict.fromkeys((root, package_root)):
+            for name in STARTUP_DOCUMENT_NAMES:
+                path = directory / name
+                if path.is_file() and path not in paths:
+                    paths.append(path)
+        order = 0
+        for path in paths:
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for match in DOCUMENTED_NODE_COMMAND_RE.finditer(content):
+                script = match.group("script")
+                if script not in documented:
+                    documented[script] = order
+                    order += 1
+        return documented
+
+    def _referenced_script_paths(
+        self,
+        root: Path,
+        package_root: Path,
+        command: str,
+    ) -> list[Path]:
+        paths: list[Path] = []
+        for match in SCRIPT_PATH_RE.finditer(command):
+            candidate = (package_root / match.group("path")).resolve()
+            try:
+                candidate.relative_to(root)
+            except ValueError:
+                continue
+            if candidate.is_file() and candidate not in paths:
+                paths.append(candidate)
+        return paths
+
+    def _script_uses_process_orchestrator(self, paths: list[Path]) -> bool:
+        for path in paths:
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if ORCHESTRATOR_SOURCE_RE.search(content):
+                return True
+        return False
+
+    def _runtime_environment_overrides(self, paths: list[Path]) -> dict[str, str]:
+        port_variables: set[str] = set()
+        for path in paths:
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for match in PORT_ENV_RE.finditer(content):
+                variable = match.group("python") or match.group("node")
+                if variable:
+                    port_variables.add(variable)
+        if not port_variables:
+            return {}
+        internal_qualifiers = (
+            "ADMIN",
+            "COLLECTOR",
+            "DASHBOARD",
+            "INTERNAL",
+            "WORKER",
+            "WECOM",
+        )
+        public_port = min(
+            port_variables,
+            key=lambda variable: (
+                0 if variable == "PORT" else 1,
+                1 if any(qualifier in variable for qualifier in internal_qualifiers) else 0,
+                len(variable),
+                variable,
+            ),
+        )
+        return {public_port: "8000"}
+
+    def _is_runtime_node_script(
+        self,
+        script: str,
+        command: str,
+        *,
+        documented: bool,
+        orchestrator: bool,
+    ) -> bool:
+        return (
+            script in RUNTIME_SCRIPT_NAMES
+            or script.startswith("start:")
+            or (
+                orchestrator
+                and (documented or SERVER_COMMAND_RE.search(command) is not None)
+            )
+            or (documented and SERVER_COMMAND_RE.search(command) is not None)
+        )
+
+    def _node_script_score(
+        self,
+        script: str,
+        command: str,
+        *,
+        documented_order: int | None,
+        orchestrator: bool,
+    ) -> int:
+        score = 0
+        if documented_order is not None:
+            score += 100 - min(documented_order, 20)
+        if orchestrator:
+            score += 80
+        preferred_scripts = {
+            "dashboard",
+            "dev:lan",
+            "dev:local",
+            "serve",
+            "start:prod",
+            "start:production",
         }
+        if script in preferred_scripts:
+            score += 30
+        elif script == "start":
+            score += 25
+        elif script == "preview":
+            score += 15
+        elif script == "dev":
+            score += 10
+        if SERVER_COMMAND_RE.search(command) is not None:
+            score += 20
+        return score
+
+    def _node_selection_reason(self, *, documented: bool, orchestrator: bool) -> str:
+        if documented and orchestrator:
+            return "documented_orchestrator"
+        if documented:
+            return "documented_command"
+        if orchestrator:
+            return "orchestrator"
+        return "standard_script"
 
     def _load_context(
         self,
@@ -944,6 +1472,8 @@ class MigrationService:
             "",
             "# opscli migration local-only files",
             ".opscli/",
+            ".openai/",
+            ".codex-feedback-guard-state.json",
             ".env",
             ".env.*",
             "*.db",
@@ -958,6 +1488,40 @@ class MigrationService:
                 if candidate.is_dir() and any(path.is_file() for path in candidate.rglob("*")):
                     relative = candidate.relative_to(root).as_posix()
                     additions.extend((f"!{relative}/", f"!{relative}/**"))
+        missing = [line for line in additions[1:] if line not in existing.splitlines()]
+        if missing:
+            content = existing.rstrip() + "\n" + "\n".join(additions[:1] + missing) + "\n"
+            self._write_text(target, content)
+            return True
+        return False
+
+    def _ensure_dockerignore(self, root: Path) -> bool:
+        """补齐迁移镜像上下文中的本地状态和依赖排除规则。"""
+        target = root / ".dockerignore"
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        additions = [
+            "",
+            "# opscli migration local-only files",
+            ".git",
+            ".opscli",
+            ".env",
+            ".env.*",
+            ".venv",
+            ".next",
+            ".nuxt",
+            ".sites-checkout",
+            ".sites-runtime",
+            ".vinext",
+            ".wrangler",
+            "dist",
+            "node_modules",
+            "__pycache__",
+            "*.db",
+            "*.sqlite",
+            "*.sqlite3",
+            "/data/",
+            "logs/",
+        ]
         missing = [line for line in additions[1:] if line not in existing.splitlines()]
         if missing:
             content = existing.rstrip() + "\n" + "\n".join(additions[:1] + missing) + "\n"
@@ -1054,7 +1618,18 @@ class MigrationService:
 
 
 def _startup_wrapper(manifest: dict[str, Any]) -> str:
-    commands = [item for item in (manifest.get("backend"), manifest.get("frontend")) if item]
+    runtime = manifest.get("runtime")
+    launch_mode = manifest.get("launch_mode")
+    if launch_mode == "dual":
+        commands = [
+            item for item in (manifest.get("backend"), manifest.get("frontend")) if item
+        ]
+    elif isinstance(runtime, dict):
+        commands = [runtime]
+    else:
+        commands = [
+            item for item in (manifest.get("backend"), manifest.get("frontend")) if item
+        ]
     serialized = json.dumps(commands, ensure_ascii=False, indent=2)
     return f'''"""Generated by opscli app migrate; calls the migrated project's detected commands."""
 
@@ -1064,6 +1639,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1090,8 +1666,18 @@ def main() -> int:
     try:
         for item in COMMANDS:
             cwd = ROOT / item.get("cwd", ".")
-            PROCESSES.append(subprocess.Popen(item["command"], cwd=cwd, env=os.environ.copy()))
-        return next((process.wait() for process in PROCESSES), 0)
+            environment = os.environ.copy()
+            environment.update(
+                {{str(key): str(value) for key, value in item.get("env", {{}}).items()}}
+            )
+            PROCESSES.append(subprocess.Popen(item["command"], cwd=cwd, env=environment))
+        while PROCESSES:
+            for process in PROCESSES:
+                exit_code = process.poll()
+                if exit_code is not None:
+                    return exit_code
+            time.sleep(0.25)
+        return 0
     finally:
         stop_processes()
 

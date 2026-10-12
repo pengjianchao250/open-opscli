@@ -28,7 +28,9 @@ from opscli.app.services.manifest import AppManifestStore
 from opscli.app.services.migration_contract import (
     inspect_migration_frontend_build,
     inspect_migration_public_paths,
+    inspect_migration_release_assets,
     inspect_migration_runtime_assets,
+    migration_release_fingerprint,
 )
 from opscli.app.transport.client import AppHubClient
 
@@ -310,6 +312,59 @@ class AppManager:
                     ".dockerignore 不会排除 public 下的数据快照后再推送。"
                 ),
                 detail=runtime_assets,
+            )
+        release_assets = inspect_migration_release_assets(
+            root,
+            expected_app_id=state.get("app_id") if isinstance(state.get("app_id"), str) else None,
+        )
+        if not release_assets["ready"]:
+            raise AppProjectError(
+                "APP-MIGRATION-RELEASE-GATE",
+                "迁移项目尚未满足 AppHub 线上构建门禁。",
+                fix_hint=(
+                    "补齐 app.yaml、入口、依赖与构建资产，统一端口和健康检查后，"
+                    "重新执行迁移验证合同。"
+                ),
+                detail=release_assets,
+            )
+        validation_path = migration_dir / "validation-manifest.json"
+        validation = _read_json_object(validation_path, "APP-MIGRATION-VALIDATION")
+        contracts = validation.get("contracts")
+        required_contracts = (
+            "migration_integrity",
+            "dual_runtime",
+            "release_gate",
+        )
+        contracts_ready = isinstance(contracts, dict) and all(
+            isinstance(contracts.get(name), dict)
+            and contracts[name].get("passed") is True
+            for name in required_contracts
+        )
+        if validation.get("release_ready") is not True or not contracts_ready:
+            raise AppProjectError(
+                "APP-MIGRATION-VALIDATION",
+                "迁移项目尚未通过三项标准验证合同。",
+                fix_hint=(
+                    "执行 validate_migration_contract.py，持续修复迁移副本，"
+                    "直到 migration_integrity、dual_runtime、release_gate 全部通过。"
+                ),
+                detail={"validation_manifest": str(validation_path)},
+            )
+        expected_fingerprint = validation.get("release_fingerprint")
+        current_fingerprint = migration_release_fingerprint(root)
+        if (
+            not isinstance(expected_fingerprint, dict)
+            or expected_fingerprint.get("sha256") != current_fingerprint["sha256"]
+        ):
+            raise AppProjectError(
+                "APP-MIGRATION-VALIDATION-STALE",
+                "迁移项目在验证通过后又发生了源码变化。",
+                fix_hint="重新执行迁移验证合同，生成与当前源码一致的验证清单后再推送。",
+                detail={
+                    "validation_manifest": str(validation_path),
+                    "expected": expected_fingerprint,
+                    "current": current_fingerprint,
+                },
             )
         tracked = self.git_service.runner.run(
             root,

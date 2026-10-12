@@ -1,3 +1,31 @@
+## 2026-10-10 opscli app - 阻断不可交付的构建配置依赖
+
+**变更原因**：迁移项目可能在本机存在被 `.gitignore` 忽略或尚未 Git 跟踪的配置文件，构建配置通过静态导入依赖该文件时本地构建正常，但远端干净 Docker 构建因源码缺失失败。
+
+**改动点**：迁移发布合同新增构建输入闭包检查，扫描 JavaScript/TypeScript `*.config.*` 文件中的静态相对 `import`、`export ... from` 和 `require`；校验目标文件存在、位于项目内、未被 `.dockerignore` 排除，并在 Git 仓库中已跟踪。违规时返回 `build_input_not_releasable`、配置文件、行号、依赖路径和具体原因；保留带缺失回退的运行时可选读取，不把 `readFileSync` 等动态读取误判为静态依赖。
+
+**验证结果**：`tests/app` 完整回归 234 项通过；修改文件通过 `py_compile`，并用真实迁移副本 `prev-018` 验证发布合同仍为 `ready=true`。当前虚拟环境未安装 Ruff，因此未执行 Ruff 检查。
+
+**影响范围**：仅影响源码复制迁移的发布合同和后续验证清单；普通项目创建、普通 push 以及不含静态本地文件依赖的构建配置不变。
+
+**回滚方式**：移除 `migration_contract.py` 的构建输入闭包检查、对应四个回归测试和本条变更记录。
+
+---
+
+## 2026-10-10 opscli app - 按启动证据自动适配 Vinext 动态前缀
+
+**变更原因**：源码迁移项目的目录结构不固定，现有流程只检测启动命令和公开路径，无法在首次生产构建前自动修复 Vinext 生成的根绝对 `/_next` 资源地址，导致 AppHub 动态前缀下样式和脚本请求 404。
+
+**改动点**：新增运行时适配策略注册表，根据 `startup-manifest.json` 的 Node 包清单证据和运行目录选择 Vinext 策略；递归识别嵌套可运行包，自动补齐 Vite `base: './'`、向原有 `build` 命令追加构建清单归一化脚本且保留 `postbuild`，并把修改文件登记到适配清单。复杂配置无法确定时转人工适配，不硬编码 AppHub appId、slug、域名或目录结构；迁移合同扫描同步排除旧任务遗留的 Sites、Vinext 和 Wrangler 运行缓存，避免 resume 被无关缓存拖慢或污染证据。
+
+**验证结果**：`tests/app` 完整回归 `230 passed`，相关 Python 文件 `compileall` 通过；真实 `prev-017` 执行 `pnpm run build` 成功，归一化 4 个 Vinext 清单中的 4 处资源路径，`pnpm run lint` 通过，`opscli app migrate resume --json` 返回 `delivery_ready=true` 且生产清单公开路径合同通过。
+
+**影响范围**：仅影响 `origin_type=migration_copy` 的启动扫描、resume 和适配清单；普通项目创建、普通 push、非 Vinext 运行时不变。
+
+**回滚方式**：移除 `migration_runtime_adaptation.py`、迁移主流程的策略调用、嵌套 Node 包检测、对应测试和本条文档记录。
+
+---
+
 ## 2026-10-09 opscli app - 迁移项目检查动态访问前缀
 
 **变更原因**：源码复制迁移项目可以通过启动、构建和 Git 门禁，但浏览器源码中的根绝对资源或 API URL 会绕过 AppHub 的动态 iframe 前缀，导致线上页面样式丢失、资源 404 或数据请求失败。

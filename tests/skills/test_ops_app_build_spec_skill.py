@@ -34,7 +34,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
     assert 'display_name: "Ops App Build"' in openai
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.30"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.31"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -375,8 +375,21 @@ def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
         "adaptation-manifest.json",
         "adaptation_status=ready",
         "delivery_ready=true",
-        "`backend/app.py`、`frontend/package.json`、`Dockerfile` 和 `nixpacks.toml`",
-        "不得生成通用 Dockerfile",
+        "migration_integrity",
+        "dual_runtime",
+        "release_gate",
+        "validation-manifest.json",
+        "push_on_success",
+        "两个轻量冒烟",
+        "--require-parity",
+        "默认不跑完整 E2E",
+        "不重装依赖",
+        "Node-only、Python-only 和 Dockerfile 原生入口都可以成立",
+        "不要求同时存在前端和后端目录",
+        "`app.yaml`、`Dockerfile`、`.dockerignore` 和 `.gitignore`",
+        "不要求 Nixpacks、FastAPI、`backend/app.py`、`frontend/package.json` 或 `backend.app:app`",
+        "项目专属 Dockerfile",
+        "证据不足时必须进入人工适配",
         "Corepack 能从该 manifest 所在目录解析 `packageManager`",
         "不得使用 `pmOnFail=ignore` 绕过版本合同",
         "opscli app migrate resume",
@@ -384,8 +397,12 @@ def test_ops_app_build_spec_keeps_generic_migration_rules() -> None:
         "startup_manual_required",
         "convert-legacy",
         "普通新建项目行为",
+        "普通新建项目继续使用原有模板克隆、`app create/init/push` 逻辑",
     ):
         assert required in content
+
+    assert "推送前至少确认 `backend/app.py`、`frontend/package.json`" not in migration
+    assert "前后端均识别成功：`startup_status=ready`" not in migration
 
     for required in (
         "## 任务分流",
@@ -439,7 +456,7 @@ def test_ops_app_build_spec_requires_command_driven_migration_gates() -> None:
     assert "在请求中带上 `origin_type=migration_copy`、`migration_id`" not in content
 
 def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
-    """源码交付必须保持当前 AppHub 单应用合同。"""
+    """普通新建保持模板合同，迁移改用 Dockerfile 发布合同。"""
     deployment = _read("references/deployment-standard.md")
 
     for required in (
@@ -468,6 +485,10 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         "https://ops.mcp.xenkee.com",
         "https://mcp.ops.aukeyit.com",
         "部署配置不得注入共享 API Key",
+        "普通新建及标准模板项目",
+        "源码复制迁移由根目录 Dockerfile 定义生产入口",
+        "不强制使用 FastAPI 或该模块路径",
+        "迁移项目保留原依赖体系",
     ):
         assert required in deployment
 
@@ -527,7 +548,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.30"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.31"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])
@@ -541,9 +562,11 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
         "references/data-access-standard.md",
         "references/git-environment-standard.md",
         "references/migration-standard.md",
+        "references/migration-validation-contract.md",
         "references/deployment-standard.md",
         "scripts/clone_template.py",
         "scripts/validate_frontend_contracts.py",
+        "scripts/validate_migration_contract.py",
         "assets/backend/AGENTS.md",
         "assets/backend/CLAUDE.md",
     ):

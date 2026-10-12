@@ -33,7 +33,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 | 后端调用 opscli SDK 或 REST                | [opscli 接入规范](references/opscli-integration-standard.md)                             |
 | 页面需要真实业务数据                       | [数据访问规范](references/data-access-standard.md)，按其要求使用 `$ops-app-data-builder` |
 | Git 检测、安装、权限申请或环境排错         | [Git 环境规范](references/git-environment-standard.md)                                   |
-| 源码复制迁移或迁移后补齐运行规范             | [迁移规范](references/migration-standard.md)                                             |
+| 源码复制迁移或迁移后补齐运行规范           | [迁移规范](references/migration-standard.md)、[迁移验证合同](references/migration-validation-contract.md) |
 | 创建应用、绑定仓库、提交源码或检查交付条件 | [源码交付规范](references/deployment-standard.md)                                        |
 
 首次接手或相关文件变化时，读取项目 `AGENTS.md`、`README.md` 和 `docs/apphub-contract.md`；进入子目录时读取适用的项目规则。后端改动与接口变化再核对 `backend/CLAUDE.md`、受影响路由、Pydantic Schema 和 OpenAPI；纯样式改动不额外读取后端全文。普通开发不读取 `assets/backend/` 中的全文规范。
@@ -46,13 +46,15 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 
 ### 源码复制迁移门禁
 
-1. 明确源项目目录和迁移目标根目录；目标未明确时由 `opscli app migrate start` 在当前对话目录创建 `app-hub-source-时间戳`。
+1. 明确源项目目录和迁移目标根目录，并从源项目真实文档、包脚本和启动入口记录本地运行基线、可复用依赖环境与风险触发项；包内存在多个入口时以 README、DEPLOY 和入口脚本确定真实业务入口，已有编排器时复用编排器；源目录只读。
 2. 执行 `opscli app migrate start --source "<source-project>" [--target-root "<target-root>"] --json`，命令复制源码、写入本地迁移标识、建立最小适配层；只有启动与适配证据明确时才继续普通 AppHub create 和 Git init。
 3. 通过 `opscli app migrate status --target "<target-project>" --json` 查看状态；通过 `opscli app migrate verify --target "<target-project>" --json` 验证源目录未变更、目标隔离、复制/启动/适配清单、`app.yaml` 身份、Git 和 binding。
-4. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；未知启动方式必须停在 `startup_manual_required` / `adaptation_manual_required`，不得初始化或推送。
-5. 人工补齐启动或适配资产后执行 `opscli app migrate resume --target "<target-project>" --json`；命令按持久化阶段继续，不重新复制、不重复创建应用。
-6. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
-7. 迁移项目推送仍使用 `opscli app push`；迁移过程门禁通过后继续执行与普通项目相同的 `app.yaml` 身份和 AppHub 生产门禁。普通新建项目继续使用原有 `app create/init/push` 逻辑。
+4. 按 [迁移验证合同](references/migration-validation-contract.md) 执行 `migration_integrity`、`dual_runtime`、`release_gate` 三项合同。`dual_runtime` 默认仅执行原本地入口和 AppHub 薄适配入口两个轻量冒烟；只有修改业务/API 语义、公共路径、SPA/WebSocket、存储、后台任务、进程模型或业务执行链路时，才启用 `--require-parity` 定向检查业务一致性。缺少发布资产时不得进入 push。
+5. 验证阶段优先复用已有 `.venv`、`node_modules`、pnpm store 和构建缓存；锁文件与依赖声明未变化时不重装依赖，生产构建同一轮最多一次，相同命令复用结果，默认不跑完整 E2E。任一合同失败时只修改目标副本并定向复验，直到 `release_ready=true`；业务重写、数据删除、敏感权限变化和外部阻塞必须停止并说明。
+6. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；人工补齐后执行 `opscli app migrate resume --target "<target-project>" --json`，不得手工伪造状态。
+7. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
+8. 用户已在本轮授权 `push_on_success` 且最终文件范围未变化时，`release_ready=true` 后直接执行 `opscli app push`；未授权时停在验证通过状态。push 成功只表示源码到达远端 `master`。
+9. 上述入口识别、启动模式、清单、验证器和 push 前指纹门禁只适用于 `origin_type=migration_copy`；普通新建项目继续使用原有模板克隆、`app create/init/push` 逻辑，不扫描业务入口，不生成也不读取迁移验证清单。
 ### AppHub 真实取数交付门禁
 
 页面需要 OPS、Keepa 或 SellerSprite 数据时，必须委托 `$ops-app-data-builder` 完成“需求识别 → 正式查询尝试 → 合同固化 → 业务 API/页面接入”的闭环。业务范围已经足够明确时，不得因为用户没有提供 dataset、field、scenario 或轮询参数而停止；这些技术细节由对应查询 Skill 验证并回填。
@@ -227,7 +229,7 @@ database:
 
 ### 6. 运行合同
 
-当前路由合同为 `root-v1`。浏览器公开前缀由平台在鉴权后移除，应用只接收根路径请求：
+当前路由合同为 `root-v1`。浏览器公开前缀由平台在鉴权后移除，应用只接收根路径请求。以下 FastAPI、Vite 和 SQLite 约定属于普通新建及标准模板项目；源码复制迁移只继承平台通用合同，不因这些模板约定强制改造成 FastAPI 或前后端标准目录：
 
 - Vite 固定 `base: './'`，路由、静态资源、Axios 和 WebSocket 使用相对 URL。
 - FastAPI 先注册 `/__apphub_healthz`、`/api/*` 和 WebSocket，再挂载静态资源，SPA fallback 最后注册。
@@ -237,16 +239,18 @@ database:
 
 ### 7. 构建与源码交付
 
-项目构建合同以 AppHub 的 Nixpacks 运行环境为准：
+普通新建及标准模板项目继续沿用现有 Nixpacks、FastAPI 和目录约定，不改变既有创建、开发与 push 行为：
 
 - `nixpacks.toml` 分别在 `install` 与 `python:install` 使用 `...` 保留 Node/Python provider 计划；平台 SDK 导入门禁追加到 `python:install`，Vite 构建显式依赖两个安装阶段，并以平台同款命令启动 FastAPI。
 - 根目录 `requirements.txt` 中普通第三方依赖使用 `==` 精确锁定；平台 SDK 使用真实包 `aukeys-opscli>=0.0.129`，并在构建阶段验证 `import opscli.app`。若索引中尚无兼容正式版本，停止源码交付并联系 IT，不得用本地同名包绕过。
 - 禁止创建本地 `opscli/` 包、同名模块或路径依赖来绕过真实包安装。
-- `Dockerfile` 只用于本地、CI 和可复现构建，不改变 AppHub 的 Nixpacks 运行合同。
+- 对普通新建及标准模板项目，`Dockerfile` 继续用于本地、CI 和可复现构建，不改变其既有 Nixpacks 合同。
 - 启动命令为 `uvicorn backend.app:app --host 0.0.0.0 --port 8000`，数据库初始化和迁移遵循项目合同与 AppHub 运行时能力，不调用已废弃的项目侧部署命令。
 - 平台健康检查固定为 `/__apphub_healthz`，必须快速返回 200，且不依赖业务查询。
 
-源码交付前必须确认：
+源码复制迁移使用薄适配合同：AppHub 生产构建由根目录 `Dockerfile` 定义，迁移门禁只校验当前 AppHub 实际要求的 `app.yaml`、Docker 启动命令、端口 8000、`/__apphub_healthz`、忽略规则及按需的 `compose.apphub.yaml`。迁移项目不强制提供 Nixpacks、FastAPI、`backend/app.py`、`frontend/package.json` 或 `backend.app:app`；只要仓库证据能确定一个可用于生产的运行时即可继续，无法可靠识别时进入人工适配，不自动猜测。
+
+普通新建及标准模板项目源码交付前必须确认：
 
 - `app.yaml` 能通过当前 schema，入口文件存在，Git 根独立且当前分支为 `master`。
 - `requirements.txt` 的普通依赖全部精确锁定，真实 `aukeys-opscli` 通过兼容模块导入检查。
@@ -274,6 +278,8 @@ database:
 - `third_party_source_snapshot` 和 `third_party_async_job` 都使用 `UNIQUE(owner_user_id, provider, request_hash)`；XLS/XLSX 和临时下载 URL 不写入 SQLite。
 - `docs/ops-app/data-spec.md` 与实际 Pydantic Schema、前端类型、迁移和运行时能力一致。
 - 具备浏览器条件时已检查业务模块正文和控制台 Vue warning；生产构建成功不能替代运行时验收。
+
+源码复制迁移的交付检查改读 [迁移规范](references/migration-standard.md) 和 [迁移验证合同](references/migration-validation-contract.md)，不得把本节模板资产清单重新施加到迁移目标。
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器。
 
