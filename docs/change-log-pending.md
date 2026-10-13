@@ -11905,3 +11905,23 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **回滚方式**：回退本条涉及的目录、元数据、Skill 参考和测试；不涉及数据库、凭据或远端配置。
 
 ---
+
+## 2026-10-13 西柚 Skill - 明确远程调用入口与失败证据
+
+**变更原因**：普通查询 Skill 混入服务端凭据管理命令，并将远程审计日志写成“本机”，可能诱导 Agent 在用户电脑上执行 Provider；历史错误摘要也不能作为本轮实测证据。
+**改动点**：ops-xiyou v1.3.4 明确调用已连接的远程 ext_xydc_*，工具不可见时检查连接；移除凭据管理示例，明确 MySQL、供应商密钥及日志属于服务端。配置错误提交反馈后停止其余西柚查询并交管理员排查；调用次数、错误与 Credit 结论绑定实际返回。同步版本文件和现有模板安装测试。
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/skills/test_ops_xiyou_skill.py -q`，6 passed，覆盖版本一致性、调用边界和临时目录安装；skill-creator 的 quick_validate.py 通过，git diff --check 通过。未调用付费接口验证文案，未发布。
+**影响范围**：ops-xiyou 内置模板与版本校验；不修改业务代码、认证 Skill、用户已安装 Skill 或远程服务。
+**回滚方式**：回退本条对应的 Skill、版本及测试改动，恢复 v1.3.3。
+
+---
+
+## 2026-10-13 西柚 MCP - 收敛为目录与通用查询两个入口
+
+**变更原因**：四个旧名称的便利包装与通用 OpenAPI 入口覆盖相同能力，容易让 Agent 误认为存在旧查询通道。
+**改动点**：移除四个兼容 MCP 入口，保留 ext_xydc_openapi_operations 与 ext_xydc_openapi_call；同步 ops-xiyou v2.0.0 请求示例、版本、目录分页描述、额度默认映射、注册与安装测试。SDK 内部参数兼容、历史额度数据保留。迁移说明要求旧调用方改用 operation + payload，并核对远程工具授权。
+**验证结果**：修改前实际 MCP 注册列表回归 1 failed，明确检出四个额外旧工具；改造后 MCP 注册/转发/埋点、Provider、REST、SQLite/MySQL 额度及 Skill 相关回归 152 passed。整理测试排版和模块说明后，相关15项复验通过。Skill Creator 结构校验、Skill 发版清单校验及 git diff --check 通过；供应商请求及 MySQL 使用 mock，未调用收费 API。
+**影响范围**：西柚 MCP 公开工具合同；旧 MCP 工具名将不可调用，查询能力不减少。未部署远端服务。
+**回滚方式**：回退本条对应代码、Skill、版本与测试；历史额度数据不删除。
+
+---

@@ -1,9 +1,10 @@
-"""西柚 xydc 试用工具注册与转发测试。"""
+"""西柚 OpenAPI 统一入口的注册与转发测试。"""
 
 from __future__ import annotations
 
 import asyncio
 
+import pytest
 from fastmcp import Client
 
 from opscli.mcp import server as server_module
@@ -13,6 +14,8 @@ from opscli.mcp.tools import xydc as xydc_tools
 XYDC_TOOL_NAMES = {
     "ext_xydc_openapi_operations",
     "ext_xydc_openapi_call",
+}
+LEGACY_TOOL_NAMES = {
     "ext_xydc_get_asin_info",
     "ext_xydc_get_asin_traffic",
     "ext_xydc_get_keyword_info",
@@ -24,7 +27,34 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch):
+@pytest.mark.parametrize(
+    "operation,payload",
+    [
+        ("asin_info", {"entities": [{"asin": "B012345678", "country": "US"}]}),
+        ("asin_traffic", {"entities": [{"asin": "B012345678", "country": "US"}]}),
+        (
+            "search_terms_info",
+            {
+                "country": "US",
+                "searchTerms": ["usb c charger"],
+                "sort": {"field": "weeklySearchVolume", "order": "desc"},
+            },
+        ),
+        (
+            "search_terms_analysis_period",
+            {
+                "searchTerm": "usb c charger",
+                "country": "US",
+                "page": 2,
+                "pageSize": 5,
+                "period": "last7days",
+                "sort": {"field": "traffic", "order": "desc"},
+            },
+        ),
+    ],
+)
+def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch, operation, payload):
+    """四种原包装能力使用同一入口，分页与排序原样透传。"""
     calls = []
 
     class FakeProvider:
@@ -35,28 +65,16 @@ def test_xydc_tool_forwards_frozen_business_arguments(monkeypatch):
     monkeypatch.setattr(xydc_tools, "XydcOpenApiProvider", FakeProvider)
 
     result = _run(
-        xydc_tools.ext_xydc_get_keyword_asin_analysis(
-            keyword="usb c charger",
-            country="US",
-            page=2,
-            page_size=5,
-        )
+        xydc_tools.ext_xydc_openapi_call(operation=operation, payload=payload)
     )
 
     assert result["success"] is True
-    assert calls == [
-        (
-            "get_keyword_asin_analysis",
-            {
-                "keyword": "usb c charger",
-                "country": "US",
-                "page": 2,
-                "page_size": 5,
-                "sort_field": "traffic",
-                "sort_order": "desc",
-            },
-        )
-    ]
+    assert calls == [(operation, payload)]
+    dimensions = xydc_tools.ext_xydc_openapi_call.__opscli_telemetry_dimension_resolver__(
+        {"operation": operation, "payload": payload}
+    )
+    assert dimensions["scenario"] == operation
+    assert dimensions["endpoint"] == xydc_tools.OPERATIONS[operation].endpoint
 
 
 def test_client_quota_is_rejected_before_provider_call(monkeypatch):
@@ -75,13 +93,10 @@ def test_client_quota_is_rejected_before_provider_call(monkeypatch):
     assert result["error"]["code"] == "XYDC_OPENAPI_INTERNAL_OPERATION"
 
 
-def test_xydc_tools_have_testing_description_and_gateway_metadata():
+def test_xydc_tools_have_openapi_description_and_gateway_metadata():
     assert {tool.__name__ for tool in xydc_tools._ALL_TOOLS} == XYDC_TOOL_NAMES
     for tool in xydc_tools._ALL_TOOLS:
-        if tool.__name__ in {"ext_xydc_openapi_operations", "ext_xydc_openapi_call"}:
-            assert "OpenAPI" in (tool.__doc__ or "")
-        else:
-            assert (tool.__doc__ or "").startswith("【OpenAPI｜消耗西柚 Credit】")
+        assert "OpenAPI" in (tool.__doc__ or "")
         assert getattr(tool, "__opscli_catalog_module__", None) == "external_xydc"
         assert getattr(tool, "__opscli_telemetry_role__", None) == "gateway_proxy"
         assert getattr(tool, "__opscli_skip_quota__", False) is False
@@ -127,17 +142,12 @@ def test_default_server_registers_xydc_tools_with_frozen_schemas(monkeypatch, tm
 
     tools = {tool.name: tool for tool in _run(scenario())}
 
-    assert XYDC_TOOL_NAMES <= set(tools)
+    assert {name for name in tools if name.startswith("ext_xydc_")} == XYDC_TOOL_NAMES
+    assert LEGACY_TOOL_NAMES.isdisjoint(tools)
     assert xydc_tools.register in registrars
-    keyword_tool = tools["ext_xydc_get_keyword_asin_analysis"]
-    assert keyword_tool.inputSchema["required"] == ["keyword", "country"]
-    assert keyword_tool.inputSchema["properties"]["page"]["minimum"] == 1
-    assert keyword_tool.inputSchema["properties"]["page_size"] == {
-        "default": 20,
-        "maximum": 100,
-        "minimum": 1,
-        "type": "integer",
-    }
+    call_tool = tools["ext_xydc_openapi_call"]
+    assert call_tool.inputSchema["required"] == ["operation", "payload"]
+    assert call_tool.inputSchema["properties"]["payload"]["type"] == "object"
 
 
 def test_default_server_registers_full_openapi_operation_contract(monkeypatch, tmp_path):

@@ -134,8 +134,9 @@ def test_default_quota_policies_only_limit_public_service_run_entries():
     assert policies["seller_sprite_run"].service == "seller_sprite"
     assert policies["seller_sprite_listing_analysis_submit"].service == "seller_sprite"
     assert policies["keepa_run"].service == "keepa"
-    assert policies["ext_xydc_get_asin_info"].service == "xiyou"
-    assert policies["ext_xydc_get_keyword_asin_analysis"].daily_limit == 10
+    assert policies["ext_xydc_openapi_call"].service == "xiyou"
+    assert policies["ext_xydc_openapi_call"].daily_limit == 10
+    assert {name for name in policies if name.startswith("ext_xydc_")} == {"ext_xydc_openapi_call"}
     assert "seller_sprite_start" not in policies
     assert "seller_sprite_listing_analysis_status" not in policies
     assert "seller_sprite_listing_analysis_result" not in policies

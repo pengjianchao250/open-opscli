@@ -1,4 +1,7 @@
+"""西柚 Skill 的入口合同、版本与安装资源校验。"""
+
 import json
+import re
 from pathlib import Path
 
 from opscli.skills.services.manager import SkillsManager
@@ -15,8 +18,8 @@ def test_ops_xiyou_template_identity_is_consistent():
     version = json.loads(VERSION_PATH.read_text(encoding="utf-8"))
 
     assert text.startswith("---\nname: ops-xiyou\n")
-    assert "mcp-version: v1.3.3" in text
-    assert version == {"name": "ops-xiyou", "version": "v1.3.3"}
+    assert "mcp-version: v2.0.0" in text
+    assert version == {"name": "ops-xiyou", "version": "v2.0.0"}
 
 
 def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
@@ -30,20 +33,14 @@ def test_ops_xiyou_requires_explicit_trigger_and_discloses_credit():
     assert "旧 xydc MCP" in text
 
 
-def test_ops_xiyou_covers_only_registered_xydc_trial_tools():
-    text = SKILL_PATH.read_text(encoding="utf-8")
-    expected_tools = {
-        "ext_xydc_get_asin_info",
-        "ext_xydc_get_asin_traffic",
-        "ext_xydc_get_keyword_info",
-        "ext_xydc_get_keyword_asin_analysis",
-    }
+def test_ops_xiyou_covers_only_registered_openapi_tools():
+    """Skill 中公开工具引用必须与实际注册集合一致。"""
+    from opscli.mcp.tools.xydc import _ALL_TOOLS
 
-    assert expected_tools == {name for name in expected_tools if name in text}
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    assert set(re.findall(r"ext_xydc_[a-z_]+", text)) == {tool.__name__ for tool in _ALL_TOOLS}
     assert "source=xydc_openapi" in text
     assert "cost_credits" in text
-    assert "ext_xydc_openapi_call" in text
-    assert "ext_xydc_openapi_operations" in text
 
 
 def test_ops_xiyou_documents_provider_rotation_and_retry_boundary():
@@ -79,11 +76,11 @@ def test_ops_xiyou_can_be_installed_from_builtin_templates(tmp_path: Path):
 
     installed_dir = tmp_path / "skills" / "ops-xiyou"
     assert result.name == "ops-xiyou"
-    assert result.to_dict()["version"] == "v1.3.3"
+    assert result.to_dict()["version"] == "v2.0.0"
     assert (installed_dir / "SKILL.md").exists()
     assert json.loads(
         (installed_dir / "data" / "VERSION.json").read_text(encoding="utf-8")
-    ) == {"name": "ops-xiyou", "version": "v1.3.3"}
+    ) == {"name": "ops-xiyou", "version": "v2.0.0"}
     for filename in ("趋势参数与可用日期.md", "接口参数与返回口径.md"):
         reference = Path("references") / filename
         assert (installed_dir / reference).read_bytes() == (SKILL_DIR / reference).read_bytes()
