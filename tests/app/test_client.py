@@ -101,18 +101,18 @@ def test_create_request_includes_explicit_contact() -> None:
     assert request.to_dict()["contact"] == "owner@example.com"
 
 
-def test_create_request_includes_migration_metadata() -> None:
+def test_migration_create_request_uses_ordinary_server_contract() -> None:
     request = AppCreateRequest.from_app_name(
         "项目十部-v31",
         slug="project-10-v31",
-        origin_type="migration_copy",
-        migration_id="migration-demo",
+        include_default_database=False,
     )
 
     payload = request.to_dict()
 
-    assert payload["origin_type"] == "migration_copy"
-    assert payload["migration_id"] == "migration-demo"
+    assert "origin_type" not in payload
+    assert "migration_id" not in payload
+    assert "database" not in payload
 
 
 def test_client_fetches_latest_jwt_for_every_request() -> None:

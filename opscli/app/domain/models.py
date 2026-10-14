@@ -13,7 +13,6 @@ from opscli.app.domain.exceptions import AppProjectError
 
 _SLUG_INVALID_RE = re.compile(r"[^a-z0-9]+")
 _SLUG_VALID_RE = re.compile(r"^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
-_MIGRATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
 
 
 def validate_app_id(value: Any, *, code: str = "APP-BINDING-INVALID") -> str:
@@ -57,8 +56,7 @@ class AppCreateRequest:
     title: str
     description: str = ""
     contact: str | None = None
-    origin_type: str | None = None
-    migration_id: str | None = None
+    include_default_database: bool = True
 
     @classmethod
     def from_app_name(
@@ -66,26 +64,16 @@ class AppCreateRequest:
         app_name: str,
         *,
         slug: str | None = None,
-        origin_type: str | None = None,
-        migration_id: str | None = None,
+        include_default_database: bool = True,
     ) -> "AppCreateRequest":
         title = app_name.strip()
         if not title:
             raise AppProjectError("APP-ARGUMENT", "应用名称不能为空。")
-        if origin_type not in {None, "migration_copy"}:
-            raise AppProjectError("APP-ARGUMENT", "origin_type 只支持 migration_copy。")
-        if migration_id is not None and _MIGRATION_ID_RE.fullmatch(migration_id) is None:
-            raise AppProjectError("APP-ARGUMENT", "migration_id 格式错误。")
-        if origin_type == "migration_copy" and migration_id is None:
-            raise AppProjectError("APP-ARGUMENT", "迁移项目必须提供 migration_id。")
-        if origin_type is None and migration_id is not None:
-            raise AppProjectError("APP-ARGUMENT", "migration_id 只能用于迁移项目。")
         normalized_slug = slugify_site_name(slug) if slug else slugify_site_name(title)
         return cls(
             name=normalized_slug,
             title=title,
-            origin_type=origin_type,
-            migration_id=migration_id,
+            include_default_database=include_default_database,
         )
 
     @classmethod
@@ -99,7 +87,6 @@ class AppCreateRequest:
             "title": self.title,
             "description": self.description,
             "resources": {"cpu": None, "memory": None},
-            "database": {"kind": "sqlite", "path": "/data/app.db"},
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
@@ -107,10 +94,8 @@ class AppCreateRequest:
         # contact 未填写时省略字段，兼容尚未接收该可选字段的 AppHub 服务版本。
         if self.contact is not None:
             payload["contact"] = self.contact
-        if self.origin_type is not None:
-            payload["origin_type"] = self.origin_type
-        if self.migration_id is not None:
-            payload["migration_id"] = self.migration_id
+        if self.include_default_database:
+            payload["database"] = {"kind": "sqlite", "path": "/data/app.db"}
         return payload
 
 

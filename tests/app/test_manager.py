@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,7 @@ from opscli.app.domain.exceptions import AppGitError, AppProjectError
 from opscli.app.domain.models import SiteBinding
 from opscli.app.services.binding import BindingStore
 from opscli.app.services.manager import AppManager
+from opscli.app.services.migration_contract import migration_release_fingerprint
 
 
 def _repo_url(slug: str) -> str:
@@ -159,14 +161,30 @@ class FakeCredentialStore:
 
 
 class FakeGit:
-    def __init__(self, *, pushed: bool = True, credential_valid: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        pushed: bool = True,
+        credential_valid: bool = True,
+        tracked_files: tuple[str, ...] = (),
+    ) -> None:
         self.init_calls: list[tuple[Path, dict]] = []
         self.push_calls: list[tuple[Path, dict]] = []
         self.probe_calls: list[tuple[Path, dict]] = []
         self.auth_probe_calls: list[tuple[Path, dict]] = []
+        self.run_calls: list[tuple[Path, list[str], bool]] = []
         self.initialized_roots: set[Path] = set()
         self.pushed = pushed
         self.credential_valid = credential_valid
+        self.tracked_files = tracked_files
+        self.runner = self
+
+    def run(self, root, args, check=False):
+        self.run_calls.append((root, args, check))
+        tracked_files = self.tracked_files
+        if ":(exclude).env.example" in args:
+            tracked_files = tuple(path for path in tracked_files if path != ".env.example")
+        return SimpleNamespace(stdout="\n".join(tracked_files), stderr="", returncode=0)
 
     def origin_matches(self, root, **kwargs):
         return root in self.initialized_roots
@@ -211,11 +229,79 @@ def _manager(
     )
 
 
-def _write_manifest(root: Path, *, app_id: str = "Tm123", title: str = "示例应用") -> None:
+def _write_manifest(
+    root: Path,
+    *,
+    app_id: str = "Tm123",
+    title: str = "示例应用",
+    sqlite: bool = False,
+    include_runtime: bool = True,
+) -> None:
+    database = "database:\n  kind: sqlite\n  path: /data/app.db\n" if sqlite else ""
+    runtime = "runtime: fastapi\n" if include_runtime else ""
     (root / "app.yaml").write_text(
-        f"apiVersion: apps.aukeys/v1\napp_id: {app_id}\ntitle: {title}\nruntime: fastapi\n",
+        f"apiVersion: apps.aukeys/v1\napp_id: {app_id}\ntitle: {title}\n{database}"
+        f"{runtime}",
         encoding="utf-8",
     )
+
+
+def _write_migration_gate(root: Path, *, delivery_ready: bool = True) -> None:
+    migration_id = "migration-manager"
+    migration_dir = root / ".opscli" / "migration" / migration_id
+    migration_dir.mkdir(parents=True, exist_ok=True)
+    (root / ".opscli" / "project.json").write_text(
+        json.dumps(
+            {
+                "origin_type": "migration_copy",
+                "migration_id": migration_id,
+                "source_root": str(root.parent / "source-project"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    for name, payload in {
+        "copy-manifest.json": {},
+        "startup-manifest.json": {"status": "ready"},
+        "adaptation-manifest.json": {"status": "ready"},
+        "migration.json": {
+            "app_id": "Ab123",
+            "phase": "push_ready",
+            "delivery_ready": delivery_ready,
+        },
+    }.items():
+        (migration_dir / name).write_text(json.dumps(payload), encoding="utf-8")
+    (root / "server.js").write_text(
+        'const port = Number(process.env.PORT || "8000");\n'
+        'const healthPath = "/__apphub_healthz";\n',
+        encoding="utf-8",
+    )
+    (root / "Dockerfile").write_text(
+        "FROM node:22-alpine\n"
+        "WORKDIR /app\n"
+        "COPY . .\n"
+        "EXPOSE 8000\n"
+        'CMD ["node", "server.js"]\n',
+        encoding="utf-8",
+    )
+    (root / ".gitignore").write_text(".opscli/\n/data/\n.env\n", encoding="utf-8")
+    (root / ".dockerignore").write_text(".git\n.opscli\n/data/\n.env\n", encoding="utf-8")
+
+
+def _write_migration_validation(root: Path, *, release_ready: bool = True) -> None:
+    migration_id = "migration-manager"
+    contracts = {
+        name: {"passed": release_ready}
+        for name in ("migration_integrity", "dual_runtime", "release_gate")
+    }
+    payload = {
+        "schema_version": 1,
+        "release_ready": release_ready,
+        "contracts": contracts,
+        "release_fingerprint": migration_release_fingerprint(root),
+    }
+    target = root / ".opscli" / "migration" / migration_id / "validation-manifest.json"
+    target.write_text(json.dumps(payload), encoding="utf-8")
 
 
 def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
@@ -231,6 +317,8 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
 
     payload = client.create_payloads[0]
     assert payload["database"] == {"kind": "sqlite", "path": "/data/app.db"}
+    assert "origin_type" not in payload
+    assert "migration_id" not in payload
     assert "runtime" not in payload
     assert git.init_calls == []
     assert git.push_calls == []
@@ -248,6 +336,18 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     assert "\nname:" not in manifest
     assert 'title: "新看板"' in manifest
     assert "runtime: fastapi" in manifest
+
+
+def test_migration_create_omits_database_without_changing_normal_default(tmp_path: Path) -> None:
+    client = FakeClient()
+    manager = _manager(client, FakeGit())
+
+    manager.create_app("迁移应用", path=tmp_path, include_default_database=False)
+
+    payload = client.create_payloads[0]
+    assert "database" not in payload
+    assert "origin_type" not in payload
+    assert "migration_id" not in payload
 
 
 def test_create_without_manifest_does_not_generate_one(tmp_path: Path) -> None:
@@ -737,6 +837,441 @@ def test_push_requires_manifest_before_remote_or_git(tmp_path: Path) -> None:
     assert caught.value.code == "APP-MANIFEST-NOT-FOUND"
     assert client.detail_calls == client.git_calls == []
     assert git.init_calls == git.push_calls == []
+
+
+def test_push_rejects_sqlite_without_apphub_compose_before_remote_or_git(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_manifest(
+        tmp_path,
+        app_id="Ab123",
+        title="销售看板",
+        sqlite=True,
+        include_runtime=False,
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="修改")
+
+    assert caught.value.code == "APP-COMPOSE-REQUIRED"
+    assert caught.value.detail == {
+        "required_file": "compose.apphub.yaml",
+        "database_kind": "sqlite",
+    }
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_push_accepts_sqlite_with_apphub_compose(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_manifest(
+        tmp_path,
+        app_id="Ab123",
+        title="销售看板",
+        sqlite=True,
+        include_runtime=False,
+    )
+    (tmp_path / "compose.apphub.yaml").write_text("services: {}\n", encoding="utf-8")
+    git = FakeGit()
+
+    result = _manager(client, git).push(tmp_path, message="修改")
+
+    assert result["pushed"] is True
+    assert client.detail_calls == ["Ab123"]
+    assert len(git.push_calls) == 1
+
+
+def test_push_without_database_does_not_require_apphub_compose(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    git = FakeGit()
+
+    result = _manager(client, git).push(tmp_path, message="修改")
+
+    assert result["pushed"] is True
+    assert client.detail_calls == ["Ab123"]
+    assert len(git.push_calls) == 1
+
+
+def test_migration_push_rejects_incomplete_adaptation_before_remote(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path, delivery_ready=False)
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-GATE"
+    assert client.detail_calls == client.git_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_still_requires_unified_app_manifest(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-RELEASE-GATE"
+    assert client.detail_calls == client.git_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_sqlite_without_apphub_compose(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path,
+        app_id="Ab123",
+        title="销售看板",
+        sqlite=True,
+        include_runtime=False,
+    )
+    _write_migration_validation(tmp_path)
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-RELEASE-GATE"
+    assert "compose.apphub.yaml" in caught.value.detail["detail"]["missing"]
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_allows_tracked_env_example(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    _write_migration_validation(tmp_path)
+    git = FakeGit(tracked_files=(".env.example",))
+
+    result = _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert result["pushed"] is True
+    assert ":(exclude).env.example" in git.run_calls[0][1]
+    assert len(git.push_calls) == 1
+
+
+def test_migration_push_still_rejects_tracked_environment_file(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    _write_migration_validation(tmp_path)
+    git = FakeGit(tracked_files=(".env.example", ".env.local"))
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-SENSITIVE"
+    assert caught.value.detail == {"tracked": [".env.local"]}
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_corepack_parent_directory_mismatch(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text(
+        json.dumps({"packageManager": "pnpm@10.15.0"}), encoding="utf-8"
+    )
+    (tmp_path / "Dockerfile").write_text(
+        "FROM node:22-alpine AS frontend-build\n"
+        "WORKDIR /app\n"
+        "RUN corepack enable\n"
+        "COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/\n"
+        "RUN pnpm --dir frontend install && pnpm --dir frontend build\n",
+        encoding="utf-8",
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-BUILD-CONTRACT"
+    assert caught.value.detail["reason"] == "corepack_context_mismatch"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_root_relative_browser_urls(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text(
+        '<link rel="stylesheet" href="/styles.css">', encoding="utf-8"
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-PUBLIC-PATH"
+    assert caught.value.detail["reason"] == "root_relative_public_url"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_unpacked_runtime_snapshot(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    snapshot = tmp_path / "public" / "dashboard" / "data"
+    snapshot.mkdir(parents=True)
+    (snapshot / "report.json").write_text('{"status":"ready"}', encoding="utf-8")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "server.py").write_text(
+        'STATIC_DATA_ROOT = PROJECT_ROOT / "public" / "dashboard" / "data"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / ".gitignore").write_text("/data/\n", encoding="utf-8")
+    (tmp_path / ".dockerignore").write_text("/data/\n", encoding="utf-8")
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.12-slim AS runtime\nCOPY scripts ./scripts\n",
+        encoding="utf-8",
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-RUNTIME-ASSET"
+    assert caught.value.detail["reason"] == "runtime_snapshot_not_packaged"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_requires_validation_manifest(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-VALIDATION"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_failed_validation_contract(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    _write_migration_validation(tmp_path, release_ready=False)
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-VALIDATION"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_migration_push_rejects_stale_validation_fingerprint(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    _write_migration_validation(tmp_path)
+    (tmp_path / "server.js").write_text(
+        'const port = Number(process.env.PORT || "8000");\n'
+        'const healthPath = "/__apphub_healthz";\n'
+        "const value = 2;\n",
+        encoding="utf-8",
+    )
+    git = FakeGit()
+
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert caught.value.code == "APP-MIGRATION-VALIDATION-STALE"
+    assert client.detail_calls == client.git_calls == client.env_calls == []
+    assert git.init_calls == git.push_calls == []
+
+
+def test_normal_push_does_not_apply_migration_frontend_build_contract(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_manifest(tmp_path, app_id="Ab123", title="销售看板")
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (frontend / "package.json").write_text(
+        json.dumps({"packageManager": "pnpm@10.15.0"}), encoding="utf-8"
+    )
+    (tmp_path / "Dockerfile").write_text(
+        "FROM node:22-alpine AS frontend-build\n"
+        "WORKDIR /app\n"
+        "RUN corepack enable\n"
+        "COPY frontend/package.json frontend/pnpm-lock.yaml ./frontend/\n"
+        "RUN pnpm --dir frontend install && pnpm --dir frontend build\n",
+        encoding="utf-8",
+    )
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text(
+        '<link rel="stylesheet" href="/styles.css">', encoding="utf-8"
+    )
+    snapshot = tmp_path / "public" / "dashboard" / "data"
+    snapshot.mkdir(parents=True)
+    (snapshot / "report.json").write_text('{"status":"ready"}', encoding="utf-8")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "server.py").write_text(
+        'STATIC_DATA_ROOT = PROJECT_ROOT / "public" / "dashboard" / "data"\n',
+        encoding="utf-8",
+    )
+    git = FakeGit()
+
+    result = _manager(client, git).push(tmp_path, message="普通项目交付")
+
+    assert result["pushed"] is True
+    assert client.detail_calls == ["Ab123"]
+    assert len(git.push_calls) == 1
+
+
+def test_migration_push_uses_normal_identity_gate_after_local_gate(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().save(
+        tmp_path,
+        SiteBinding.from_app_detail("销售看板", client.apps["Ab123"]).migrated(
+            apphub_url=client.api_base_url
+        ),
+    )
+    _write_migration_gate(tmp_path)
+    _write_manifest(
+        tmp_path, app_id="Ab123", title="销售看板", include_runtime=False
+    )
+    _write_migration_validation(tmp_path)
+    git = FakeGit()
+
+    result = _manager(client, git).push(tmp_path, message="迁移交付")
+
+    assert result["pushed"] is True
+    assert client.detail_calls == ["Ab123"]
+    assert len(git.push_calls) == 1
 
 
 @pytest.mark.parametrize(

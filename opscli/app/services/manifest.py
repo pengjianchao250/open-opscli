@@ -108,10 +108,10 @@ class AppManifestStore:
         binding: SiteBinding,
         *,
         required: bool = True,
-    ) -> None:
+    ) -> dict[str, Any] | None:
         payload = self.load(path, required=required)
         if payload is None:
-            return
+            return None
         if "name" in payload:
             raise AppProjectError(
                 "APP-MANIFEST-LEGACY-NAME",
@@ -131,6 +131,32 @@ class AppManifestStore:
                 "app.yaml.app_id 与当前目录绑定的应用不一致。",
                 fix_hint="核对项目目录和 .opscli/app.json；不要把一个应用的源码推送到另一应用。",
             )
+        return payload
+
+    def validate_production_assets(
+        self,
+        path: str | Path,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        root = Path(path).expanduser().resolve()
+        manifest = payload if payload is not None else self.load(root, required=True)
+        if manifest is None:
+            return
+        database = manifest.get("database")
+        if not isinstance(database, dict) or database.get("kind") != "sqlite":
+            return
+        compose_path = root / "compose.apphub.yaml"
+        if compose_path.is_file():
+            return
+        raise AppProjectError(
+            "APP-COMPOSE-REQUIRED",
+            "app.yaml 声明使用 SQLite，但项目根目录缺少 compose.apphub.yaml。",
+            fix_hint=(
+                "请从当前 AppHub 模板恢复项目实际使用的 compose.apphub.yaml，"
+                "核对存储挂载和 SQLITE_PATH 后再推送。"
+            ),
+            detail={"required_file": "compose.apphub.yaml", "database_kind": "sqlite"},
+        )
 
 
 def _replace_identity(content: str, *, app_id: str, title: str) -> str:
