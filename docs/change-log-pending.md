@@ -1,3 +1,17 @@
+## 2026-10-14 西柚 - 补齐 CLI 代理与 Skill 工具发现流程
+
+**变更原因**：用户反馈安装 ops-xiyou 后 Agent 因宿主未直接提供西柚工具而停止查询；原 Skill 仅支持 MCP 直连，西柚没有 Keepa 那样的正式 CLI 代理入口。
+
+**改动点**：新增懒加载 `opscli xiyou operations/call`，复用 Keepa 的 `RemoteMcpAdapter` 获取当前用户远端 MCP 配置；支持 JSON 字符串或 UTF-8/BOM 参数文件与完整响应落盘，业务失败非零退出且不重放。ops-xiyou 升至 v2.0.1，补充延迟工具发现、CLI 降级、程序/Skill/服务版本区分及父体月订单、类目月均排名和本地 Excel 交付口径。同步迁移说明、帮助快照和旧入口废弃测试。
+
+**验证结果**：新增入口与完整 CLI 转发用例在修复前均因 `No such command 'xiyou'` 失败，修复后通过；西柚 Provider/CLI/REST/MCP、Skill 安装、顶级懒加载、Keepa/鹰眼代理及共享远端适配层共 `142 passed`。Skill Creator 校验、Python 编译及 diff 检查通过。本会话实际远端目录调用成功返回 21 个公共操作，不消耗供应商 Credit；未执行收费业务查询，未验证反馈用户环境或供应商数据可用性。
+
+**影响范围**：新增客户端 CLI 代理和 Skill 入口选择，不恢复旧网页/供应商 MCP，不修改服务端凭据池、供应商请求、额度或重试策略。需发布客户端与 Skill 后用户才能使用新命令；远端通用工具及角色权限仍须可用。详见 `docs/analysis/西柚Skill入口故障排查与修复-2026-10-14.md`。
+
+**回滚方式**：移除 xiyou 的懒加载注册与两个新增 CLI/适配层文件，将 Skill 和版本恢复至 v2.0.0，并回退对应测试、快照与文档；服务端 OpenAPI 数据和凭据不受影响。
+
+---
+
 ## 2026-10-09 SQLite 迁移 - 合入 Quota MySQL 支持
 
 **变更原因**：将迁移 worktree 中已有的 Quota MySQL 实现、导入工具和文档合入主仓库当前分支，同时避免带入已撤回的专属账号工厂引用。

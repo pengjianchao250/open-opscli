@@ -1,11 +1,24 @@
 # 西柚 MCP 统一入口迁移说明
 
-本次源码改造将西柚 MCP 收敛为两个工具，ops-xiyou Skill 同步升级到 v2.0.0；变更尚需随服务发布生效。
+2026-10-13 的源码改造将西柚 MCP 收敛为两个工具；2026-10-14 补充与 Keepa 相同的本地 CLI → 远端 MCP 代理，ops-xiyou Skill 升至 v2.0.1。源码改动需随相应安装包与服务发布生效。
 
 - `ext_xydc_openapi_operations()`：读取目录与请求合同。
 - `ext_xydc_openapi_call(operation, payload)`：执行 21 个公共 OpenAPI 操作。
 
 四个旧工具只是便利包装，底层早已调用 OpenAPI；本次取消其 MCP 注册，不减少查询能力。SDK Provider 内部旧参数兼容保留，但普通用户继续通过远程 MCP 查询。
+
+## CLI 代理与宿主工具发现
+
+有终端但宿主没有直接挂载西柚 MCP 工具时，先用 `opscli xiyou --help` 核对入口，再执行 `opscli xiyou operations`。CLI 复用 Keepa 的 `RemoteMcpAdapter`，从当前 OPS 登录态获取远端 MCP HTTP 配置，不启动本地服务、不领取本机供应商凭据。
+
+```powershell
+opscli xiyou operations
+opscli xiyou call asin_info --payload-file payload.json --output result.json
+```
+
+`payload.json` 是目录要求的业务 JSON 对象；`--payload` 字符串与 `--payload-file` 文件二选一。`--output` 可选，保存完整远端响应供后续分析或本地生成 Excel，父目录须已存在。调用失败返回非零退出码并保留原始错误，不跨入口自动重放。
+
+宿主支持延迟加载工具时，先检索 `ext_xydc_openapi_operations` 和 `ext_xydc_openapi_call`。Skill 可发现不等于工具已挂载；初始列表未显示工具也不等于连接缺失。旧程序若返回 `No such command 'xiyou'`，需要升级包含此 CLI 的程序版本；只更新 Skill 无法增加入口。
 
 ## 旧调用的等价转换
 
@@ -53,8 +66,9 @@ ext_xydc_openapi_call(
 
 1. 发布服务代码后，确认实际 tools/list 中西柚仅有上述两个工具。
 2. 核对角色已授权 `ext_xydc_openapi_operations` 和 `ext_xydc_openapi_call`；只授权旧工具的用户需迁移权限。后台目录同步只增不删，旧条目或标签需管理员按部署范围处理，不因单台服务更新自动全局删除。
-3. 从新版本安装包刷新 ops-xiyou Skill，并重连 MCP 或刷新工具列表。旧会话缓存工具名不会因代码变更立即消失。
-4. 调用方按上表迁移；尚未迁移的旧 MCP 工具调用将不可用，没有网页或供应商旧 MCP 兜底。
+3. 发布包含 `opscli xiyou` 的客户端安装包与 ops-xiyou v2.0.1 Skill。用户通过 `opscli self-update` 更新程序及 Skill，再用 `opscli xiyou --help` 和 `opscli xiyou operations` 验收。若只发 Skill 而程序未发，旧 CLI 仍无该入口。
+4. 直连 MCP 的用户重连或刷新工具列表。旧会话缓存工具名不会因代码变更立即消失；Skill 也不会自动挂载远程工具。
+5. 调用方按上表迁移；尚未迁移的旧 MCP 工具调用将不可用，没有网页或供应商旧 MCP 兜底。
 
 额度继续使用统一调用原有 `service=xiyou` 分组、默认策略及历史用量/加额记录；运行时不再为四个旧工具提供默认映射，SQLite 历史迁移合同保留。没有删除真实额度数据或替管理员修改现有策略。
 
