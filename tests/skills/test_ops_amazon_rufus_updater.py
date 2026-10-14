@@ -416,13 +416,17 @@ def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
         formatting_text = (skill_dir / "references" / "rufus-report-formatting.md").read_text(encoding="utf-8")
 
         assert "`report_path` 和 `report_url`" in skill_text
-        assert "`report_path` 和 `report_url` 成对替换旧值" in skill_text
+        # 远端 MCP 的 report_path 为 null，重试后按 storage_scope 替换读取入口，不能再要求 report_path 成对替换
+        fresh_entry_rule = "按 `storage_scope` 用最新响应的读取入口（`report_path` 或 `download_url`；CLI 为 `report_path`）和 `report_url` 同步替换旧值"
+        assert fresh_entry_rule in skill_text
+        assert fresh_entry_rule in workflow_text
+        assert "成对替换" not in skill_text
+        assert "成对替换" not in workflow_text
         assert "Rufus 报告：<report_url>" in skill_text
         assert "`report_path` 和 `report_url` 是不可拆分的一对" in readme_text
         assert "不得返回历史 ASIN 报告或历史 URL" in readme_text
         assert "报告新鲜度约束" in workflow_text
         assert "禁止仅凭 ASIN" in workflow_text
-        assert "`report_path` 和 `report_url` 成对替换旧值" in workflow_text
         assert "不得使用历史 `report_path`、历史 `report_url`" in workflow_text
         assert "Rufus 报告：<report_url>" in workflow_text
         assert "<ASIN>-<YYYYMMDD-HHMMSS>-<UUID>.md" in formatting_text
@@ -430,6 +434,39 @@ def test_ops_amazon_rufus_docs_require_fresh_report_artifact_pair():
         docs = "\n".join([skill_text, readme_text, workflow_text])
         assert "`--no-upload-payload` 只关闭旧 Rufus `upload_payload`" in docs
         assert "不关闭 Markdown 报告上传" in docs
+
+
+def test_ops_amazon_rufus_docs_define_transient_login_check_and_empty_content_exhaustion():
+    """登录态检查遇瞬时错误不进入登录采集；EMPTY_CONTENT 改写重试耗尽且从未成功时有明确的最终输出。"""
+    for skill_dir in (
+        Path("opscli/skills/templates/ops-amazon-rufus-or-alexa"),
+        Path(".agents/skills/ops-amazon-rufus-or-alexa"),
+    ):
+        skill_text = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+        # 「前置条件」也有第 10 条，先截出「主流程」再取第 10 步
+        main_flow = skill_text.split("## 主流程\n", 1)[1].split("\n## ", 1)[0]
+        step10 = main_flow.split("\n10. ", 1)[1].split("\n11. ", 1)[0]
+        quality_section = skill_text.split("## 回答质量判断与问题重写重试\n", 1)[1].split("\n## ", 1)[0]
+
+        assert (
+            "登录态检查返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 时不进入登录采集入口，"
+            "按[瞬时错误同路径重试](#瞬时错误同路径重试)处理"
+        ) in step10
+        assert (
+            "改写重试全部耗尽仍从未成功、没有任何成功的 `report_url` 时，如实返回最后一次 "
+            "`RUFUS_REPORT_EMPTY_CONTENT` 错误与各题 `error_reason`，不展示报告链接"
+        ) in quality_section
+        # 先成功、后续改写命中 EMPTY_CONTENT 并耗尽时，与第 21/22 步的歧义必须由明确分支消除
+        assert (
+            "曾有成功调用时以主流程第 21 步为准（展示最新一次成功的 `report_url` 并说明相应题目已达重试上限）"
+        ) in quality_section
+
+        workflow_text = (skill_dir / "references" / "rufus-mcp-workflow.md").read_text(encoding="utf-8")
+        content_error_section = workflow_text.split("### 报告正文校验错误\n", 1)[1].split("\n### ", 1)[0]
+        # 正文校验失败的报告在生成方机器上，远端调用方读不到，不能笼统说「保留在本地」
+        assert "只保留在本地" not in content_error_section
+        assert "远端调用方不可读" in content_error_section
+        assert "曾有成功调用时以 [SKILL.md 主流程](../SKILL.md#主流程)第 21 步为准" in workflow_text
 
 
 def test_ops_amazon_rufus_template_matches_installed_copy():

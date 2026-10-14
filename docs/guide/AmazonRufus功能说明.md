@@ -191,6 +191,7 @@ output/amazon-rufus/<ASIN>-YYYYMMDD-HHMMSS.md
 
 - `remote-consent set <COUNTRY> --allow/--deny`
   - 保存远程授权偏好。
+  - `--allow` 只能在用户明确回复同意保存并复用该站点亚马逊 Rufus 登录态之后执行；状态未知时先询问，用户暂不继续或未回复时不得修改。
 
 ### 6.3 初始化/排障命令
 
@@ -373,6 +374,10 @@ output/amazon-rufus/
 | `RUFUS_REMOTE_HTTP_ERROR` | 远端 HTTP 层错误 |
 | `RUFUS_REMOTE_BUSINESS_ERROR` | 远端业务错误 |
 | `RUFUS_BAD_REMOTE_JSON` | OPS 后端返回 2xx 但不是合法 JSON（非 JSON 的 4xx/5xx 已改报 HTTP 错误，消息带状态码、Content-Type、接口路径） |
+| `RUFUS_REPORT_RENDER_LOSS` | Rufus 有答案正文，但整份报告的正文都在渲染中丢失（只剩商品链接和占位）；报告未上传、没有 `report_url`，`lost_question_indexes` 列出各题。属于报告渲染问题，改写问题重试无效，应如实反馈错误码和题号 |
+| `RUFUS_REPORT_EMPTY_CONTENT` | 所有题都没有拿到答案正文（空答、只有商品链接、思考中或错误占位）；报告未上传、没有 `report_url`，`answer_error_reasons` 给出每题 `error_reason` 用于区分空答与拒答，可按 Skill 回答质量规则改写重试 |
+
+上述两个 `RUFUS_REPORT_*` 正文校验错误中的 `report_path` 只在 CLI（相对路径）和本地 stdio MCP（本机绝对路径）返回；远端 HTTP/SSE MCP 不返回该字段，报告只留在 MCP 服务器上，不要在调用方本地查找。
 
 其中最容易误解的是：
 
@@ -458,7 +463,7 @@ Agent 默认应走 MCP-first 流程。逻辑顺序是：
 auth_is_authenticated / auth_mcp_login
   -> auth_check_token / auth_token_refresh
   -> amazon_rufus_remote_consent_status(country)
-  -> 必要时 amazon_rufus_remote_consent_set(country, allowed=true)
+  -> 状态未知时先询问用户，用户明确回复允许后才 amazon_rufus_remote_consent_set(country, allowed=true)
   -> amazon_rufus_login_status(country)
   -> 必要时 amazon_rufus_watch_login(asin, country, close_browser=true)
   -> amazon_rufus_get(asin, country, question/questions/skills_dir)

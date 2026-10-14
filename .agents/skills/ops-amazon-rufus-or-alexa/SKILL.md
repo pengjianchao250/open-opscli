@@ -42,6 +42,16 @@ Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答
 4. 上述工具的错误反馈只能记录是否提供敏感参数和字符串长度，不得记录 content、raw cURL、cookie、headers、payload、`storage_state` 或请求种子。
 5. 即使 `amazon_rufus_platform_cookie_get(..., include_content=true)` 返回 content，也不得把 content 写入报告、最终回复、feedback 或普通日志。
 
+## 远程授权偏好修改边界
+
+`amazon_rufus_remote_consent_set` 与 CLI `amazon-rufus remote-consent set` 会修改用户保存的远程授权偏好，属于改状态操作，不是排障或初始化步骤：
+
+1. 设置为允许（`amazon_rufus_remote_consent_set(country, allowed=true)` 或 CLI `amazon-rufus remote-consent set <COUNTRY> --allow`）只能在用户对“是否允许保存并复用该站点的亚马逊 Rufus 登录状态”明确回复“允许”之后执行，且只设置本次询问的国家站点。
+2. 状态为 `unknown` 或 `invalid`（从未设置或无法读取）时，必须先按主流程第 5 步询问并等待用户回复；不得把未设置当作默认允许，不得先设为允许再询问或事后补问。
+3. 用户回复“拒绝”时，只能按主流程第 7 步保存 `allowed=false`。用户选择暂不继续、未回复、回复不明确或没有回答授权问题时，不得调用 `amazon_rufus_remote_consent_set(country, allowed=true)` 或 CLI `amazon-rufus remote-consent set <COUNTRY> --allow`，保持原状态，停止本次获取并说明需要用户先确认授权。
+4. `RUFUS_SECRET_NOT_READY` 表示缺少可用的亚马逊 Rufus 登录态，不是授权偏好未设置；获取链路不读取授权偏好，修改远程授权偏好不能解决该错误；MCP 路径按[三类 MCP 错误的登录采集恢复](references/rufus-mcp-workflow.md#三类-mcp-错误的登录采集恢复)处理，CLI 路径按[CLI fallback 子流程](#cli-fallback-子流程)处理。除主流程第 6、7 步外，CLI fallback、登录采集、排障和瞬时错误重试都不需要、也不得修改远程授权偏好。
+5. 最终回复必须如实说明本次是否修改过远程授权偏好（国家站点和修改后的值）；本次实际调用过设置操作时，不得声称“未改动账号或授权状态”。
+
 ## CLI fallback 边界
 
 只有以下两种情况允许 CLI fallback：
@@ -52,6 +62,8 @@ Amazon 商品页购物助手 Rufus 已改名为 Alexa。用户在商品页问答
 其他错误不允许 CLI fallback，包括 `RUFUS_SECRET_NOT_READY`、`RUFUS_HEADLESS_CAPTURE_ERROR`、`RUFUS_HEADLESS_REQUEST_ERROR`、OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401。
 
 瞬时错误按[瞬时错误同路径重试](#瞬时错误同路径重试)在原路径重试，不属于 CLI fallback。
+
+CLI fallback 路径不修改远程授权偏好，不得执行 CLI `amazon-rufus remote-consent set`；授权偏好只按[远程授权偏好修改边界](#远程授权偏好修改边界)在主流程第 6、7 步保存。
 
 CLI fallback 使用以下正式脱敏入口；需要登录时执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 CLI 路径：
 
@@ -70,7 +82,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 2. 检测必需 MCP Tool 是否可见。不可见时进入 CLI fallback，原因记为 `mcp_tools_unavailable`。
 3. 调用 `auth_is_authenticated()`。如果未登录，调用 `auth_mcp_login()`；随后调用 `auth_check_token(system="ops")`，Token 失效时调用 `auth_token_refresh(system="ops")`。
 4. 调用 `amazon_rufus_remote_consent_status(country)`，读取该站点的远程授权偏好。
-5. 如果状态为 `unknown` 或 `invalid`，先询问用户：
+5. 如果状态为 `unknown` 或 `invalid`（含从未设置），先询问用户并等待明确回复；回复前不得调用 `amazon_rufus_remote_consent_set`，也不得继续后续获取步骤：
 
 ```text
 本次 Rufus 获取需要亚马逊 Rufus 登录态。是否允许保存并复用该站点的亚马逊 Rufus 登录状态？
@@ -80,15 +92,16 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 - 亚马逊登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
 - 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
 - 如果拒绝，本次将改用本机获取 Rufus 报告。
+- 如果暂不决定或不回复，本次获取将停止，不会修改授权设置。
 
 请明确回复“允许”或“拒绝”。
 ```
 
-6. 用户回复“允许”时，调用 `amazon_rufus_remote_consent_set(country, allowed=true)`。
+6. 用户对第 5 步询问明确回复“允许”时，调用 `amazon_rufus_remote_consent_set(country, allowed=true)`；这是设置为允许的唯一入口。用户选择暂不继续、未回复或回复不明确时，不调用 `amazon_rufus_remote_consent_set`，保持原状态并停止本次获取，见[远程授权偏好修改边界](#远程授权偏好修改边界)。
 7. 用户回复“拒绝”时，调用 `amazon_rufus_remote_consent_set(country, allowed=false)`，然后进入 CLI fallback，原因记为 `remote_consent_denied`。
 8. 状态为 `denied` 时进入 CLI fallback，说明用户拒绝保存并复用该站点亚马逊 Rufus 登录态。
 9. 状态为 `allowed` 时，调用 `amazon_rufus_login_status(country)`。
-10. 登录态过期、`can_get_backend=false`、`status=missing/invalid`（包括旧 `curl_data` 或仅 `storage_state`），或登录态检查返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR`、401 时，执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 MCP 路径，不要求预清理；入口确认登录态可用后继续。
+10. 登录态过期、`can_get_backend=false`、`status=missing/invalid`（包括旧 `curl_data` 或仅 `storage_state`），或登录态检查返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR`、401 时，执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 MCP 路径，不要求预清理；入口确认登录态可用后继续。登录态检查返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 时不进入登录采集入口，按[瞬时错误同路径重试](#瞬时错误同路径重试)处理。
 11. 调用 `amazon_rufus_get`，由 MCP 后端使用 headless 链路获取 Rufus 回答、写入并上传报告，成功返回本次 `report_url` 与 `storage_scope`（本地 stdio 模式另返回本机 `report_path`，读取方式见第 14 步）。单题传 `question`，多题传 `questions`，未提供问题时传 `skills_dir=".agents/skills"` 读取默认题库；多问题在同一个 Rufus 对话中获取，不拆成多个独立对话。
 12. 如果 `amazon_rufus_get` 返回 OPS 平台 Cookie 鉴权错误、`RUFUS_PLATFORM_COOKIE_AUTH_ERROR` 或 401，执行[登录采集入口](references/rufus-mcp-workflow.md#登录采集入口)，沿用 MCP 路径，不要求预清理；成功后按原问题来源重试 `amazon_rufus_get`，本分支不允许 CLI fallback。
 13. 如果 `amazon_rufus_get` 返回 `RUFUS_HEADLESS_REQUEST_ERROR`、`RUFUS_HEADLESS_CAPTURE_ERROR` 或 `RUFUS_SECRET_NOT_READY`，按[三类 MCP 错误的登录采集恢复](references/rufus-mcp-workflow.md#三类-mcp-错误的登录采集恢复)处理；仅 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 与旧版 `RUFUS_BAD_REMOTE_JSON` 按[瞬时错误同路径重试](#瞬时错误同路径重试)处理；其他错误直接返回，不扩大 CLI fallback（`RUFUS_REPORT_EMPTY_CONTENT` 例外，见[回答质量判断](#回答质量判断与问题重写重试)末段）。
@@ -96,7 +109,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 15. 如果存在无回答、拒答、答非所问，或用户问题不止商品详情但回答退化为商品详情的情况，进入问题重写重试流程。
 16. 问题重写重试必须按问题分别记录 `answer_rewrite_attempts_by_question`，每个问题最多 10 次；达到上限的题目不再交给子 agent。
 17. 对未达到上限的不合格题目开启一个子 agent，提示词固定为：`重写这些问题，修改其中的字，但要求意思保持不变。总字数不要超过200。`
-18. 拿到新问题后，按改写后的完整问题来源重新调用 `amazon_rufus_get` 或 CLI `get-backend`；调用成功时必须用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不要把多个问题拼成一个长字符串，不要改跑默认题库。
+18. 拿到新问题后，按改写后的完整问题来源重新调用 `amazon_rufus_get` 或 CLI `get-backend`；调用成功时必须按 `storage_scope` 用最新响应的读取入口（`report_path` 或 `download_url`；CLI 为 `report_path`）和 `report_url` 同步替换旧值，不要把多个问题拼成一个长字符串，不要改跑默认题库。
 19. 重新请求 Rufus 时仍保持同一个 Rufus 对话的多问题语义：单题继续传 `question`，多题或默认题库重试时传完整 `questions` 列表，只替换本轮改写题目的原位置。
 20. 每完成一次 Rufus 重新请求，只增加本轮被改写题目的计数；某题达到 10 次后停止重试该题，其他不合格题目仍可按各自上限继续。
 21. 如果仍有题目达到上限后不合格，最终回复仍只展示最新一次成功调用的 `report_url`，并说明对应题目已达到回答质量重试上限。
@@ -124,7 +137,7 @@ opscli amazon-rufus get-backend <ASIN> <COUNTRY> -q "<问题1>" -q "<问题2>"
 8. 回答质量重试与登录恢复相互独立：重写问题不得触发 `amazon_rufus_logout`，不得扩大 CLI fallback，且不得重置 `login_recovery_attempted` 或 `watch_login_attempted`。
 9. `answer_rewrite_attempts_by_question` 按问题分别记录回答质量重试次数，每个问题最多 10 次；某题达到上限后不再开启子 agent 改写该题，也不再为该题单独请求 Rufus。
 
-`amazon_rufus_get` 或 CLI `get-backend` 返回 `RUFUS_REPORT_RENDER_LOSS`（Rufus 有正文，但整份报告的答案正文都在渲染中丢失，只剩链接和占位）时，这是报告渲染问题，不是 Rufus 没答好：不得进入问题重写重试，直接向用户如实反馈错误码和题号。只有部分题疑似渲染丢失时获取仍成功，响应带 `render_loss_question_indexes` 和 `warning`（CLI 输出一行告警），向用户如实说明这些题，不对它们改写重试。返回 `RUFUS_REPORT_EMPTY_CONTENT`（所有题都没有拿到答案正文）时，视为本节第 2 条的「题目下没有实际答案」，可参考 `answer_error_reasons` 中每题的 `error_reason` 区分空答与拒答，在每题最多 10 次的上限内按本节规则改写重试。两种错误下报告都未上传、没有 `report_url`。
+`amazon_rufus_get` 或 CLI `get-backend` 返回 `RUFUS_REPORT_RENDER_LOSS`（Rufus 有正文，但整份报告的答案正文都在渲染中丢失，只剩链接和占位）时，这是报告渲染问题，不是 Rufus 没答好：不得进入问题重写重试，直接向用户如实反馈错误码和题号。只有部分题疑似渲染丢失时获取仍成功，响应带 `render_loss_question_indexes` 和 `warning`（CLI 输出一行告警），向用户如实说明这些题，不对它们改写重试。返回 `RUFUS_REPORT_EMPTY_CONTENT`（所有题都没有拿到答案正文）时，视为本节第 2 条的「题目下没有实际答案」，可参考 `answer_error_reasons` 中每题的 `error_reason` 区分空答与拒答，在每题最多 10 次的上限内按本节规则改写重试。两种错误下报告都未上传、没有 `report_url`。改写重试全部耗尽仍从未成功、没有任何成功的 `report_url` 时，如实返回最后一次 `RUFUS_REPORT_EMPTY_CONTENT` 错误与各题 `error_reason`，不展示报告链接；曾有成功调用时以主流程第 21 步为准（展示最新一次成功的 `report_url` 并说明相应题目已达重试上限）。
 
 ## 瞬时错误同路径重试
 

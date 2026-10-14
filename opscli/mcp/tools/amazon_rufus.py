@@ -41,9 +41,13 @@ async def amazon_rufus_remote_consent_status(country: str) -> dict:
 async def amazon_rufus_remote_consent_set(country: str, allowed: bool) -> dict:
     """保存指定国家站点的 Alexa（原 Rufus）MCP/headless 授权偏好。
 
+    这是修改用户授权的改状态操作：allowed=true 只能在用户对“是否允许保存并复用该站点的亚马逊 Rufus 登录状态”明确回复“允许”之后调用；
+    状态未知时先询问用户，用户暂不继续、未回复或回复不明确时不得调用。
+    授权偏好与 RUFUS_SECRET_NOT_READY 等登录态错误无关，修改它不能解决获取失败。
+
     Args:
         country: 国家站点代码，如 US、UK、DE、JP
-        allowed: 是否允许当前 MCP/headless 链路复用亚马逊 Rufus 登录态
+        allowed: 是否允许当前 MCP/headless 链路复用亚马逊 Rufus 登录态；true 仅限用户明确同意后传入
     """
     try:
         data = await _run_mcp_manager(

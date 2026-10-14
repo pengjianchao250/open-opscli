@@ -11982,6 +11982,43 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 ---
 
+## 2026-10-10 Amazon Rufus MCP - 集成审查 M4 远端模式正文校验错误不再带出服务端报告路径（Bug 12136 × 12138）
+
+**变更原因**：12138 已在 `RufusMcpManager.get()` 按运行模式分流成功响应与 `RufusReportUploadError`，但同日 12136 新增的 `RufusReportContentError`（`RUFUS_REPORT_EMPTY_CONTENT` / `RUFUS_REPORT_RENDER_LOSS`）从 `publish()` 抛出后原样透传，经 `_err` → `to_dict()` 把 MCP 服务进程工作目录下的相对 `report_path` 交给调用方：远端模式调用方读不到，Agent 又会去本地 cat/find（正是 12138 要消除的情形），文案「报告已保留在本地」同样误导；stdio 模式下也是相对路径而非绝对路径。
+**改动点**：
+- `opscli/amazon_rufus/domain/exceptions.py`：`RufusReportContentError` 允许 `report_path=None`（仅远端 MCP 使用），此时 `to_dict` 不输出 `report_path`，文案改为「报告只保存在远端 MCP 服务器上、调用方无法读取，且未上传」；有路径时文案与字段保持原样，CLI 行为不变。
+- `opscli/amazon_rufus/services/mcp_manager.py`：`get()` 新增捕获 `RufusReportContentError`，复用上传失败的做法——远端模式把服务端路径（含错误码）只写服务端 warning 日志、重新抛出不带路径的错误；stdio 改为 `resolve()` 后的绝对路径。错误码、`lost_question_indexes`、`empty_question_indexes`、`answer_error_reasons` 原样保留（Skill 依赖它们判断能否改写重试）。
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本逐字节同步）：`SKILL.md` 主流程第 10 步补「登录态检查返回 `RUFUS_PLATFORM_COOKIE_UNAVAILABLE` 或旧版 `RUFUS_BAD_REMOTE_JSON` 时不进入登录采集入口，按瞬时错误同路径重试处理」；第 18 步与 `references/rufus-mcp-workflow.md`「报告新鲜度约束」中的「`report_path` 和 `report_url` 成对替换」改为「按 `storage_scope` 用最新响应的读取入口（`report_path` 或 `download_url`；CLI 为 `report_path`）和 `report_url` 同步替换旧值」（reference 同一处陈旧措辞一并修正，避免两份文档互相矛盾）；回答质量节末补「改写重试全部耗尽仍从未成功、没有任何成功的 `report_url` 时，如实返回最后一次 `RUFUS_REPORT_EMPTY_CONTENT` 错误与各题 `error_reason`，不展示报告链接；曾有成功调用时以主流程第 21 步为准（展示最新一次成功的 `report_url` 并说明相应题目已达重试上限）」，reference「报告新鲜度约束」中 EMPTY_CONTENT 例外句同步补上这两个分支，消除与第 21/22 步「失败不得用历史 report_url 兜底」的既有歧义；reference「报告正文校验错误」小节开头「未通过时报告只保留在本地」改为「只保留在生成方所在机器（CLI 与 stdio MCP 为本机、远端 MCP 为服务器，远端调用方不可读）」。
+- `docs/guide/AmazonRufus功能说明.md`：错误码表补 `RUFUS_REPORT_RENDER_LOSS`、`RUFUS_REPORT_EMPTY_CONTENT`，并说明两类错误中的 `report_path` 只在 CLI（相对路径）与本地 stdio MCP（绝对路径）返回，远端 MCP 不返回。
+- 测试：`tests/amazon_rufus/test_mcp_report_storage_scope.py` 新增 9 条——远端 EMPTY_CONTENT / RENDER_LOSS 错误在 API Key 远端与可信上游（internal，无 API Key）两种上下文下都不含 `report_path`、文案不提「本地」、题号与 `answer_error_reasons` 保留、服务端路径进日志（4 条）；两类错误经 MCP 工具层 `_err`（含反馈草案）序列化后任何位置都不出现 `report_path` 与服务端路径（2 条）；stdio 两类错误为存在的绝对路径；CLI `get-backend` 正文校验失败仍输出相对路径与原文案。`tests/skills/test_ops_amazon_rufus_updater.py` 把「成对替换旧值」断言改为新措辞并断言旧措辞已移除，新增第 10 步瞬时错误分流、EMPTY_CONTENT 耗尽时「从未成功 / 曾有成功」两个分支、reference 正文校验错误小节不再写「只保留在本地」的契约断言。
+- 同一 `get()` 内其他可能带出服务端路径的异常（本次未改，仅列出）：`QuestionBankNotReadyError` 在服务端题库 JSON 格式错误时消息含题库文件路径；写报告/读报告的 `OSError` 走 `_err` 兜底时 `str(exc)` 可能含路径。二者都不是报告读取入口、不会诱导 Agent 去读报告，且均为服务端故障形态。Rufus MCP 工具只有 `amazon_rufus_get` 生成报告；批量获取（`batch_backend`）与诊断校验（`RufusDiagnosisReportValidator`）仅由 CLI / `asin_data` 日常流水线使用，没有 MCP 入口，不存在同类问题。
+**验证结果**：修复前首批新增用例 5 failed、1 passed（CLI 用例），远端错误结构含 `report_path: output/amazon-rufus/...`、stdio 为相对路径，复现问题；修复后在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus tests/mcp/test_amazon_rufus_tools.py tests/skills -q`：668 passed、9 failed；9 条失败（`tests/skills/` 下 dashboard×2、manager×3、reviews、app_build_spec、feedback_report_server、methods_card）在 release `f07b6c60` 干净导出目录中逐条同样失败，属既有基线。另跑 `tests/mcp/test_context.py tests/mcp/test_tool_catalog.py` 13 passed；`git diff --check` 通过；新文案 `encode("gbk")` 通过。测试全部打桩 Amazon 抓取与 OSS 上传，未访问真实网络。
+**影响范围**：MCP `amazon_rufus_get` 正文校验失败时的错误结构——远端模式不再含 `report_path`、文案改为远端口径；stdio 模式 `report_path` 变为绝对路径。成功响应、上传失败结构与 CLI `get-backend` 输出不变。远端 MCP 需重新部署、stdio 随下一版 opscli 发布生效；Skill 文档随模板升级生效。
+**回滚方式**：回退本条对应提交（异常类、mcp_manager、Skill 模板与安装副本、功能说明、相关测试）。
+
+---
+
+## 2026-10-11 Amazon Rufus - QA 第三轮 E2E 问题 N7 远程授权偏好须经用户明确同意才可设为允许
+
+**变更原因**：QA 两轮 E2E（第三轮 G4，会话 1065800）中，Agent 在用户未同意时执行 `remote-consent set US --allow`，把用户的 US 站点 Rufus 远程授权偏好改成了 allowed，末条回复却声称「未改动账号或授权状态」。复核 G4 轨迹发现，这一轮 Agent 根本没有加载本 Skill：`skills list` 为空，沙箱 opscli v0.0.132 模板目录里也没有该 Skill。它的直接触发点是 `get-backend` 返回 `RUFUS_SECRET_NOT_READY`，文案「请先完成 Rufus 授权状态初始化」把「缺登录态」说成了「授权」；4 秒后 Agent 先执行 `--allowed`（参数错误），随后按「Did you mean --allow?」的提示改成 `--allow`。CLI `--allow` 帮助和 MCP `amazon_rufus_remote_consent_set` 描述都没有写「须经用户同意」。Skill 主流程第 6 步只写了「用户回复“允许”时调用 allowed=true」，没有写明这是改状态操作、未设置不等于默认允许，也没写暂不继续或未回复时不得修改。另外，获取链路（MCP `get` / CLI `get-backend`）根本不读授权偏好，所以改授权偏好解决不了该错误。
+**改动点**：
+- 内置 Skill `ops-amazon-rufus-or-alexa`（模板与 `.agents/skills` 安装副本的 `SKILL.md`、`README.md`、`references/rufus-mcp-workflow.md` 逐字节同步）：
+  - `SKILL.md` 新增「远程授权偏好修改边界」小节：MCP `allowed=true` 和 CLI `--allow` 只能在用户对「是否允许保存并复用该站点的亚马逊 Rufus 登录状态」明确回复「允许」之后执行；状态为 `unknown`/`invalid` 时必须先询问，不得把未设置当作默认允许；用户暂不继续、未回复或回复不明确时不得设为允许，保持原状态并停止；`RUFUS_SECRET_NOT_READY` 是缺登录态，与授权偏好无关；最终回复必须如实说明是否改过授权偏好。
+  - 主流程第 5 步改为「先询问并等待明确回复，回复前不得调用设置、不得继续获取」，询问文案补一条「暂不决定或不回复则停止、不修改授权设置」；第 6 步改为「对第 5 步询问明确回复“允许”时」才调用，并写明暂不继续时的处理。
+  - 「CLI fallback 边界」补充「CLI fallback 路径不修改远程授权偏好」。
+  - reference 的工具表、询问文案和「保存允许」示例旁补上前提；README 安全小节补一条指向边界的提示。
+- `opscli/mcp/tools/amazon_rufus.py`：`amazon_rufus_remote_consent_set` 的工具描述（docstring）写明这是改状态操作、`allowed=true` 只能在用户明确同意后传入、与 `RUFUS_SECRET_NOT_READY` 无关。工具签名不变。
+- `opscli/amazon_rufus/commands/cli.py`：`remote-consent set` 的命令短说明和 `--allow` 帮助写明须经用户明确同意、状态未知时先询问。参数与行为不变。
+- `opscli/amazon_rufus/services/backend_secret.py`：`RUFUS_SECRET_NOT_READY` 四处文案去掉「授权状态初始化」，统一追加模块常量 `_LOGIN_STATE_RECOVERY_HINT`。常量写明具体恢复入口：`opscli amazon-rufus watch-login <ASIN> <COUNTRY> --close-browser`（用法与 `docs/guide/AmazonRufus功能说明.md` 一致，watch-login 需要 ASIN 和国家，所以不写成 `watch-login <COUNTRY>`），同时给出 MCP 工具名 `amazon_rufus_watch_login`，并说明「Linux AI 助手环境请让用户在自己的 Windows/Mac 电脑上执行」（G4 就是 Linux 沙箱，没有本机浏览器）。四处都注明「与远程授权偏好（remote-consent）无关，修改授权偏好不能解决」。错误码不变。这一条是审查后按主控要求追加的加固：未加载 Skill 的 Agent 只看得到报错文案，文案本身就要把它引到正确入口。
+- `opscli/skills/templates/ops-asin-data-collector/scripts/collect_asin_data.py`：授权未设置时的 reason 原为「run opscli amazon-rufus remote-consent set first」，改为先询问用户，用户明确同意后才执行 `--allow`、拒绝则 `--deny`。
+- `docs/guide/AmazonRufus功能说明.md`：命令说明里 `--allow` 补充前提；MCP-first 流程中「必要时 allowed=true」改为「状态未知时先询问用户，用户明确回复允许后才设置」。
+- CLI 行为评估（结论是不改）：曾考虑给 `remote-consent set --allow` 加 `--yes`/`--confirmed-by-user` 必填参数或交互确认。没有采纳，原因有三。① G4 已经说明 Agent 会照着 CLI 报错提示自我修正参数（`--allowed` → `--allow`），新必填参数一样会被照着报错补上，挡不住 Agent。② 沙箱 exec 不是 TTY，交互确认只会让命令直接失败，等同于必填参数。③ 现有用户手工命令、功能说明示例和 `test_core` 用例都在用 `set US --allow`，改了就不兼容。MCP 工具签名被 ops-agent 和各版本 Skill 文档调用，同样不改。真正的强制拦截应放在平台侧（ops-agent 把 `remote-consent set` 和 `amazon_rufus_remote_consent_set(allowed=true)` 纳入 HITL/工具策略），opscli 侧只把 Agent 在决策点能看到的文本写清楚。
+**验证结果**：新增 `tests/skills/test_ops_amazon_rufus_consent_ask_first_docs.py`（13 条：边界小节、主流程第 5/6 步、CLI fallback 边界、reference、README 的关键约束语句，按模板和 `.agents` 两份参数化，共 10 条；另有 3 条校验改动的 3 份文档模板与副本逐字节一致）和 `tests/amazon_rufus/test_remote_consent_ask_first.py`（7 条：MCP 描述 1 条；CLI `--allow` 帮助及 GBK 兼容 1 条；`RUFUS_SECRET_NOT_READY` 四种触发形态各 1 条，校验不再含「授权状态初始化」、含 watch-login 恢复入口、MCP 工具名与 Linux 提示、注明与授权偏好无关、GBK 兼容；collector 的 reason 先问用户 1 条）。把两份新测试拷进 release `13ff8e9c` 干净导出目录运行：17 条失败、3 条通过（通过的是逐字节一致性用例，修改前两份本来就一致）；修复后 20 条全部通过。在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py tests/asin_data_collector -q`：706 passed、15 failed。这 15 条（`tests/skills/` 下 dashboard×2、manager×3、reviews、app_build_spec×2、feedback_report_server、methods_card，以及 `tests/asin_data_collector/` 下 frontend_record、crawler_payload×4）在 release `13ff8e9c` 的干净导出目录用同一命令同样失败（686 passed、15 failed），属于既有基线。只跑三目录 `tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py`：687 passed、10 failed，基线同命令 667 passed、10 failed（失败的都是上面 `tests/skills` 那 10 条）。另跑 `tests/mcp`（排除 import 已坏的 `test_shopify_tools.py`）：546 passed、2 failed（keepa_registration、seller_sprite quota），与基线导出目录结果一致。`git diff --check` 通过。CLI 帮助实际渲染后的文本通过 GBK 编码检查。所有测试都打桩，没有访问真实网络或 Keychain。
+**影响范围**：只改文本：Skill 文档、MCP 工具描述、CLI 帮助、`RUFUS_SECRET_NOT_READY` 的 message、collector 失败 reason。命令参数、MCP 工具签名、错误码、授权偏好存储与读取逻辑都不变。Skill 文档随模板升级生效；MCP 描述需要远端 MCP 重新部署（QA 远端当前仍是 0.0.140）；CLI 帮助与报错文案随下一版 opscli 发布、沙箱镜像升级后生效（G4 沙箱是 v0.0.132）。
+**回滚方式**：回退本条对应的提交（Skill 模板与安装副本、MCP 工具描述、CLI 帮助、backend_secret 文案与恢复提示常量、collector 的 reason、功能说明和两个新增测试文件）。
+
+---
+
 ## 2026-10-13 西柚 Skill - 明确远程调用入口与失败证据
 
 **变更原因**：普通查询 Skill 混入服务端凭据管理命令，并将远程审计日志写成“本机”，可能诱导 Agent 在用户电脑上执行 Provider；历史错误摘要也不能作为本轮实测证据。

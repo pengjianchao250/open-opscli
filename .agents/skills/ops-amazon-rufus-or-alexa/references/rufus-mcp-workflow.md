@@ -19,7 +19,7 @@
 | `auth_check_token` | 检查指定系统 JWT 有效期 |
 | `auth_token_refresh` | 刷新指定系统 JWT |
 | `amazon_rufus_remote_consent_status` | 读取国家站点远程授权偏好 |
-| `amazon_rufus_remote_consent_set` | 保存允许或拒绝远程授权偏好 |
+| `amazon_rufus_remote_consent_set` | 保存允许或拒绝远程授权偏好；允许只能在用户明确回复“允许”后保存 |
 | `amazon_rufus_login_status` | 读取 Rufus 获取前的亚马逊 Rufus 登录态脱敏摘要 |
 | `amazon_rufus_watch_login` | 打开或连接 Chrome，等待用户登录并保存亚马逊 Rufus 登录态和 Rufus streaming 请求种子 |
 | `amazon_rufus_logout` | 清理已保存 Rufus 状态和工具管理的 Chrome profile |
@@ -84,11 +84,14 @@ amazon_rufus_remote_consent_status(country="US")
 - 亚马逊 Rufus 登录态相当于已登录会话，请使用独立、干净的 Amazon 账号。
 - 不建议在该 Amazon 账号中绑定信用卡或其他支付方式。
 - 如果拒绝，本次将改用本机 opscli CLI 获取 Rufus 报告；CLI 仍不会在回复或报告中展示 cookie、localStorage、storage_state、headers、payload 或请求种子。
+- 如果暂不决定或不回复，本次获取将停止，不会修改授权设置。
 
 请明确回复“允许”或“拒绝”。
 ```
 
-保存允许：
+状态为 `unknown` 或 `invalid` 时必须先询问并等待回复，不得先保存允许；`RUFUS_SECRET_NOT_READY` 等登录态错误与远程授权偏好无关，修改授权偏好不能解决。完整约束见 [SKILL.md 远程授权偏好修改边界](../SKILL.md#远程授权偏好修改边界)。
+
+保存允许（仅限用户对上述询问明确回复“允许”之后；用户暂不继续、未回复或回复不明确时不得调用）：
 
 ```text
 amazon_rufus_remote_consent_set(country="US", allowed=true)
@@ -175,7 +178,7 @@ CLI fallback 中必须保持相同问题来源：单题传一次 `-q`，多题�
 
 ### 报告正文校验错误
 
-`amazon_rufus_get` 与 CLI `get-backend` 上传前会比对 Rufus 返回的正文与渲染后的报告；未通过时报告只保留在本地，不上传，也没有 `report_url`。
+`amazon_rufus_get` 与 CLI `get-backend` 上传前会比对 Rufus 返回的正文与渲染后的报告；未通过时报告只保留在生成方所在机器（CLI 与 stdio MCP 为本机、远端 MCP 为服务器，远端调用方不可读），不上传，也没有 `report_url`。
 
 | 错误码 | 含义 | 处理 |
 |---|---|---|
@@ -323,9 +326,9 @@ MCP 工具或 CLI 获取成功时返回同一次调用生成的 `report_path` �
 
 禁止仅凭 ASIN 在 `output/amazon-rufus/` 中读取任意 `<ASIN>-*.md` 历史报告，也不要使用 IDE 当前打开文件或上一轮对话遗留路径作为本次结果；`storage_scope=remote` 时本地 `output/amazon-rufus/` 中的同 ASIN 文件都不是本次结果。
 
-登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须使用最新响应中的 `report_path` 和 `report_url` 成对替换旧值，不得混用不同调用的路径和 URL。
+登录恢复或回答质量重试后重新调用 `amazon_rufus_get` 或 CLI `get-backend` 成功时，必须按 `storage_scope` 用最新响应的读取入口（`report_path` 或 `download_url`；CLI 为 `report_path`）和 `report_url` 同步替换旧值，不得混用不同调用的读取入口和 URL。
 
-当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。`RUFUS_REPORT_EMPTY_CONTENT` 例外，按[报告正文校验错误](#报告正文校验错误)改写重试。
+当前调用或重试失败时直接返回最新错误，不得使用历史 `report_path`、历史 `report_url` 或上一轮成功结果兜底；上传失败也属于本次获取失败。`RUFUS_REPORT_EMPTY_CONTENT` 例外，按[报告正文校验错误](#报告正文校验错误)改写重试；改写重试耗尽时，从未成功则如实返回最后一次 `RUFUS_REPORT_EMPTY_CONTENT` 错误与各题 `error_reason`、不展示报告链接，曾有成功调用时以 [SKILL.md 主流程](../SKILL.md#主流程)第 21 步为准（展示最新一次成功的 `report_url` 并说明相应题目已达重试上限）。
 
 除非用户明确要求排障，不输出：
 
