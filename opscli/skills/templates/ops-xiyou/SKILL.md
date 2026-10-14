@@ -1,26 +1,34 @@
 ---
 name: ops-xiyou
-description: 西柚找词/西柚洞察（西柚、Xiyou、xydc、xydx）的 Amazon 关键词、竞品、流量与订单查询。用户已选择西柚时，通过 opscli xiyou CLI 代理或已连接的 OpenAPI MCP 工具执行；未指定来源时可推荐西柚作为候选，确认选用后再查询。
+description: 用户指定西柚找词/西柚洞察（西柚、Xiyou、xydc、xydx）、点名 ext_xydc_* 工具，或继续已选西柚的任务时，查询 Amazon 关键词、竞品、流量与订单。支持 MCP 直接调用与 opscli xiyou CLI 代理；未指定数据源时仅推荐，选用后再查询。
 metadata:
-  mcp-version: v2.0.1
+  mcp-version: v2.0.2
 ---
 
 # ops-xiyou
 
-通过正式 `opscli xiyou ...` CLI 代理或当前宿主已连接的 `ext_xydc_*` MCP 工具使用西柚数据，两条入口均调用远端 opscli MCP，再由服务端请求西柚 OpenAPI v2。支持关键词搜索量、ABA、CPC、竞争度、反查词、趋势、商品、流量和订单。供应商 API Key 来自服务端 MySQL 凭据池，查询消耗西柚 Credit；用户无需提供供应商密钥或数据库连接信息。
+通过 MCP 工具直接调用，或通过 `opscli xiyou ...` CLI 间接调用远端 MCP 服务，获取西柚 OpenAPI v2 数据。支持关键词搜索量、ABA、CPC、竞争度、反查词、趋势、商品、流量和订单。业务查询消耗西柚 Credit；供应商凭据由服务端管理，用户无需提供 API Key 或数据库连接信息。
 
 ## 执行入口与配置归属
 
-1. 能运行终端时，可直接使用 `opscli xiyou operations` 与 `opscli xiyou call`；CLI 与 Keepa 一样从本机 OPS 登录态获取远端 MCP 配置并代理调用。未登录或登录过期时按 `ops-auth` 完成 `opscli auth login`。
-2. 宿主已提供两项远程 MCP 工具时，可直接使用。支持延迟工具发现的宿主先按工具名或“西柚 / xydc / OpenAPI”检索加载，不能只凭初始工具列表断言未接入。
-3. 宿主工具不可见但能运行终端时，执行 `opscli xiyou --help` 检查 CLI 入口，然后走 CLI 链路。Skill 安装与工具挂载是两件事；工具不可见不意味着正式 CLI 不能查询。
-4. 本机返回 `No such command 'xiyou'` 时，记录当前 `opscli --version`，说明本机程序缺少该入口；按 `ops-feedback` 反馈，再检查可用更新（正式 `opscli self-update`），更新后重新检查 help。Skill 单独升级不能增加 CLI 命令；尚未发布含该命令的版本时明确说明版本限制，不反复安装 Skill。
-5. 没有终端且工具发现仍无结果，或 CLI/远端目录确实不可用时，才说明查询尚未执行，并给出已检查的入口及缺少的连接、权限或版本。目录成功后再构造收费请求；真实查询失败时保留错误，不改走另一入口重放同一请求。
+按用户指定的调用方式与当前环境能力选择入口：
 
-`opscli-mcp` 是服务端程序名，不是用户查询命令。普通查询不启动本地 MCP 服务，不通过本地 Python 导入 `XydcOpenApiProvider` 或直接执行 MCP 工具函数替代远程调用。
+| 入口 | 可用性检查 | 配置来源 |
+| --- | --- | --- |
+| MCP 直接调用 | 查找 `ext_xydc_openapi_operations` 与 `ext_xydc_openapi_call`；支持延迟发现时按公开工具名或“西柚 / xydc / OpenAPI”检索加载 | 当前宿主已连接的 MCP 服务 |
+| CLI 间接调用 MCP | 有终端时用 `opscli xiyou --help` 检查入口，再使用下文正式命令 | CLI 从本机 OPS 登录态获取远端 MCP 配置，不依赖宿主的连接名称 |
 
-- 西柚 API Key、MySQL 配置及 `xydc_openapi` 凭据池由服务管理员在 MCP 服务端维护。普通查询不执行 `opscli api-credentials` 管理命令，不要求用户在本机配置数据库或提供供应商密钥。用户明确要求部署或管理服务时，另按运维文档处理。
-- 认证异常按 `ops-auth` 的当前 MCP 流程处理；数据库配置错误按下文失败处理。以当前可用工具的参数合同为准，旧 Skill、历史对话或历史错误不代替本轮调用记录。
+MCP 连接名称由用户配置。本文表格和示例使用服务公开工具名；宿主可能附加服务名或命名空间前缀，实际调用时使用本轮发现的完整工具标识及参数合同。
+
+仅检查入口可用性时，MCP 工具尚未发现且有终端可用，可检查 CLI。Skill 安装、MCP 工具挂载和 CLI 版本彼此独立，初始工具列表未出现西柚不代表无法查询。业务查询失败后的处理见 [Credit 与失败处理](#credit-与失败处理)，不通过切换入口重放同一收费请求。
+
+### 入口不可用或需要认证时
+
+- MCP 认证异常按 `ops-auth` 的当前 MCP 流程处理；CLI 未登录或登录过期时按 `ops-auth` 完成 `opscli auth login`。
+- CLI 返回 `No such command 'xiyou'` 时，记录 `opscli --version` 并按 `ops-feedback` 反馈，再通过正式 `opscli self-update` 检查可用更新，更新后重新检查 help。Skill 升级不能增加 CLI 命令；未发布含该入口的版本时说明版本限制。
+- 工具发现与可用 CLI 入口检查均未取得操作目录时，说明查询尚未执行，列出已检查的入口和缺少的连接、权限或版本。
+
+普通查询仅使用上述入口；本地启动 MCP、导入 Provider 或执行 `opscli api-credentials` 均属于服务管理，不是查询准备步骤。西柚 API Key、MySQL 配置和凭据池由服务管理员维护；用户明确要求部署或管理服务时，另按运维文档处理。
 
 ### 正式 CLI 命令
 
@@ -29,7 +37,7 @@ metadata:
 | `opscli xiyou operations` | 无 | 读取远端操作目录和请求合同，不消耗供应商 Credit |
 | `opscli xiyou call <operation>` | `operation`：公共目录操作名；`--payload`：JSON 对象字符串，或 `--payload-file`：UTF-8 JSON 对象文件，两者必须且只能传一个；`--output`：可选完整响应 JSON 文件路径，父目录须已存在 | 原样透传业务请求，可能消耗 Credit；失败保留远端错误并以非零退出码返回 |
 
-在 Windows 或复杂批量请求中优先使用 `--payload-file`，避免 JSON 经终端转义后损坏。文件可带 UTF-8 BOM。输出保留 `success/data/error/source/cost_credits` 等实际返回字段，不是 Keepa 的 `job_id/export` 合同。
+在 Windows 或复杂批量请求中优先使用 `--payload-file`，避免 JSON 经终端转义后损坏。文件可带 UTF-8 BOM。输出保留 `success/data/error/source/cost_credits` 等实际返回字段。
 
 ```powershell
 opscli xiyou operations
@@ -68,13 +76,13 @@ opscli xiyou call asin_info --payload-file payload.json --output xiyou-result.js
 
 把西柚作为关键词数据来源时，结论仍须标明站点、数据周期与实际返回指标；不把数据源选择偏好表述为经过验证的准确率或准确性保证。
 
-## 数据源路由
+## 查询流程
 
-1. 按执行入口选择 CLI 或 MCP：先用 `opscli xiyou operations` / `ext_xydc_openapi_operations` 读取目录，再用 `opscli xiyou call` / `ext_xydc_openapi_call(operation, payload)` 查询。两条链路对应同一个远端通用入口，不注册独立业务包装工具。
+1. 通过选定入口读取操作目录；成功取得所需 operation 的请求合同后，再构造业务请求。
 2. payload 按目录中的 `required_fields/payload_schema/example_payload/constraints` 构造。涉及日/周/月/小时趋势、相对日期或 `InvalidTrendsRange` 时，先阅读 [趋势参数与可用日期](references/趋势参数与可用日期.md)。反查词、分页/排序、批量、站点支持或指标解释先读 [接口参数与返回口径](references/接口参数与返回口径.md)。
-3. 旧 xydc MCP 和网页/爬虫通道已经废弃，不再作为运行时路由。
+3. 通过同一入口执行所需查询，按 [结果合同](#结果合同) 交付；失败按下文处理，未取得的数据标明缺失。
 
-Agent 不直接访问 `https://mcp.xydc.com/mcp` 或西柚 OpenAPI。远端调用、API Key、多账号额度切换、有限重试、调用日志和密钥脱敏均由 opscli Provider 处理。
+旧 xydc MCP 和网页/爬虫通道已经废弃。Agent 不直连供应商 MCP 或西柚 OpenAPI；上游请求、凭据切换、有限重试、调用日志和密钥脱敏由服务端处理。
 
 ## OpenAPI MCP Tool
 
@@ -85,7 +93,7 @@ Agent 不直接访问 `https://mcp.xydc.com/mcp` 或西柚 OpenAPI。远端调�
 
 ### 完整 OpenAPI 目录
 
-`ext_xydc_openapi_operations` 返回 21 个公共业务操作。使用 `ext_xydc_openapi_call` 时传入目录中的 `operation` 和原样 JSON `payload`，当前覆盖 ASIN 商品、流量、趋势、订单、变体、反查关键词、ASIN 关键词趋势、关键词 ABA、关键词信息和关键词分析。官方余额接口仅限 v1，不在 v2 公共目录；已下线的市场洞察接口不因旧更新记录重新开放。
+以本轮操作目录返回的 operation 与参数合同为准。当前覆盖 ASIN 商品、流量、趋势、订单、变体、反查关键词、ASIN 关键词趋势、关键词 ABA、关键词信息和关键词分析。官方余额接口仅限 v1，不在 v2 公共目录；已下线的市场洞察接口不因旧更新记录重新开放。
 
 进入 Provider 的调用由 MCP 服务端记录审计日志，默认位于服务端 `CONFIG_DIR/logs/xydc-openapi.jsonl`；服务管理员可通过 `OPSCLI_XYDC_OPENAPI_AUDIT_LOG` 改变路径。日志包含查询条件、返回结果、Trace ID、Credit、重试次数和耗时，API Key 自动脱敏。远程 MCP 的日志不在用户电脑上，Agent 使用本次工具返回取证，服务端日志由管理员排查。
 
@@ -130,10 +138,10 @@ ext_xydc_openapi_call(
 
 ## Credit 与失败处理
 
-- 每次 Tool 调用都可能消耗西柚 Credit。批量参数能回答问题时，不拆成多次调用。
+- 读取操作目录不消耗供应商 Credit，业务查询可能消耗。批量参数能回答问题时，不拆成多次调用。
 - opscli Provider 只在供应商明确返回 API Key 无效、API Key 不存在或额度账户不可用时切换下一个 `xydc_openapi` MySQL 账号；Agent 不手工选择账号。
 - 超时、HTTP 5xx、429、参数错误或普通业务错误后，禁止自动重放相同参数，也不要手工换账号规避错误。
-- Tool 返回 `success=false` 或异常时，按项目 `ops-feedback` 规则提交反馈，然后基于已有数据降级交付。
+- MCP 返回 `success=false` 或异常，或 CLI 命令失败时，立即按项目 `ops-feedback` 规则提交或复用反馈，向用户返回反馈 UUID，再基于已有数据降级交付；认证类预期错误、用户主动取消和 5 分钟内同一失败的去重按该规则处理。
 - 本轮远程工具实际返回 `ApiCredentialConfigError: API 凭据池未配置完整 MySQL 连接信息` 时，记录工具名、实际参数、原始错误及返回的 Trace ID（若有），按项目规则提交或复用反馈 UUID，然后停止本轮其余西柚查询，交由服务管理员核对该 MCP 实例的数据库配置。该错误发生于供应商请求前；换 ASIN、关键词、日期或刷新用户登录态不能补齐服务端配置。仅有截图或历史总结时，标为历史反馈，不能据此认定当前实例仍故障。
 - `InvalidTrendsRange`（HTTP 400）按 [范围拒绝恢复流程](references/趋势参数与可用日期.md#范围拒绝恢复流程) 检查可用日期；先看 `error.code`，兼容旧版本的 `error.details.code` / `reason` 以及 `msg` / `message`。范围被拒绝不能据此断言 ASIN 无数据或供应商接口故障。
 - 空数组、0 流量、0 排名结果或字段为空都是有效业务结果。按原条件报告，不自动放宽站点、关键词或 ASIN 条件。
