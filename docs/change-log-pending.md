@@ -1,3 +1,17 @@
+## 2026-10-14 西柚 - 补齐 CLI 代理与 Skill 工具发现流程
+
+**变更原因**：用户反馈安装 ops-xiyou 后 Agent 因宿主未直接提供西柚工具而停止查询；原 Skill 仅支持 MCP 直连，西柚没有 Keepa 那样的正式 CLI 代理入口。
+
+**改动点**：新增懒加载 `opscli xiyou operations/call`，复用 Keepa 的 `RemoteMcpAdapter` 获取当前用户远端 MCP 配置；支持 JSON 字符串或 UTF-8/BOM 参数文件与完整响应落盘，业务失败非零退出且不重放。ops-xiyou 升至 v2.0.1，补充延迟工具发现、CLI 降级、程序/Skill/服务版本区分及父体月订单、类目月均排名和本地 Excel 交付口径。同步迁移说明、帮助快照和旧入口废弃测试。
+
+**验证结果**：新增入口与完整 CLI 转发用例在修复前均因 `No such command 'xiyou'` 失败，修复后通过；西柚 Provider/CLI/REST/MCP、Skill 安装、顶级懒加载、Keepa/鹰眼代理及共享远端适配层共 `142 passed`。Skill Creator 校验、Python 编译及 diff 检查通过。本会话实际远端目录调用成功返回 21 个公共操作，不消耗供应商 Credit；未执行收费业务查询，未验证反馈用户环境或供应商数据可用性。
+
+**影响范围**：新增客户端 CLI 代理和 Skill 入口选择，不恢复旧网页/供应商 MCP，不修改服务端凭据池、供应商请求、额度或重试策略。需发布客户端与 Skill 后用户才能使用新命令；远端通用工具及角色权限仍须可用。详见 `docs/analysis/西柚Skill入口故障排查与修复-2026-10-14.md`。
+
+**回滚方式**：移除 xiyou 的懒加载注册与两个新增 CLI/适配层文件，将 Skill 和版本恢复至 v2.0.0，并回退对应测试、快照与文档；服务端 OpenAPI 数据和凭据不受影响。
+
+---
+
 ## 2026-10-09 SQLite 迁移 - 合入 Quota MySQL 支持
 
 **变更原因**：将迁移 worktree 中已有的 Quota MySQL 实现、导入工具和文档合入主仓库当前分支，同时避免带入已撤回的专属账号工厂引用。
@@ -12002,5 +12016,25 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：新增 `tests/skills/test_ops_amazon_rufus_consent_ask_first_docs.py`（13 条：边界小节、主流程第 5/6 步、CLI fallback 边界、reference、README 的关键约束语句，按模板和 `.agents` 两份参数化，共 10 条；另有 3 条校验改动的 3 份文档模板与副本逐字节一致）和 `tests/amazon_rufus/test_remote_consent_ask_first.py`（7 条：MCP 描述 1 条；CLI `--allow` 帮助及 GBK 兼容 1 条；`RUFUS_SECRET_NOT_READY` 四种触发形态各 1 条，校验不再含「授权状态初始化」、含 watch-login 恢复入口、MCP 工具名与 Linux 提示、注明与授权偏好无关、GBK 兼容；collector 的 reason 先问用户 1 条）。把两份新测试拷进 release `13ff8e9c` 干净导出目录运行：17 条失败、3 条通过（通过的是逐字节一致性用例，修改前两份本来就一致）；修复后 20 条全部通过。在 worktree 根目录运行 `/Users/mask/python3/opscli/.venv/bin/python -m pytest tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py tests/asin_data_collector -q`：706 passed、15 failed。这 15 条（`tests/skills/` 下 dashboard×2、manager×3、reviews、app_build_spec×2、feedback_report_server、methods_card，以及 `tests/asin_data_collector/` 下 frontend_record、crawler_payload×4）在 release `13ff8e9c` 的干净导出目录用同一命令同样失败（686 passed、15 failed），属于既有基线。只跑三目录 `tests/amazon_rufus tests/skills tests/mcp/test_amazon_rufus_tools.py`：687 passed、10 failed，基线同命令 667 passed、10 failed（失败的都是上面 `tests/skills` 那 10 条）。另跑 `tests/mcp`（排除 import 已坏的 `test_shopify_tools.py`）：546 passed、2 failed（keepa_registration、seller_sprite quota），与基线导出目录结果一致。`git diff --check` 通过。CLI 帮助实际渲染后的文本通过 GBK 编码检查。所有测试都打桩，没有访问真实网络或 Keychain。
 **影响范围**：只改文本：Skill 文档、MCP 工具描述、CLI 帮助、`RUFUS_SECRET_NOT_READY` 的 message、collector 失败 reason。命令参数、MCP 工具签名、错误码、授权偏好存储与读取逻辑都不变。Skill 文档随模板升级生效；MCP 描述需要远端 MCP 重新部署（QA 远端当前仍是 0.0.140）；CLI 帮助与报错文案随下一版 opscli 发布、沙箱镜像升级后生效（G4 沙箱是 v0.0.132）。
 **回滚方式**：回退本条对应的提交（Skill 模板与安装副本、MCP 工具描述、CLI 帮助、backend_secret 文案与恢复提示常量、collector 的 reason、功能说明和两个新增测试文件）。
+
+---
+
+## 2026-10-13 西柚 Skill - 明确远程调用入口与失败证据
+
+**变更原因**：普通查询 Skill 混入服务端凭据管理命令，并将远程审计日志写成“本机”，可能诱导 Agent 在用户电脑上执行 Provider；历史错误摘要也不能作为本轮实测证据。
+**改动点**：ops-xiyou v1.3.4 明确调用已连接的远程 ext_xydc_*，工具不可见时检查连接；移除凭据管理示例，明确 MySQL、供应商密钥及日志属于服务端。配置错误提交反馈后停止其余西柚查询并交管理员排查；调用次数、错误与 Credit 结论绑定实际返回。同步版本文件和现有模板安装测试。
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/skills/test_ops_xiyou_skill.py -q`，6 passed，覆盖版本一致性、调用边界和临时目录安装；skill-creator 的 quick_validate.py 通过，git diff --check 通过。未调用付费接口验证文案，未发布。
+**影响范围**：ops-xiyou 内置模板与版本校验；不修改业务代码、认证 Skill、用户已安装 Skill 或远程服务。
+**回滚方式**：回退本条对应的 Skill、版本及测试改动，恢复 v1.3.3。
+
+---
+
+## 2026-10-13 西柚 MCP - 收敛为目录与通用查询两个入口
+
+**变更原因**：四个旧名称的便利包装与通用 OpenAPI 入口覆盖相同能力，容易让 Agent 误认为存在旧查询通道。
+**改动点**：移除四个兼容 MCP 入口，保留 ext_xydc_openapi_operations 与 ext_xydc_openapi_call；同步 ops-xiyou v2.0.0 请求示例、版本、目录分页描述、额度默认映射、注册与安装测试。SDK 内部参数兼容、历史额度数据保留。迁移说明要求旧调用方改用 operation + payload，并核对远程工具授权。
+**验证结果**：修改前实际 MCP 注册列表回归 1 failed，明确检出四个额外旧工具；改造后 MCP 注册/转发/埋点、Provider、REST、SQLite/MySQL 额度及 Skill 相关回归 152 passed。整理测试排版和模块说明后，相关15项复验通过。Skill Creator 结构校验、Skill 发版清单校验及 git diff --check 通过；供应商请求及 MySQL 使用 mock，未调用收费 API。
+**影响范围**：西柚 MCP 公开工具合同；旧 MCP 工具名将不可调用，查询能力不减少。未部署远端服务。
+**回滚方式**：回退本条对应代码、Skill、版本与测试；历史额度数据不删除。
 
 ---
