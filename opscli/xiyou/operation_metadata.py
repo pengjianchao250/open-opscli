@@ -63,7 +63,7 @@ PARAMETER_SCHEMAS = {
     "startDate": DATE_SCHEMA, "endDate": DATE_SCHEMA, "date": DATE_SCHEMA,
     "startMonth": MONTH_SCHEMA, "endMonth": MONTH_SCHEMA,
     "startWeek": WEEK_SCHEMA, "endWeek": WEEK_SCHEMA,
-    "page": {"type": "integer", "description": "供应商页码；反查例子为1，关键词分析起点未明示，不混淆兼容Tool转换"},
+    "page": {"type": "integer", "description": "供应商页码原样透传；反查例子为1，关键词分析起点未明示，不自动转换页码"},
     "pageSize": {"type": "integer", "description": "每页条数；列表接口单次最多10000条，建议先取20条"},
     "period": {"type": "string", "enum": ["last7days"], "description": "仅最近7天，不传任意天数或起止日期"},
     "sort": {

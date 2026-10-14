@@ -1,3 +1,17 @@
+## 2026-10-14 西柚 - 补齐 CLI 代理与 Skill 工具发现流程
+
+**变更原因**：用户反馈安装 ops-xiyou 后 Agent 因宿主未直接提供西柚工具而停止查询；原 Skill 仅支持 MCP 直连，西柚没有 Keepa 那样的正式 CLI 代理入口。
+
+**改动点**：新增懒加载 `opscli xiyou operations/call`，复用 Keepa 的 `RemoteMcpAdapter` 获取当前用户远端 MCP 配置；支持 JSON 字符串或 UTF-8/BOM 参数文件与完整响应落盘，业务失败非零退出且不重放。ops-xiyou 升至 v2.0.1，补充延迟工具发现、CLI 降级、程序/Skill/服务版本区分及父体月订单、类目月均排名和本地 Excel 交付口径。同步迁移说明、帮助快照和旧入口废弃测试。
+
+**验证结果**：新增入口与完整 CLI 转发用例在修复前均因 `No such command 'xiyou'` 失败，修复后通过；西柚 Provider/CLI/REST/MCP、Skill 安装、顶级懒加载、Keepa/鹰眼代理及共享远端适配层共 `142 passed`。Skill Creator 校验、Python 编译及 diff 检查通过。本会话实际远端目录调用成功返回 21 个公共操作，不消耗供应商 Credit；未执行收费业务查询，未验证反馈用户环境或供应商数据可用性。
+
+**影响范围**：新增客户端 CLI 代理和 Skill 入口选择，不恢复旧网页/供应商 MCP，不修改服务端凭据池、供应商请求、额度或重试策略。需发布客户端与 Skill 后用户才能使用新命令；远端通用工具及角色权限仍须可用。详见 `docs/analysis/西柚Skill入口故障排查与修复-2026-10-14.md`。
+
+**回滚方式**：移除 xiyou 的懒加载注册与两个新增 CLI/适配层文件，将 Skill 和版本恢复至 v2.0.0，并回退对应测试、快照与文档；服务端 OpenAPI 数据和凭据不受影响。
+
+---
+
 ## 2026-10-09 SQLite 迁移 - 合入 Quota MySQL 支持
 
 **变更原因**：将迁移 worktree 中已有的 Quota MySQL 实现、导入工具和文档合入主仓库当前分支，同时避免带入已撤回的专属账号工厂引用。
@@ -11965,5 +11979,25 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **风险**：EMPTY_CONTENT 是工具调用失败，Agent 按 Skill 改写重试时，同一错误在会话内连续出现可能触发全局「工具失败自动反馈」规则自动提交反馈；部分题真实丢失时只告警不阻断，依赖 Agent 按 Skill 如实告知用户；骨架渲染失败时退化为不剔除模板行的比对，检测力下降但不影响发布。
 **后续事项（本次不修）**：formatter 既有缺陷——回答全用「1、2、3、」列内容条目时被 `_split_numbered_sections` 当作小节标记吞掉整段内容，小节内「1、2、3、」要点被 `_drop_intro_and_headers` 丢弃。本次保真校验会把这类部分题丢失报为渲染丢失告警。修复思路见复审原型 `review12136_r3/proto_split.py`：编号小节识别改为「标题匹配，或序号递增且短标题样式」，小节内非标题的「N、」条目加保护前缀后再进入旧规则；需同时用 `split_cmp.py` 的 12 种编号变体与批量诊断校验器回归，确保不比现状倒退。
 **回滚方式**：回退本条对应提交，恢复 publisher 无校验上传、formatter 链接兜底与总结重复输出，移除新增异常、测试与 fixture、Skill 与参考文档新增内容。
+
+---
+
+## 2026-10-13 西柚 Skill - 明确远程调用入口与失败证据
+
+**变更原因**：普通查询 Skill 混入服务端凭据管理命令，并将远程审计日志写成“本机”，可能诱导 Agent 在用户电脑上执行 Provider；历史错误摘要也不能作为本轮实测证据。
+**改动点**：ops-xiyou v1.3.4 明确调用已连接的远程 ext_xydc_*，工具不可见时检查连接；移除凭据管理示例，明确 MySQL、供应商密钥及日志属于服务端。配置错误提交反馈后停止其余西柚查询并交管理员排查；调用次数、错误与 Credit 结论绑定实际返回。同步版本文件和现有模板安装测试。
+**验证结果**：`.venv/Scripts/python.exe -X utf8 -m pytest tests/skills/test_ops_xiyou_skill.py -q`，6 passed，覆盖版本一致性、调用边界和临时目录安装；skill-creator 的 quick_validate.py 通过，git diff --check 通过。未调用付费接口验证文案，未发布。
+**影响范围**：ops-xiyou 内置模板与版本校验；不修改业务代码、认证 Skill、用户已安装 Skill 或远程服务。
+**回滚方式**：回退本条对应的 Skill、版本及测试改动，恢复 v1.3.3。
+
+---
+
+## 2026-10-13 西柚 MCP - 收敛为目录与通用查询两个入口
+
+**变更原因**：四个旧名称的便利包装与通用 OpenAPI 入口覆盖相同能力，容易让 Agent 误认为存在旧查询通道。
+**改动点**：移除四个兼容 MCP 入口，保留 ext_xydc_openapi_operations 与 ext_xydc_openapi_call；同步 ops-xiyou v2.0.0 请求示例、版本、目录分页描述、额度默认映射、注册与安装测试。SDK 内部参数兼容、历史额度数据保留。迁移说明要求旧调用方改用 operation + payload，并核对远程工具授权。
+**验证结果**：修改前实际 MCP 注册列表回归 1 failed，明确检出四个额外旧工具；改造后 MCP 注册/转发/埋点、Provider、REST、SQLite/MySQL 额度及 Skill 相关回归 152 passed。整理测试排版和模块说明后，相关15项复验通过。Skill Creator 结构校验、Skill 发版清单校验及 git diff --check 通过；供应商请求及 MySQL 使用 mock，未调用收费 API。
+**影响范围**：西柚 MCP 公开工具合同；旧 MCP 工具名将不可调用，查询能力不减少。未部署远端服务。
+**回滚方式**：回退本条对应代码、Skill、版本与测试；历史额度数据不删除。
 
 ---
