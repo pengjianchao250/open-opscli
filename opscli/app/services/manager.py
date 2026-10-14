@@ -25,6 +25,13 @@ from opscli.app.services.binding import BindingStore
 from opscli.app.services.gitcred import GitCredentialStore
 from opscli.app.services.gitops import GitService
 from opscli.app.services.manifest import AppManifestStore
+from opscli.app.services.migration_contract import (
+    inspect_migration_frontend_build,
+    inspect_migration_public_paths,
+    inspect_migration_release_assets,
+    inspect_migration_runtime_assets,
+    migration_release_fingerprint,
+)
 from opscli.app.transport.client import AppHubClient
 
 
@@ -54,14 +61,12 @@ class AppManager:
         app_name: str,
         *,
         path: str | Path | None = None,
-        origin_type: str | None = None,
-        migration_id: str | None = None,
+        include_default_database: bool = True,
     ) -> dict:
         """创建并绑定应用，不消费或保存创建响应中的 Git 凭据。"""
         request = AppCreateRequest.from_app_name(
             app_name,
-            origin_type=origin_type,
-            migration_id=migration_id,
+            include_default_database=include_default_database,
         )
         root = self.binding_store.prepare_root(path if path is not None else request.name)
         if self.binding_store.is_bound(root):
@@ -143,7 +148,7 @@ class AppManager:
         binding, credential_result, git_init_result, runtime_env_result = (
             self._prepare_repository(
                 root,
-                manifest_policy="migration" if migration_project else "validate",
+                manifest_policy="validate",
             )
         )
         git_result = self.git_service.push_all(
@@ -179,12 +184,13 @@ class AppManager:
         *,
         app_slug: str | None = None,
         app_id: str | None = None,
-        manifest_policy: Literal["sync", "validate", "migration"] = "sync",
+        manifest_policy: Literal["sync", "validate"] = "sync",
     ) -> tuple[SiteBinding, dict[str, Any], dict[str, Any], dict[str, Any]]:
         root.mkdir(parents=True, exist_ok=True)
         binding = self._ensure_binding(root, app_slug=app_slug, app_id=app_id)
         if manifest_policy == "validate":
-            self.manifest_store.validate_identity(root, binding, required=True)
+            manifest = self.manifest_store.validate_identity(root, binding, required=True)
+            self.manifest_store.validate_production_assets(root, manifest)
         app_detail = self.client.get_app(binding.app_id)
         self._verify_detail(binding, app_detail)
         git_config = self.client.get_git_config(binding.app_id)
@@ -202,7 +208,7 @@ class AppManager:
             git_config,
         )
         self.binding_store.save(root, binding)
-        if manifest_policy in {"sync", "migration"}:
+        if manifest_policy == "sync":
             self.manifest_store.sync_identity(root, binding)
         git_result = self.git_service.initialize(
             root,
@@ -230,7 +236,11 @@ class AppManager:
             raise AppProjectError("APP-MIGRATION-PATH", "迁移项目缺少有效的源目录标识。")
         source_root = Path(source_value).expanduser().resolve()
         target_root = root.resolve()
-        if source_root == target_root or source_root in target_root.parents or target_root in source_root.parents:
+        if (
+            source_root == target_root
+            or source_root in target_root.parents
+            or target_root in source_root.parents
+        ):
             raise AppProjectError(
                 "APP-MIGRATION-PATH",
                 "迁移项目源目录和目标目录无效或互相包含。",
@@ -238,16 +248,137 @@ class AppManager:
         for relative in (
             Path("copy-manifest.json"),
             Path("startup-manifest.json"),
+            Path("adaptation-manifest.json"),
+            Path("migration.json"),
         ):
-            if not (root / ".opscli" / "migration" / str(migration.get("migration_id")) / relative).is_file():
+            state_file = (
+                root
+                / ".opscli"
+                / "migration"
+                / str(migration.get("migration_id"))
+                / relative
+            )
+            if not state_file.is_file():
                 raise AppProjectError(
                     "APP-MIGRATION-GATE",
                     f"迁移项目缺少必要状态文件：{relative.name}",
                     fix_hint="执行 opscli app migrate verify 或重新扫描迁移项目。",
                 )
+        migration_dir = root / ".opscli" / "migration" / str(migration.get("migration_id"))
+        state = _read_json_object(migration_dir / "migration.json", "APP-MIGRATION-STATE")
+        adaptation = _read_json_object(
+            migration_dir / "adaptation-manifest.json", "APP-MIGRATION-STATE"
+        )
+        if not state.get("delivery_ready") or adaptation.get("status") != "ready":
+            raise AppProjectError(
+                "APP-MIGRATION-GATE",
+                "迁移适配尚未达到交付条件。",
+                fix_hint="执行 opscli app migrate resume 和 verify，完成启动与适配检查后再推送。",
+                detail={
+                    "phase": state.get("phase"),
+                    "adaptation_status": adaptation.get("status"),
+                    "delivery_ready": bool(state.get("delivery_ready")),
+                },
+            )
+        frontend_build = inspect_migration_frontend_build(root)
+        if not frontend_build["ready"]:
+            raise AppProjectError(
+                "APP-MIGRATION-BUILD-CONTRACT",
+                "迁移项目的前端生产构建配置与 packageManager 声明不一致。",
+                fix_hint=(
+                    "让 Corepack 在 frontend/package.json 所在目录解析 pnpm 版本后再构建；"
+                    "不要使用 pmOnFail=ignore 绕过版本校验。"
+                ),
+                detail=frontend_build,
+            )
+        public_paths = inspect_migration_public_paths(root)
+        if not public_paths["ready"]:
+            raise AppProjectError(
+                "APP-MIGRATION-PUBLIC-PATH",
+                "迁移项目的浏览器资源或 API 使用根绝对 URL，无法适配 AppHub 动态访问前缀。",
+                fix_hint=(
+                    "将 href、src、CSS url() 和浏览器请求改为相对 URL，"
+                    "重新执行 opscli app migrate scan-startup、resume 和 verify。"
+                ),
+                detail=public_paths,
+            )
+        runtime_assets = inspect_migration_runtime_assets(root)
+        if not runtime_assets["ready"]:
+            raise AppProjectError(
+                "APP-MIGRATION-RUNTIME-ASSET",
+                "迁移项目引用了公开数据快照，但快照不会进入最终运行镜像。",
+                fix_hint=(
+                    "让 Dockerfile 最终运行阶段复制 public，并确保 .gitignore 和 "
+                    ".dockerignore 不会排除 public 下的数据快照后再推送。"
+                ),
+                detail=runtime_assets,
+            )
+        release_assets = inspect_migration_release_assets(
+            root,
+            expected_app_id=state.get("app_id") if isinstance(state.get("app_id"), str) else None,
+        )
+        if not release_assets["ready"]:
+            raise AppProjectError(
+                "APP-MIGRATION-RELEASE-GATE",
+                "迁移项目尚未满足 AppHub 线上构建门禁。",
+                fix_hint=(
+                    "补齐 app.yaml、入口、依赖与构建资产，统一端口和健康检查后，"
+                    "重新执行迁移验证合同。"
+                ),
+                detail=release_assets,
+            )
+        validation_path = migration_dir / "validation-manifest.json"
+        validation = _read_json_object(validation_path, "APP-MIGRATION-VALIDATION")
+        contracts = validation.get("contracts")
+        required_contracts = (
+            "migration_integrity",
+            "dual_runtime",
+            "release_gate",
+        )
+        contracts_ready = isinstance(contracts, dict) and all(
+            isinstance(contracts.get(name), dict)
+            and contracts[name].get("passed") is True
+            for name in required_contracts
+        )
+        if validation.get("release_ready") is not True or not contracts_ready:
+            raise AppProjectError(
+                "APP-MIGRATION-VALIDATION",
+                "迁移项目尚未通过三项标准验证合同。",
+                fix_hint=(
+                    "执行 validate_migration_contract.py，持续修复迁移副本，"
+                    "直到 migration_integrity、dual_runtime、release_gate 全部通过。"
+                ),
+                detail={"validation_manifest": str(validation_path)},
+            )
+        expected_fingerprint = validation.get("release_fingerprint")
+        current_fingerprint = migration_release_fingerprint(root)
+        if (
+            not isinstance(expected_fingerprint, dict)
+            or expected_fingerprint.get("sha256") != current_fingerprint["sha256"]
+        ):
+            raise AppProjectError(
+                "APP-MIGRATION-VALIDATION-STALE",
+                "迁移项目在验证通过后又发生了源码变化。",
+                fix_hint="重新执行迁移验证合同，生成与当前源码一致的验证清单后再推送。",
+                detail={
+                    "validation_manifest": str(validation_path),
+                    "expected": expected_fingerprint,
+                    "current": current_fingerprint,
+                },
+            )
         tracked = self.git_service.runner.run(
             root,
-            ["ls-files", "--", ".env", ".env.*", "*.db", "*.sqlite", "*.sqlite3", "data"],
+            [
+                "ls-files",
+                "--",
+                ".env",
+                ".env.*",
+                "*.db",
+                "*.sqlite",
+                "*.sqlite3",
+                "data",
+                ":(exclude).env.example",
+            ],
             check=False,
         )
         if tracked.stdout:

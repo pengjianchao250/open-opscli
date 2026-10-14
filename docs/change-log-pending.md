@@ -90,6 +90,71 @@
 **影响范围**：opscli 顶级 CLI 的子命令加载时机（急切 → 按需）与 `opscli/__init__.py` 顶层 re-export 的实现（急切 → PEP 562 惰性，铁律3 对外语义不变）；`--help`/命令列表/文案/顺序零变化；子命令模块导入失败的爆炸半径从"整个 CLI 起不来"缩小为"仅该子命令报错"；MCP 入口（独立进程，不经 `cli.py`）不受影响；新增子模块接入方式由 `add_typer` 两行改为注册表一行（铁律1 已同步，注册表 help 漂移由测试守护）。
 
 **回滚方式**：回退 `opscli/cli.py`、`opscli/__init__.py`、`tests/app/test_cli.py`、`tests/baiyi/test_cli.py`，删除 `tests/test_cli_lazy_loading.py` 与 `tests/test_cli_lazy_loading_help_snapshot.txt`，恢复 CLAUDE.md 铁律1 示例并移除本条记录。
+## 2026-10-10 opscli app - 阻断不可交付的构建配置依赖
+
+**变更原因**：迁移项目可能在本机存在被 `.gitignore` 忽略或尚未 Git 跟踪的配置文件，构建配置通过静态导入依赖该文件时本地构建正常，但远端干净 Docker 构建因源码缺失失败。
+
+**改动点**：迁移发布合同新增构建输入闭包检查，扫描 JavaScript/TypeScript `*.config.*` 文件中的静态相对 `import`、`export ... from` 和 `require`；校验目标文件存在、位于项目内、未被 `.dockerignore` 排除，并在 Git 仓库中已跟踪。违规时返回 `build_input_not_releasable`、配置文件、行号、依赖路径和具体原因；保留带缺失回退的运行时可选读取，不把 `readFileSync` 等动态读取误判为静态依赖。
+
+**验证结果**：`tests/app` 完整回归 234 项通过；修改文件通过 `py_compile`，并用真实迁移副本 `prev-018` 验证发布合同仍为 `ready=true`。当前虚拟环境未安装 Ruff，因此未执行 Ruff 检查。
+
+**影响范围**：仅影响源码复制迁移的发布合同和后续验证清单；普通项目创建、普通 push 以及不含静态本地文件依赖的构建配置不变。
+
+**回滚方式**：移除 `migration_contract.py` 的构建输入闭包检查、对应四个回归测试和本条变更记录。
+
+---
+
+## 2026-10-10 opscli app - 按启动证据自动适配 Vinext 动态前缀
+
+**变更原因**：源码迁移项目的目录结构不固定，现有流程只检测启动命令和公开路径，无法在首次生产构建前自动修复 Vinext 生成的根绝对 `/_next` 资源地址，导致 AppHub 动态前缀下样式和脚本请求 404。
+
+**改动点**：新增运行时适配策略注册表，根据 `startup-manifest.json` 的 Node 包清单证据和运行目录选择 Vinext 策略；递归识别嵌套可运行包，自动补齐 Vite `base: './'`、向原有 `build` 命令追加构建清单归一化脚本且保留 `postbuild`，并把修改文件登记到适配清单。复杂配置无法确定时转人工适配，不硬编码 AppHub appId、slug、域名或目录结构；迁移合同扫描同步排除旧任务遗留的 Sites、Vinext 和 Wrangler 运行缓存，避免 resume 被无关缓存拖慢或污染证据。
+
+**验证结果**：`tests/app` 完整回归 `230 passed`，相关 Python 文件 `compileall` 通过；真实 `prev-017` 执行 `pnpm run build` 成功，归一化 4 个 Vinext 清单中的 4 处资源路径，`pnpm run lint` 通过，`opscli app migrate resume --json` 返回 `delivery_ready=true` 且生产清单公开路径合同通过。
+
+**影响范围**：仅影响 `origin_type=migration_copy` 的启动扫描、resume 和适配清单；普通项目创建、普通 push、非 Vinext 运行时不变。
+
+**回滚方式**：移除 `migration_runtime_adaptation.py`、迁移主流程的策略调用、嵌套 Node 包检测、对应测试和本条文档记录。
+
+---
+
+## 2026-10-09 opscli app - 迁移项目检查动态访问前缀
+
+**变更原因**：源码复制迁移项目可以通过启动、构建和 Git 门禁，但浏览器源码中的根绝对资源或 API URL 会绕过 AppHub 的动态 iframe 前缀，导致线上页面样式丢失、资源 404 或数据请求失败。
+
+**改动点**：新增迁移专用公开路径合同检查，扫描实际浏览器源码中的 HTML `href/src`、CSS `url()` 和 JavaScript API/资源字符串；接入迁移扫描、verify、适配清单和迁移 push 门禁，返回 `APP-MIGRATION-PUBLIC-PATH` 并列出文件与行号。普通新建流程和普通项目 push 不调用该检查。
+
+**验证结果**：新增根绝对 URL 阻断、相对 URL 放行、迁移 push 阻断和普通 push 不受影响回归测试；相关 Python 文件通过语法校验。
+
+**影响范围**：仅影响 `origin_type=migration_copy` 项目的启动扫描、verify、resume 和 push；不改变 `app create/init` 与普通项目 push。
+
+**回滚方式**：移除迁移公开路径检查器、适配与 push 门禁接入及对应回归测试和本条记录。
+
+---
+
+## 2026-10-08 opscli app - 允许已交付迁移项目正常维护
+
+**变更原因**：源码复制迁移首次通过交付门禁后，后续业务修复仍会与初始复制哈希比较，任何对原始业务文件的正常修改都会使 `copy_verified=false`，导致已推送项目无法再次交付。
+
+**改动点**：首次交付前继续严格校验复制文件哈希；迁移状态已进入 `push_ready` 后，复制基线视为已验证，后续维护不再按初始哈希阻断，同时继续验证源目录不变、源目标隔离、启动与适配状态、应用身份、Git 和 binding。新增首次交付后允许维护、首次交付前仍阻断复制漂移的回归测试。
+
+**影响范围**：仅影响 `origin_type=migration_copy` 项目的后续 `migrate verify` 与 push 门禁；普通新建看板及首次迁移交付流程不变。
+
+**回滚方式**：恢复 `verify` 每次都比较初始复制哈希的逻辑，删除对应回归测试和本条记录。
+
+---
+
+## 2026-10-08 opscli app - 修复既有空目标目录迁移失败
+
+**变更原因**：Windows 上从用户指定的空目标目录内执行 `opscli app migrate start` 时，迁移服务会尝试删除进程当前工作目录，触发 `PermissionError`；复制扫描还会递归进入本应排除的依赖和运行时目录。
+
+**改动点**：已有空目标目录改为保持根目录不变，将校验后的临时副本按顶层条目提交，并通过目标根临时日志记录进度、在异常时回滚；进程被强制中断后，下次 `start` 会校验日志中的同级临时目录并自动回滚后重新复制；不存在的目标仍使用原子重命名。源码清单改用可剪枝的 `os.walk`，进入 `.git`、`node_modules`、`.venv` 等目录前即排除。新增当前工作目录迁移、提交失败回滚、中断恢复和排除目录剪枝测试。
+
+**验证结果**：`tests/app` 完整回归 `188 passed`；迁移与 CLI 聚焦回归 `30 passed`；`compileall` 通过。真实源项目的清单扫描由约 15.8 秒、递归访问 161386 个条目，降为 0.26 秒、仅处理 78 个目录、671 个文件和 9 个排除根。当前开发环境未安装 `ruff`，因此未执行该静态检查。
+
+**影响范围**：影响 `opscli app migrate start` 的本地复制和最终目标提交阶段；不改变 AppHub 创建、Git 初始化、迁移身份或推送合同。
+
+**回滚方式**：恢复 `migration.py` 原有空目录删除与 `rglob` 遍历逻辑，删除对应回归测试和本条记录。
 
 ---
 
@@ -11844,7 +11909,6 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 ---
 ## 2026-09-20 Skills - 反馈铁律改为同报错三次触发并支持 install 原地更新
 
-**变更原因**：用户反馈工具调用每次失败都会触发 ops-feedback 提交，噪声过大；且旧的幂等标记导致已注入 AGENTS.md/CLAUDE.md 的铁律内容永远无法随模板演进而刷新。
 **改动点**：`rule_injector.py` 注入块改为 BEGIN/END 哨兵包裹，install 时对旧格式标记块整段替换、对新格式块原地更新、内容一致时幂等跳过；`_DEFAULT_RULE_CONTENT` 重写为"同一报错指纹在同一会话内连续出现 3 次才提交"；同步更新 `ops-feedback` 模板的 FEEDBACK_RULE.md、SKILL.md、references/cli.md、references/mcp.md 触发措辞，版本升至 v1.0.19；新增 `tests/skills/test_rule_injector.py`（7 个用例）。未改动 feedback_guard.py 决策逻辑（新规则下 Agent 达阈值后才调用 guard，流程自洽）。
 **验证结果**：`tests/skills/test_rule_injector.py` 与 `test_ops_feedback_template.py` 13 项全部通过；假 HOME 端到端验证 `opscli skills install ops-feedback --runtime codex` 可将旧格式 AGENTS.md 更新为新规则且保留用户自定义内容，重复 install 幂等（文件哈希不变）；`tests/skills/` 全量 339 passed / 10 failed，失败集合与改动前完全一致（存量问题，非本次引入）。
 **影响范围**：仅影响 ops-feedback 铁律注入文案与更新机制、ops-feedback Skill 文档；不影响 skills install/upgrade 其他流程和 feedback_guard 决策。
@@ -12036,5 +12100,60 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 **验证结果**：修改前实际 MCP 注册列表回归 1 failed，明确检出四个额外旧工具；改造后 MCP 注册/转发/埋点、Provider、REST、SQLite/MySQL 额度及 Skill 相关回归 152 passed。整理测试排版和模块说明后，相关15项复验通过。Skill Creator 结构校验、Skill 发版清单校验及 git diff --check 通过；供应商请求及 MySQL 使用 mock，未调用收费 API。
 **影响范围**：西柚 MCP 公开工具合同；旧 MCP 工具名将不可调用，查询能力不减少。未部署远端服务。
 **回滚方式**：回退本条对应代码、Skill、版本与测试；历史额度数据不删除。
+## 2026-10-08 App - SQLite 项目推送前校验 AppHub Compose 资产
+
+
+**改动点**：在统一的 manifest 推送门禁中结构化读取 `app.yaml`；SQLite 项目缺少 `compose.apphub.yaml` 时返回稳定错误码 `APP-COMPOSE-REQUIRED`、缺失文件明细和恢复提示，并在任何 AppHub 请求、环境变量更新、凭据处理或 Git 初始化/推送前停止。普通项目与源码复制迁移项目使用同一检查；未声明数据库的项目不受影响；push 不猜测或生成发布配置。
+
+**验证结果**：manifest 与 manager 定向回归 `65 passed`；完整 `tests/app` 回归 `192 passed`；`opscli/app` 与 `tests/app` 通过 `compileall`。
+
+**影响范围**：仅影响 `opscli app push` 的本地生产资产门禁；不改变 `app create/init`、迁移复制与 AppHub 服务端发布合同。
+
+**回滚方式**：移除 manifest 生产资产校验及 manager 调用，并删除对应回归测试。
+
+---
+
+## 2026-10-08 App - 迁移敏感文件门禁允许公开环境模板
+
+**变更原因**：迁移项目 push 使用 `.env.*` Git pathspec 检查敏感文件时，也会命中允许公开提交的 `.env.example`，导致已通过 verify 的项目错误返回 `APP-MIGRATION-SENSITIVE`，无法完成交付。
+
+**改动点**：在 Git 已跟踪文件查询中精确排除根目录 `.env.example`；`.env`、其他 `.env.*`、数据库文件和 `data/` 仍保持阻断。新增公开模板允许推送与 `.env.local` 继续阻断的回归测试。
+
+**验证结果**：manager 定向回归 `53 passed`；完整 `tests/app` 回归 `194 passed`；`opscli/app` 与 `tests/app` 通过 `compileall`；在真实迁移仓库执行修复后的 Git pathspec，敏感文件结果为空。
+
+**影响范围**：只影响源码复制迁移项目的 push 敏感文件门禁；普通项目和其他迁移交付检查不变。
+
+**回滚方式**：移除 `:(exclude).env.example` pathspec 与对应测试。
+
+---
+## 2026-10-08 App - 迁移项目拦截 Corepack 包管理器上下文错位
+
+**变更原因**：源码复制迁移只检查 Dockerfile 是否存在，无法发现 Corepack 从父目录启动、`frontend/package.json` 只复制到子目录、再通过 `pnpm --dir frontend` 构建的配置。此时 Corepack 会选择默认 pnpm，随后与项目声明版本冲突，迁移却仍被标记为可交付。
+
+**改动点**：新增迁移专用前端生产构建合同检查，识别该确定性失败模式并接入 adaptation、verify 和迁移项目 push 前门禁；失败返回 `APP-MIGRATION-BUILD-CONTRACT`，要求从声明目录解析 pnpm 版本且禁止用 `pmOnFail=ignore` 绕过。普通项目与新建看板流程不调用该检查。
+
+**验证结果**：迁移与 manager 定向回归 `72 passed`；完整 `tests/app` 最终回归 `199 passed`；新增 verify、迁移 push、普通 push 和内置 Skill 关键契约复跑通过；相关源码与测试通过 `compileall`；新检查器在真实 `prev-006` 上返回 `corepack_context_mismatch` 和声明版本 `pnpm@10.15.0`。内置 Skill 目标迁移契约通过；完整 Skill 文件回归 `17 passed, 1 failed`，唯一失败为既有 `assets/backend/AGENTS.md` 文案断言，与本次改动无关。环境未安装 Ruff，因此未新增依赖执行该检查。
+
+**影响范围**：仅影响 `origin_type=migration_copy` 的迁移扫描、验证和推送；不改变模板克隆、`app create/init` 或普通项目 push。
+
+**回滚方式**：移除迁移构建合同检查器及 migration/manager 接入，并删除对应回归测试。
+
+---
+## 2026-10-08 App - 本地预览支持源码复制迁移项目
+
+**变更原因**：`opscli app dev` 只接受标准模板的 `scripts/init_env.py` 与 `scripts/check_startup.py`，导致已通过交付门禁、具备迁移启动清单的项目无法使用正式本地预览流程。
+**改动点**：为 `DevService` 增加迁移项目独立分支，校验本地迁移标识、交付状态和启动清单后，准备迁移项目依赖、构建静态前端，并以单个 FastAPI 端口启动后端与前端文件监听器；标准模板分支保持原有校验和双端口流程。新增迁移项目接受、未就绪拒绝、单端口启动与端口冲突回归测试。
+**验证结果**：`tests/app/test_dev.py` 定向回归 29 项通过；完整 `tests/app` 回归 203 项通过；`opscli/app` 与 `tests/app` 通过 `compileall`，修改文件通过 120 字符行长检查。首次定向测试因系统 pytest 临时目录无访问权限未进入业务断言，改用项目内独立 `--basetemp` 后全部通过；环境未安装 Ruff，未新增依赖。
+**影响范围**：仅扩展 `opscli app dev/dev-status` 对 `origin_type=migration_copy` 且 `delivery_ready=true` 项目的支持；不改变新建看板和普通模板项目启动流程。
+**回滚方式**：移除 `DevService` 的迁移启动分支与对应测试，恢复仅支持标准模板的本地预览校验。
+
+---
+## 2026-10-09 opscli app - 迁移项目校验生产快照交付
+
+**变更原因**：迁移项目可能使用 `public/**/data` 作为生产空数据卷的只读回退，但迁移追加的未锚定 `data/` 会误忽略嵌套快照，且原门禁没有确认 Dockerfile 最终运行阶段包含 `public`，导致源码推送和发布成功后 `/api/report` 返回 404。
+**改动点**：迁移生成的忽略规则改为只排除根目录 `/data/`，并为已存在的嵌套公开数据目录补充显式放行；新增 `runtime_asset_contract`，识别运行时代码引用的 `public/**/data`，校验最终 Docker 阶段 COPY 与 Git/Docker 忽略规则；在迁移适配、verify 和迁移 push 门禁中接入，普通项目不调用该检查；同步更新迁移规范和回归测试。
+**验证结果**：迁移与 manager 定向回归 81 项通过；完整 `tests/app` 回归 211 项通过；修改的 Python 源码与测试通过 `py_compile`。新增回归覆盖最终镜像漏复制、正确打包、嵌套快照 Git 放行，以及普通项目不应用迁移门禁。使用修改后的本地 opscli 对 `prev-011` 执行真实 `app migrate verify` 通过，返回 `runtime_asset_contract=true`，并识别 `public/dashboard/data` 的两个运行时引用；环境未安装 Ruff，120 字符行长检查无超限。
+**影响范围**：仅影响 `origin_type=migration_copy` 的复制、适配、verify 和 push 门禁；不改变 `app create/init`、标准模板生成和普通项目 push。
+**回滚方式**：回退迁移运行资产检查、根目录数据忽略规则、对应测试及本条文档。
 
 ---

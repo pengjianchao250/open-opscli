@@ -41,6 +41,15 @@ class DevService:
         frontend_port: int | None = None,
     ) -> None:
         root = self._prepare_root(path)
+        migration_startup = self._load_migration_startup(root)
+        if migration_startup is not None:
+            self._run_migration(
+                root,
+                migration_startup,
+                backend_port=backend_port,
+                frontend_port=frontend_port,
+            )
+            return
         self._ensure_no_active_state(root)
         self._validate_ports(backend_port, frontend_port)
         self._find_tool("node", "未检测到 Node.js，请按 frontend/package.json 安装后重试。")
@@ -233,13 +242,204 @@ class DevService:
             "backend/app.py",
         )
         missing = [item for item in required if not (root / item).is_file()]
-        if missing:
+        if missing and self._load_migration_startup(root) is None:
             raise AppProjectError(
                 "APP-DEV-PROJECT",
                 f"项目不是受支持的 AppHub 看板模板，缺少：{', '.join(missing)}",
                 fix_hint="请先按 ops-app-build-spec 补齐模板项目结构。",
             )
         return root
+
+    def _load_migration_startup(self, root: Path) -> dict[str, dict[str, object]] | None:
+        """读取已通过交付门禁的迁移项目启动清单。"""
+
+        marker_path = root / ".opscli" / "project.json"
+        if not marker_path.is_file():
+            return None
+        marker = self._read_json_object(marker_path, "迁移项目标识")
+        if marker.get("origin_type") != "migration_copy":
+            return None
+        migration_id = marker.get("migration_id")
+        if not isinstance(migration_id, str) or not migration_id:
+            raise AppProjectError("APP-DEV-MIGRATION", "迁移项目标识缺少 migration_id。")
+
+        migration_dir = root / ".opscli" / "migration" / migration_id
+        state = self._read_json_object(migration_dir / "migration.json", "迁移状态")
+        startup = self._read_json_object(migration_dir / "startup-manifest.json", "迁移启动清单")
+        if state.get("delivery_ready") is not True or startup.get("status") != "ready":
+            raise AppProjectError(
+                "APP-DEV-MIGRATION",
+                "迁移项目尚未通过启动与交付门禁。",
+                fix_hint=f'请先执行 opscli app migrate verify --target "{root}" --json。',
+            )
+
+        commands: dict[str, dict[str, object]] = {}
+        for name in ("backend", "frontend"):
+            item = startup.get(name)
+            if not isinstance(item, dict):
+                raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单缺少 {name} 命令。")
+            command = item.get("command")
+            cwd = item.get("cwd")
+            if not isinstance(command, list) or not command or not all(
+                isinstance(part, str) and part for part in command
+            ):
+                raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单的 {name} 命令无效。")
+            if not isinstance(cwd, str) or Path(cwd).is_absolute():
+                raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单的 {name} 工作目录无效。")
+            resolved_cwd = (root / cwd).resolve()
+            if root != resolved_cwd and root not in resolved_cwd.parents:
+                raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单的 {name} 工作目录越界。")
+            if not resolved_cwd.is_dir():
+                raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单的 {name} 工作目录不存在。")
+            commands[name] = item
+        return commands
+
+    def _read_json_object(self, path: Path, label: str) -> dict[str, object]:
+        """读取迁移状态 JSON，并把损坏状态转换为稳定错误。"""
+
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AppProjectError("APP-DEV-MIGRATION", f"无法读取{label}：{path}") from exc
+        if not isinstance(payload, dict):
+            raise AppProjectError("APP-DEV-MIGRATION", f"{label}必须为 JSON 对象：{path}")
+        return payload
+
+    def _run_migration(
+        self,
+        root: Path,
+        startup: dict[str, dict[str, object]],
+        *,
+        backend_port: int | None,
+        frontend_port: int | None,
+    ) -> None:
+        """使用迁移清单启动单端口 FastAPI 应用和前端文件监听器。"""
+
+        self._ensure_no_active_state(root)
+        app_port = self._select_migration_port(backend_port, frontend_port)
+        self._find_tool("node", "未检测到 Node.js，请按 frontend/package.json 安装后重试。")
+        uv = self._find_tool("uv", "未检测到 uv，请安装 uv 后重试。")
+        package_manager = self._resolve_package_manager(root / "frontend")
+        python_path = self._ensure_virtualenv(root, uv)
+
+        requirements = ["requirements.txt"]
+        if (root / "requirements-apphub.txt").is_file():
+            requirements.append("requirements-apphub.txt")
+        install_backend = [uv, "pip", "install", "--python", python_path]
+        for requirement in requirements:
+            install_backend.extend(["-r", requirement])
+        self._run_command(
+            install_backend,
+            root,
+            "后端依赖安装失败。",
+            stage="migration_backend_install",
+        )
+        self._run_command(
+            [*package_manager["command"], "install", "--frozen-lockfile"],
+            root / "frontend",
+            "前端依赖安装失败。",
+            stage="migration_frontend_install",
+            context=package_manager,
+        )
+        self._run_command(
+            [*package_manager["command"], "run", "build"],
+            root / "frontend",
+            "前端构建失败。",
+            stage="migration_frontend_build",
+            context=package_manager,
+        )
+
+        backend_command = self._migration_backend_command(startup["backend"], python_path, app_port)
+        frontend_command = self._migration_frontend_command(startup["frontend"], package_manager)
+        backend_cwd = (root / str(startup["backend"]["cwd"])).resolve()
+        frontend_cwd = (root / str(startup["frontend"]["cwd"])).resolve()
+        processes: list[subprocess.Popen] = []
+        try:
+            backend = self._start_process(backend_command, backend_cwd)
+            processes.append(backend)
+            self._wait_for_backend(backend, app_port)
+
+            frontend = self._start_process(
+                frontend_command,
+                frontend_cwd,
+                env={"APP_DEV_BACKEND_PORT": str(app_port)},
+            )
+            processes.append(frontend)
+            self._wait_for_port(frontend, app_port)
+            self._write_state(
+                root,
+                backend_port=app_port,
+                frontend_port=app_port,
+                backend_pid=backend.pid,
+                frontend_pid=frontend.pid,
+            )
+            print(
+                f"本地开发预览已启动：前端 http://127.0.0.1:{app_port}，"
+                f"后端 http://127.0.0.1:{app_port}"
+            )
+            print(f'项目身份校验：opscli app dev-status "{root}" --json')
+            self._wait_for_processes(processes)
+        except KeyboardInterrupt:
+            print("\n正在停止本地开发预览。")
+        finally:
+            try:
+                self._stop_processes(processes)
+            finally:
+                self._remove_state(root, supervisor_pid=os.getpid())
+
+    def _select_migration_port(
+        self,
+        backend_port: int | None,
+        frontend_port: int | None,
+    ) -> int:
+        """为单进程托管前端的迁移项目选择唯一 HTTP 端口。"""
+
+        for name, port in (("后端", backend_port), ("前端", frontend_port)):
+            if port is not None and not 1 <= port <= 65535:
+                raise AppProjectError("APP-DEV-ARGUMENT", f"{name}端口必须在 1~65535 之间。")
+        if backend_port is not None and frontend_port is not None and backend_port != frontend_port:
+            raise AppProjectError(
+                "APP-DEV-ARGUMENT",
+                "迁移项目由同一 FastAPI 进程托管前后端，两个显式端口必须一致。",
+            )
+        selected = backend_port if backend_port is not None else frontend_port
+        if selected is not None:
+            self._check_port(selected)
+            return selected
+        return self._find_available_port(DEFAULT_BACKEND_PORT, set())
+
+    def _migration_backend_command(
+        self,
+        item: dict[str, object],
+        python_path: str,
+        port: int,
+    ) -> list[str]:
+        """把迁移扫描得到的 Uvicorn 命令绑定到本地虚拟环境与选定端口。"""
+
+        command = list(item["command"])
+        if len(command) < 4 or command[1:3] != ["-m", "uvicorn"]:
+            raise AppProjectError(
+                "APP-DEV-MIGRATION",
+                "当前迁移后端命令无法接入本地开发端口。",
+                fix_hint="请重新执行迁移启动扫描，或补齐可识别的 FastAPI 入口。",
+            )
+        command[0] = python_path
+        return [*command, "--reload", "--host", "127.0.0.1", "--port", str(port)]
+
+    def _migration_frontend_command(
+        self,
+        item: dict[str, object],
+        package_manager: dict,
+    ) -> list[str]:
+        """复用已校验包管理器执行迁移清单中的前端监听命令。"""
+
+        command = list(item["command"])
+        if command[0] != "pnpm":
+            raise AppProjectError(
+                "APP-DEV-MIGRATION",
+                "当前迁移前端命令与 frontend/package.json 的 pnpm 合同不一致。",
+            )
+        return [*package_manager["command"], *command[1:]]
 
     def _validate_ports(self, backend_port: int | None, frontend_port: int | None) -> None:
         for name, port in (("后端", backend_port), ("前端", frontend_port)):

@@ -36,7 +36,8 @@ def _emit(payload: dict, *, json_output: bool) -> None:
             "architecture", "translated", "git_path", "detected_via", "git_version",
             "minimum_version", "install_method", "migration_id", "origin_type", "phase",
             "startup_status", "target_root", "source_root", "copy_manifest",
-            "startup_manifest", "passed", "state_path", "target_reason", "target_notice",
+            "startup_manifest", "adaptation_status", "adaptation_manifest", "delivery_ready",
+            "passed", "state_path", "target_reason", "target_notice",
         ):
             if data.get(key) is not None:
                 typer.echo(f"{key}: {data[key]}")
@@ -148,6 +149,20 @@ def migrate_status(
     _run_migration(
         "app migrate status",
         lambda service: service.status(target, migration_id=migration_id),
+        json_output=json_output,
+    )
+
+
+@migrate_app.command("resume")
+def migrate_resume(
+    target: Path = typer.Option(Path("."), "--target", help="迁移目标项目目录"),
+    migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
+    json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
+) -> None:
+    """从本地持久化阶段继续迁移，不重复复制或创建应用。"""
+    _run_migration(
+        "app migrate resume",
+        lambda service: service.resume(target, migration_id=migration_id),
         json_output=json_output,
     )
 
@@ -342,4 +357,3 @@ def push(
         lambda manager: manager.push(path, message=message),
         json_output=json_output,
     )
-

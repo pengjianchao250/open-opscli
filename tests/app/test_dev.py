@@ -29,10 +29,69 @@ def _write_project(root: Path) -> None:
         (root / relative).write_text("", encoding="utf-8")
 
 
+def _write_migration_project(root: Path) -> None:
+    """写入可由迁移分支识别的最小项目状态。"""
+
+    (root / "backend").mkdir()
+    (root / "frontend").mkdir()
+    migration_dir = root / ".opscli" / "migration" / "migration-test"
+    migration_dir.mkdir(parents=True)
+    (root / "requirements.txt").write_text("", encoding="utf-8")
+    (root / ".python-version").write_text("3.12\n", encoding="utf-8")
+    (root / "backend" / "app.py").write_text("", encoding="utf-8")
+    (root / "frontend" / "package.json").write_text(
+        json.dumps({"packageManager": "pnpm@10.15.0"}),
+        encoding="utf-8",
+    )
+    (root / "frontend" / "pnpm-lock.yaml").write_text("", encoding="utf-8")
+    (root / ".opscli" / "project.json").write_text(
+        json.dumps({"origin_type": "migration_copy", "migration_id": "migration-test"}),
+        encoding="utf-8",
+    )
+    (migration_dir / "migration.json").write_text(
+        json.dumps({"migration_id": "migration-test", "delivery_ready": True}),
+        encoding="utf-8",
+    )
+    (migration_dir / "startup-manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "backend": {
+                    "command": ["python", "-m", "uvicorn", "backend.app:app"],
+                    "cwd": ".",
+                },
+                "frontend": {
+                    "command": ["pnpm", "run", "start"],
+                    "cwd": "frontend",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_prepare_root_rejects_non_template_project() -> None:
     with TemporaryDirectory(dir=Path.cwd()) as directory:
         with pytest.raises(AppProjectError, match="不是受支持的 AppHub 看板模板"):
             DevService()._prepare_root(Path(directory))
+
+
+def test_prepare_root_accepts_delivery_ready_migration_project(tmp_path: Path) -> None:
+    _write_migration_project(tmp_path)
+
+    assert DevService()._prepare_root(tmp_path) == tmp_path.resolve()
+
+
+def test_prepare_root_rejects_migration_project_before_delivery_ready(tmp_path: Path) -> None:
+    _write_migration_project(tmp_path)
+    state_path = tmp_path / ".opscli" / "migration" / "migration-test" / "migration.json"
+    state_path.write_text(
+        json.dumps({"migration_id": "migration-test", "delivery_ready": False}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AppProjectError, match="尚未通过启动与交付门禁"):
+        DevService()._prepare_root(tmp_path)
 
 
 def test_validate_env_rejects_missing_keys_and_placeholder_token() -> None:
@@ -370,6 +429,105 @@ def test_run_uses_frontend_cwd_and_forwards_vite_arguments(
     assert "后端 http://127.0.0.1:8036" in output
     assert "opscli app dev-status" in output
     assert not (tmp_path / ".opscli" / "dev.json").exists()
+
+
+def test_run_migration_uses_single_fastapi_port_without_template_hooks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    service = DevService()
+    _write_migration_project(tmp_path)
+    startup = service._load_migration_startup(tmp_path)
+    assert startup is not None
+    commands: list[tuple[list[str], Path]] = []
+    starts: list[tuple[list[str], Path, dict[str, str] | None]] = []
+    processes: list[object] = []
+
+    class FakeProcess:
+        def __init__(self, pid: int):
+            self.pid = pid
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(service, "_prepare_root", lambda path: tmp_path)
+    monkeypatch.setattr(service, "_load_migration_startup", lambda root: startup)
+    monkeypatch.setattr(service, "_ensure_no_active_state", lambda root: None)
+    monkeypatch.setattr(service, "_select_migration_port", lambda *args: 8036)
+    monkeypatch.setattr(service, "_find_tool", lambda name, message: f"C:/tools/{name}.exe")
+    monkeypatch.setattr(
+        service,
+        "_resolve_package_manager",
+        lambda frontend: {
+            "command": ["C:/tools/pnpm.cmd"],
+            "package_manager": "pnpm",
+            "package_manager_version": "10.15.0",
+            "package_manager_via": "direct",
+        },
+    )
+    monkeypatch.setattr(service, "_ensure_virtualenv", lambda root, uv: "C:/project/.venv/python.exe")
+    monkeypatch.setattr(
+        service,
+        "_run_command",
+        lambda args, cwd, *unused, **kwargs: commands.append((list(args), cwd)),
+    )
+
+    def start_process(args, cwd, env=None):
+        starts.append((list(args), cwd, env))
+        process = FakeProcess(1500 + len(processes))
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(service, "_start_process", start_process)
+    monkeypatch.setattr(service, "_wait_for_backend", lambda *args: None)
+    monkeypatch.setattr(service, "_wait_for_port", lambda *args: None)
+    monkeypatch.setattr(service, "_write_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        service,
+        "_wait_for_processes",
+        lambda processes: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(service, "_stop_processes", lambda processes: None)
+    monkeypatch.setattr(service, "_remove_state", lambda *args, **kwargs: None)
+
+    service.run(tmp_path)
+
+    assert commands[0][0] == [
+        "C:/tools/uv.exe",
+        "pip",
+        "install",
+        "--python",
+        "C:/project/.venv/python.exe",
+        "-r",
+        "requirements.txt",
+    ]
+    assert commands[1][0] == ["C:/tools/pnpm.cmd", "install", "--frozen-lockfile"]
+    assert commands[2][0] == ["C:/tools/pnpm.cmd", "run", "build"]
+    assert starts[0][0] == [
+        "C:/project/.venv/python.exe",
+        "-m",
+        "uvicorn",
+        "backend.app:app",
+        "--reload",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8036",
+    ]
+    assert starts[1] == (
+        ["C:/tools/pnpm.cmd", "run", "start"],
+        tmp_path / "frontend",
+        {"APP_DEV_BACKEND_PORT": "8036"},
+    )
+    output = capsys.readouterr().out
+    assert "前端 http://127.0.0.1:8036" in output
+    assert "后端 http://127.0.0.1:8036" in output
+
+
+def test_select_migration_port_rejects_two_different_explicit_ports() -> None:
+    with pytest.raises(AppProjectError, match="两个显式端口必须一致"):
+        DevService()._select_migration_port(8035, 5173)
 
 
 def test_run_stops_backend_when_frontend_process_cannot_start(

@@ -34,6 +34,7 @@ def test_app_exposes_expected_commands() -> None:
     assert set(migrate_command.commands) == {
         "start",
         "status",
+        "resume",
         "scan-startup",
         "verify",
         "convert-legacy",
@@ -107,6 +108,38 @@ def test_migrate_verify_returns_stable_error_envelope(monkeypatch) -> None:
     payload = _json_output(result.output)
     assert payload["error"]["code"] == "APP-MIGRATION-GATE"
     assert payload["error"]["detail"]["checks"]["source_unchanged"] is False
+
+
+def test_migrate_resume_forwards_target_and_id(monkeypatch) -> None:
+    captured = {}
+
+    class FakeMigrationService:
+        def resume(self, target, *, migration_id=None):
+            captured.update(target=target, migration_id=migration_id)
+            return {"migration_id": migration_id, "delivery_ready": True}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("opscli.app.commands.cli.MigrationService", FakeMigrationService)
+    result = CliRunner().invoke(
+        app,
+        [
+            "app",
+            "migrate",
+            "resume",
+            "--target",
+            "target",
+            "--migration-id",
+            "migration-demo",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert str(captured["target"]) == "target"
+    assert captured["migration_id"] == "migration-demo"
+    assert _json_output(result.output)["command"] == "app migrate resume"
 
 
 def test_ensure_git_check_is_read_only(monkeypatch) -> None:
