@@ -93,7 +93,7 @@ opscli app push [PATH] --message MESSAGE
   `ops_url/ops_system_url/apphub_url/app_template_repo/app_template_branch/polaris_system_url`；
 - 模板仓库完整地址使用 `[systems].app_template_repo` 或
   `OPSCLI_APP_TEMPLATE_REPO`，默认
-  `http://10.1.13.143:3000/aukeys-admin/template.git`；
+  `http://120.76.218.247:3000/ops-admin/template.git`；
 - 模板分支使用 `[systems].app_template_branch` 或
   `OPSCLI_APP_TEMPLATE_BRANCH`，默认 `main`；
 - 模板仓库地址不由 AppHub URL 推导，也不等于 AppHub 返回的站点 `repo_url`。

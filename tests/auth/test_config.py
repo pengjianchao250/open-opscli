@@ -62,7 +62,7 @@ def test_app_template_defaults(tmp_path, monkeypatch):
 
     assert (
         config.get_app_template_repo()
-        == "http://10.1.13.143:3000/aukeys-admin/template.git"
+        == "http://120.76.218.247:3000/ops-admin/template.git"
     )
     assert config.get_app_template_branch() == "master"
 

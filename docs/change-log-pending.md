@@ -9918,7 +9918,7 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 ## 2026-09-03 AppHub - 接入一站点一仓库与正式发布闭环
 
 **变更原因**：共享源码仓库无法满足“一站点一仓库”、独立权限、版本追踪和发布回滚要求；同时旧 `push` 只执行 Git 推送，没有形成 AppHub release 与 SSE 进度闭环。
-**改动点**：移除 `OPSCLI_APP_REPO_URL` 及固定共享仓库作为仓库事实源的逻辑；`POST /api/apphub/v1/apps` 创建或返回站点独立仓库，`GET /api/apphub/v1/apps/{slug}/git-config` 返回并刷新完整 `repo_url`；每个站点绑定独立的 `apps/{slug}` 和 `main`；`app push` 在普通 fast-forward Git push 成功后比较 release baseline，按需调用 AppHub release 并通过 SSE 跟踪进度；AppHub 服务根地址统一且仅使用 `OPSCLI_APPHUB_URL`；建站模板统一使用 `OPSCLI_APP_TEMPLATE_REPO` 与 `OPSCLI_APP_TEMPLATE_BRANCH`，当前地址为 `http://10.1.13.143:3000/aukeys-admin/template.git`、分支为 `main`。空项目按当前环境配置拉取模板，已有源码保留原模板元数据；模板 fetch 显式禁用 Git credential helper，避免复用站点仓库 token。预发布和生产当前暂定使用同一组 AppHub 与模板配置，正式域名确定后分别替换对应生产配置。
+**改动点**：移除 `OPSCLI_APP_REPO_URL` 及固定共享仓库作为仓库事实源的逻辑；`POST /api/apphub/v1/apps` 创建或返回站点独立仓库，`GET /api/apphub/v1/apps/{slug}/git-config` 返回并刷新完整 `repo_url`；每个站点绑定独立的 `apps/{slug}` 和 `main`；`app push` 在普通 fast-forward Git push 成功后比较 release baseline，按需调用 AppHub release 并通过 SSE 跟踪进度；AppHub 服务根地址统一且仅使用 `OPSCLI_APPHUB_URL`；建站模板统一使用 `OPSCLI_APP_TEMPLATE_REPO` 与 `OPSCLI_APP_TEMPLATE_BRANCH`，当前地址为 `http://120.76.218.247:3000/ops-admin/template.git`、分支为 `main`。空项目按当前环境配置拉取模板，已有源码保留原模板元数据；模板 fetch 显式禁用 Git credential helper，避免复用站点仓库 token。预发布和生产当前暂定使用同一组 AppHub 与模板配置，正式域名确定后分别替换对应生产配置。
 **验证结果**：`python -m pytest tests/auth/test_config.py tests/app -q -p no:cacheprovider` 通过，`34 passed`；`python -m compileall -q opscli/app opscli/auth/config.py` 通过；AppYaml、binding v1 到 v2 迁移、独立 `repo_url`、模板配置优先级、空项目模板刷新、已有源码模板元数据保留、匿名模板 fetch、Git 凭据、origin/main 初始化、non-fast-forward 阻断、NOOP、release 与 SSE 续订均有专项覆盖。
 **影响范围**：影响 `opscli app create/init/push`、AppHub 与模板地址配置、站点本地 binding 和 Git origin；不增加新的用户命令，不增加同义环境变量，不在 opscli 中保存 Gitea 管理凭据。
 **回滚方式**：回退 AppHub 客户端、模板统一配置、binding v2、Git 凭据与发布编排相关改动；已经绑定到独立仓库的站点不得自动回退到共享仓库，需由管理员逐站点确认迁移策略。
@@ -10153,7 +10153,7 @@ cli.md 新增的 TopN 示例（`--limit 3 --order-by order_qty:desc`）与 SKILL
 
 **改动点**：`opscli app` 默认分支改为 `master`，Git 初始化、远端探测、fetch、upstream、fast-forward 校验和 push 改为按 binding 的 `default_branch` 执行；binding 从 AppHub 响应刷新 `default_branch`，缺失时默认 `master`，初始化返回字段改为通用的 `remote_branch*`。模板配置和安全 clone 脚本默认分支同步改为 `master`；`ops-app-build-spec` 明确模板与业务仓库均使用 `master`，版本升至 `v0.0.12`；`ops-app-data-builder` 增加本地 `master`、业务 `origin` 和 `origin/master` 门禁，版本升至 `v0.1.7`。新增决策文档并在旧设计文档顶部标记原 `main` 约定已被替代。
 
-**兼容边界**：只处理新应用，不增加旧应用分支迁移；模板仓库 clone URL 仍为 `http://10.1.13.143:3000/aukeys-admin/template.git`，`/template/master` 仅是 Gitea 页面路径；不修改参考脚本 `bind-apphub-git.py`。
+**兼容边界**：只处理新应用，不增加旧应用分支迁移；模板仓库 clone URL 仍为 `http://120.76.218.247:3000/ops-admin/template.git`，`/template/master` 仅是 Gitea 页面路径；不修改参考脚本 `bind-apphub-git.py`。
 
 **验证结果**：`tests/app tests/auth/test_config.py` 通过，`54 passed`；build-spec 版本/模板/master 部署契约/安装、模板 clone 和 data-builder 定向测试通过，`18 passed`。完整 build-spec 契约文件另有 4 条与本次分支修改无关的既有文档断言失败，本次未扩展处理。
 
