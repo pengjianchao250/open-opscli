@@ -15,7 +15,7 @@ from opscli.app.domain.exceptions import AppError
 from opscli.app.services.git_environment import GitEnvironmentService
 
 
-DEFAULT_TEMPLATE_REPO = 'http://10.1.13.143:3000/aukeys-admin/template'
+DEFAULT_TEMPLATE_REPO = 'http://120.76.218.247:3000/ops-admin/template'
 DEFAULT_TEMPLATE_BRANCH = 'master'
 
 
