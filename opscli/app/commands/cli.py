@@ -255,7 +255,7 @@ def ensure_git(
 def clone_template(
     path: Path = typer.Argument(..., help="不存在或为空的目标项目目录"),
     repo_url: str = typer.Option(
-        "http://10.1.13.143:3000/aukeys-admin/template",
+        "http://120.76.218.247:3000/ops-admin/template",
         "--repo-url",
         help="统一模板仓库地址",
     ),

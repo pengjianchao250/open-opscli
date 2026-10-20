@@ -139,7 +139,7 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     skill = _read("SKILL.md")
 
     for required in (
-        "http://10.1.13.143:3000/aukeys-admin/template",
+        "http://120.76.218.247:3000/ops-admin/template",
         "分支：`master`",
         'opscli app clone-template "<project-directory>" --json',
         "成功后立即删除项目根目录 `.git` 并验证其不存在",
