@@ -1,4 +1,4 @@
-"""本地看板开发预览的环境准备与双进程编排。"""
+"""本地看板开发预览的模板环境准备与迁移服务编排。"""
 
 from __future__ import annotations
 
@@ -27,11 +27,12 @@ PORT_SCAN_ATTEMPTS = 100
 STARTUP_TIMEOUT_SECONDS = 60.0
 ENV_KEY_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 DEV_STATE_SCHEMA_VERSION = 1
+SINGLE_DEV_STATE_SCHEMA_VERSION = 2
 DEV_STATE_RELATIVE_PATH = Path(".opscli") / "dev.json"
 
 
 class DevService:
-    """准备模板项目并启动本地后端 reload 与前端热更新服务。"""
+    """准备模板或迁移项目并监督本地开发预览服务。"""
 
     def run(
         self,
@@ -163,7 +164,9 @@ class DevService:
                 "status": "invalid",
                 "message": "本地开发状态文件无法读取；不得把现有端口响应认定为当前项目。",
             }
-        if not isinstance(state, dict) or state.get("schema_version") != DEV_STATE_SCHEMA_VERSION:
+        if not isinstance(state, dict) or state.get("schema_version") not in (
+            DEV_STATE_SCHEMA_VERSION, SINGLE_DEV_STATE_SCHEMA_VERSION
+        ):
             return {
                 **base,
                 "status": "invalid",
@@ -177,6 +180,9 @@ class DevService:
                 "status": "identity_mismatch",
                 "message": "状态文件中的项目身份与当前目录不一致；不得使用其中的端口。",
             }
+
+        if state["schema_version"] == SINGLE_DEV_STATE_SCHEMA_VERSION:
+            return self._single_status(base, state)
 
         integer_fields = ("supervisor_pid", "backend_pid", "frontend_pid", "backend_port", "frontend_port")
         if any(not self._is_positive_integer(state.get(field)) for field in integer_fields):
@@ -228,6 +234,41 @@ class DevService:
             "message": message,
         }
 
+    def _single_status(self, base: dict[str, object], state: dict[str, object]) -> dict[str, object]:
+        """校验单服务状态，不把监听相同端口的其他进程认领为当前项目。"""
+
+        if state.get("launch_mode") != "single" or any(
+            not self._is_positive_integer(state.get(field))
+            for field in ("supervisor_pid", "app_pid", "app_port")
+        ) or int(state["app_port"]) > 65535:
+            return {**base, "status": "invalid", "message": "单服务开发状态缺少有效进程或端口信息。"}
+        supervisor_running = self._is_process_running(int(state["supervisor_pid"]))
+        app_running = self._is_process_running(int(state["app_pid"]))
+        app_ready = self._is_port_open(int(state["app_port"]))
+        active = supervisor_running and app_running
+        running = active and app_ready
+        url = f'http://127.0.0.1:{state["app_port"]}'
+        return {
+            **base,
+            **state,
+            "status": "running" if running else "starting" if active else "stale",
+            "running": running,
+            "active": active,
+            "identity_verified": running,
+            "ports_reused": not active and app_ready,
+            "supervisor_running": supervisor_running,
+            "app_running": app_running,
+            "app_ready": app_ready,
+            "app_url": url,
+            "frontend_url": url,
+            "backend_url": None,
+            "message": (
+                "单服务开发预览正在运行，项目身份已通过状态文件、进程和端口联合校验。"
+                if running else "单服务开发进程仍在运行，端口尚未就绪。"
+                if active else "记录中的开发进程已退出；即使原端口仍有响应，也不得视为当前项目。"
+            ),
+        }
+
     def _prepare_root(self, path: str | Path) -> Path:
         root = Path(path).expanduser().resolve()
         if not root.is_dir():
@@ -273,8 +314,25 @@ class DevService:
                 fix_hint=f'请先执行 opscli app migrate verify --target "{root}" --json。',
             )
 
+        frontend = startup.get("frontend")
+        node_only = (
+            startup.get("backend") is None
+            and isinstance(frontend, dict)
+            and frontend.get("kind") == "node_web"
+        )
+        if startup.get("backend") is None and not node_only:
+            raise self._node_startup_error(root, "迁移项目缺少当前支持的本地开发入口。")
+        if node_only and frontend.get("script") != "dev":
+            candidates = frontend.get("candidate_scripts", [])
+            frontend = next(
+                (item for item in candidates if isinstance(item, dict) and item.get("script") == "dev"),
+                None,
+            ) if isinstance(candidates, list) else None
+            if frontend is None:
+                raise self._node_startup_error(root, "迁移清单缺少明确的 Node dev 开发入口。")
+            startup["frontend"] = frontend
         commands: dict[str, dict[str, object]] = {}
-        for name in ("backend", "frontend"):
+        for name in (("frontend",) if node_only else ("backend", "frontend")):
             item = startup.get(name)
             if not isinstance(item, dict):
                 raise AppProjectError("APP-DEV-MIGRATION", f"迁移启动清单缺少 {name} 命令。")
@@ -313,8 +371,11 @@ class DevService:
         backend_port: int | None,
         frontend_port: int | None,
     ) -> None:
-        """使用迁移清单启动单端口 FastAPI 应用和前端文件监听器。"""
+        """按迁移入口启动 Node 单服务或既有 FastAPI 开发流程。"""
 
+        if "backend" not in startup:
+            self._run_migration_node(root, startup["frontend"], backend_port, frontend_port)
+            return
         self._ensure_no_active_state(root)
         app_port = self._select_migration_port(backend_port, frontend_port)
         self._find_tool("node", "未检测到 Node.js，请按 frontend/package.json 安装后重试。")
@@ -386,6 +447,132 @@ class DevService:
                 self._stop_processes(processes)
             finally:
                 self._remove_state(root, supervisor_pid=os.getpid())
+
+    def _node_startup_error(self, root: Path, message: str) -> AppProjectError:
+        """为不支持或已漂移的 Node 入口提供重新扫描指引。"""
+
+        return AppProjectError(
+            "APP-DEV-MIGRATION", message,
+            fix_hint=f'请核对本地开发入口并执行 opscli app migrate scan-startup --target "{root}" --json 后重试。',
+        )
+
+    def _run_migration_node(
+        self, root: Path, item: dict[str, object],
+        backend_port: int | None, frontend_port: int | None,
+    ) -> None:
+        """复用迁移项目原有 Node 开发脚本，仅监督一个 Web 服务。"""
+
+        self._ensure_no_active_state(root)
+        self._validate_node_ports(backend_port, frontend_port)
+        port = frontend_port if frontend_port is not None else backend_port
+        if port is None:
+            port = self._find_available_port(DEFAULT_FRONTEND_PORT, set())
+        else:
+            self._check_port(port)
+        command, cwd = self._prepare_migration_node(root, item, port)
+        processes: list[subprocess.Popen] = []
+        try:
+            process = self._start_process(command, cwd)
+            processes.append(process)
+            self._wait_for_port(process, port)
+            self._write_single_state(root, app_port=port, app_pid=process.pid)
+            print(f"本地开发预览已启动：单服务 http://127.0.0.1:{port}")
+            print(f'项目身份校验：opscli app dev-status "{root}" --json')
+            self._wait_for_processes(processes)
+        except KeyboardInterrupt:
+            print("\n正在停止本地开发预览。")
+        finally:
+            try:
+                self._stop_processes(processes)
+            finally:
+                self._remove_state(root, supervisor_pid=os.getpid())
+
+    def _validate_node_ports(self, backend_port: int | None, frontend_port: int | None) -> None:
+        """单服务允许两个端口参数作为别名，但同时指定时必须一致。"""
+
+        for port in (backend_port, frontend_port):
+            if port is not None and not 1 <= port <= 65535:
+                raise AppProjectError("APP-DEV-ARGUMENT", "单服务端口必须在 1~65535 之间。")
+        if backend_port is not None and frontend_port is not None and backend_port != frontend_port:
+            raise AppProjectError("APP-DEV-ARGUMENT", "Node 单服务的两个显式端口必须一致。")
+
+    def _prepare_migration_node(
+        self, root: Path, item: dict[str, object], port: int,
+    ) -> tuple[list[str], Path]:
+        """确认开发脚本及框架参数，复用依赖并构造本地启动命令。"""
+
+        cwd = (root / str(item["cwd"])).resolve()
+        package = self._read_json_object(cwd / "package.json", "Node package.json")
+        scripts = package.get("scripts")
+        script = scripts.get("dev") if isinstance(scripts, dict) else None
+        if item.get("script") != "dev" or not isinstance(script, str) or script != item.get("script_command"):
+            raise self._node_startup_error(root, "Node 开发脚本与迁移扫描记录不一致。")
+        scanned_command = list(item["command"])
+        manager = scanned_command[0]
+        expected = [manager, "dev"] if manager == "yarn" else [manager, "run", "dev"]
+        if manager not in {"pnpm", "npm", "yarn"} or scanned_command != expected:
+            raise self._node_startup_error(root, "Node 开发命令包含无法自动适配的参数。")
+        dependencies = {}
+        for key in ("dependencies", "devDependencies"):
+            values = package.get(key, {})
+            if not isinstance(values, dict):
+                raise self._node_startup_error(root, "Node 依赖声明格式无效。")
+            dependencies.update(values)
+        framework = next(
+            (name for name in ("vinext", "next", "vite") if name in dependencies and name in script), None
+        )
+        if framework is None or re.search(r"[;&|]", script):
+            raise self._node_startup_error(root, "无法确认支持端口透传的 Node 单服务开发入口。")
+        self._find_tool("node", "未检测到 Node.js，请按迁移项目 package.json 安装后重试。")
+        manager_command = self._migration_node_manager(root, cwd, manager, package.get("packageManager"))
+        if not (cwd / "node_modules").is_dir():
+            lock = {"pnpm": "pnpm-lock.yaml", "npm": "package-lock.json", "yarn": "yarn.lock"}[manager]
+            if not (cwd / lock).is_file():
+                raise self._node_startup_error(root, f"Node 依赖未安装且缺少 {lock}，请先核对依赖环境。")
+            if manager == "npm":
+                install_args = ["ci"]
+            else:
+                declaration = str(package.get("packageManager", ""))
+                modern_yarn = manager == "yarn" and re.match(r"yarn@(?:[2-9]|[1-9]\d)\.", declaration)
+                install_args = ["install", "--immutable" if modern_yarn else "--frozen-lockfile"]
+            self._run_command(
+                [*manager_command, *install_args], cwd, "迁移 Node 依赖安装失败。",
+                stage="migration_node_install",
+            )
+        args = ["dev"] if manager == "yarn" else ["run", "dev"]
+        if manager == "npm":
+            args.append("--")
+        args.extend(["--host" if framework == "vite" else "--hostname", "127.0.0.1", "--port", str(port)])
+        if framework == "vite":
+            args.append("--strictPort")
+        return [*manager_command, *args], cwd
+
+    def _migration_node_manager(
+        self, root: Path, cwd: Path, manager: str, declaration: object,
+    ) -> list[str]:
+        """保留扫描所得包管理器，并在项目声明版本时遵守该版本。"""
+
+        version = None
+        if declaration is not None:
+            match = re.fullmatch(r"(pnpm|npm|yarn)@(\d+\.\d+\.\d+)(?:\+[^\s]+)?", str(declaration))
+            if match is None or match[1] != manager:
+                raise self._node_startup_error(root, "packageManager 与迁移开发命令不一致或版本声明无效。")
+            version = match[2]
+            corepack = shutil.which("corepack") if manager != "npm" else None
+            if corepack:
+                return [corepack, manager]
+        executable = self._find_tool(manager, f"未检测到迁移项目使用的 {manager}，请安装后重试。")
+        if version:
+            try:
+                result = subprocess.run(
+                    [executable, "--version"], cwd=cwd, check=False, capture_output=True,
+                    text=True, encoding="utf-8", errors="replace", timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise AppProjectError("APP-DEV-TOOL", f"无法检测 {manager} 版本。") from exc
+            if result.returncode != 0 or result.stdout.strip() != version:
+                raise AppProjectError("APP-DEV-PACKAGE-MANAGER", f"请安装项目声明的 {manager}@{version} 后重试。")
+        return [executable]
 
     def _select_migration_port(
         self,
@@ -696,8 +883,6 @@ class DevService:
         backend_pid: int,
         frontend_pid: int,
     ) -> None:
-        state_path = self._state_path(root)
-        state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": DEV_STATE_SCHEMA_VERSION,
             "project_root": str(root),
@@ -708,6 +893,26 @@ class DevService:
             "frontend_port": frontend_port,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
+        self._save_state(root, payload)
+
+    def _write_single_state(self, root: Path, *, app_port: int, app_pid: int) -> None:
+        """记录真实单服务进程，避免伪造前后端双进程状态。"""
+
+        self._save_state(root, {
+            "schema_version": SINGLE_DEV_STATE_SCHEMA_VERSION,
+            "launch_mode": "single",
+            "project_root": str(root),
+            "supervisor_pid": os.getpid(),
+            "app_pid": app_pid,
+            "app_port": app_port,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _save_state(self, root: Path, payload: dict[str, object]) -> None:
+        """原子保存开发状态，兼容双进程与单服务记录。"""
+
+        state_path = self._state_path(root)
+        state_path.parent.mkdir(parents=True, exist_ok=True)
         temporary_path = state_path.with_name(f".{state_path.name}.{os.getpid()}.tmp")
         try:
             temporary_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
