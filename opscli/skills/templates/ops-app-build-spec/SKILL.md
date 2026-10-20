@@ -143,8 +143,10 @@ Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功�
 ## 本地开发预览
 
 - 用户明确提出“本地启动当前项目”“本地预览”“启动开发环境”或“边改边看”等请求时，视为已授权启动本地服务，统一调用 `opscli app dev <project-root>`。
-- 不得绕过 `opscli app dev` 直接调用 `uvicorn`、`npm run dev` 或 `pnpm dev`；该命令负责生成和校验 `.env`、准备依赖、启动后端 reload 与前端 Vite 热更新，并在失败时阻止服务继续启动。
+- 不得绕过 `opscli app dev` 直接调用 `uvicorn`、`npm run dev` 或 `pnpm dev`；模板项目由该命令生成和校验 `.env`、准备依赖、启动后端 reload 与前端 Vite 热更新，并在失败时阻止服务继续启动。
+- 源码复制迁移项目按迁移清单分流：已有 FastAPI 迁移流程保持不变；无 backend 的 Node 单服务项目复用已记录的 dev 脚本、包管理器和工作目录，不要求补造 backend/frontend、拉取模板或创建 Python 环境。已有 node_modules 时不重装，不执行生产 build；不支持或已漂移的入口按错误提示重新扫描，不擅自改写清单或业务源码。
 - 默认启动由命令从后端 `8035`、前端 `5173` 起自动选择空闲端口；不得为释放默认端口而停止、重启或干扰其他项目，也不得在命令正常工作时手动猜测端口。用户显式指定端口时遵循命令的严格校验结果。
+- Node 单服务默认从 `5173` 起选择空闲端口，只报告一个实际访问地址；`--frontend-port` 和 `--backend-port` 是该服务端口的别名，同时指定时必须一致。单服务状态使用 schema 2，`frontend_url` 与 `app_url` 相同、`backend_url=null`；模板及已有 FastAPI 迁移状态继续兼容 schema 1。
 - 启动成功后向用户报告命令实际输出的前后端 URL，不得仍按默认端口回复。
 - 启动器输出 URL 后，必须另行执行 `opscli app dev-status <project-root> --json` 验证归属；只有 `success=true`、`running=true`、`identity_verified=true` 且 `project_root` 与当前项目解析后的绝对路径一致时，才能报告“当前项目正在运行”。
 - 单独请求健康检查得到 HTTP 200、发现端口可连接、看到浏览器已有页面或复用旧标签页，都不能证明服务属于当前项目；不得据此把其他项目或后来复用同一端口的进程认领为当前项目。
