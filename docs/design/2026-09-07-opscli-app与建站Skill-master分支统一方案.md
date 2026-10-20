@@ -12,7 +12,7 @@ AppHub 后端自动部署从应用源码仓库的 `master` 分支取代码。此
 
 新应用建站链路统一使用 `master`：
 
-1. 统一模板仓库继续使用 `http://10.1.13.143:3000/aukeys-admin/template.git` 作为 clone URL，模板分支改为 `master`。
+1. 统一模板仓库继续使用 `http://120.76.218.247:3000/ops-admin/template.git` 作为 clone URL，模板分支改为 `master`。
 2. AppHub 新应用源码仓库默认分支为 `master`。
 3. `opscli app init` 将本地分支规范为 binding 中的 `default_branch`；新应用缺省值为 `master`。
 4. `opscli app push` 普通推送 `HEAD:master`，并以 `origin/master` 做远端状态和 fast-forward 校验。
