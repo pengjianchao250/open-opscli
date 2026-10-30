@@ -16,7 +16,9 @@ from opscli.app.services.template import TemplateService
 
 app = typer.Typer(help="管理 AppHub 应用、Git 仓库、本地开发预览和源码推送")
 migrate_app = typer.Typer(help="管理源码复制迁移项目")
+deployment_app = typer.Typer(help="查询指定提交的自动发布结果")
 app.add_typer(migrate_app, name="migrate")
+app.add_typer(deployment_app, name="deployment")
 
 
 def _emit(payload: dict, *, json_output: bool) -> None:
@@ -25,6 +27,33 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         return
     if payload.get("success"):
         data = payload.get("data") or {}
+        deployment = data.get("deployment") if isinstance(data.get("deployment"), dict) else None
+        if deployment is None and payload.get("command") == "app deployment wait":
+            deployment = data
+        if deployment:
+            status = deployment.get("status")
+            if status == "healthy" and deployment.get("is_current_release") and deployment.get("entry_url"):
+                typer.echo(f"构建发布成功：{deployment['entry_url']}")
+            elif status == "failed":
+                typer.echo(f"构建发布失败 [{deployment.get('error_code') or 'UNKNOWN'}]：{deployment.get('error_summary') or '请查看失败附件。'}")
+                build_log = deployment.get("build_log_attachment") or {}
+                if build_log.get("path"):
+                    typer.echo(f"完整构建日志：{build_log['path']}")
+                elif deployment.get("logs_unavailable"):
+                    typer.echo("完整构建日志暂不可用。")
+                elif not deployment.get("deployment_id"):
+                    typer.echo("失败发生在部署前，未生成构建日志。")
+                diagnosis = deployment.get("diagnosis_attachment") or {}
+                if diagnosis.get("path"):
+                    typer.echo(f"发布诊断：{diagnosis['path']}")
+                elif deployment.get("diagnosis_unavailable"):
+                    typer.echo("发布诊断暂不可用。")
+            elif status == "unknown_timeout":
+                typer.echo("本轮等待超时，发布结果尚未确认。可登录运营系统 → 应用 → 我的应用管理查看，或按本次 SHA 继续等待。")
+                typer.echo(f"opscli app deployment wait \"{deployment.get('path') or data.get('path') or '.'}\" --commit {deployment.get('commit_sha')} --json")
+            else:
+                typer.echo(f"发布状态：{status}；提交 SHA：{deployment.get('commit_sha')}")
+            return
         if data.get("message"):
             typer.echo(data["message"])
         if data.get("credential_refreshed"):
@@ -349,11 +378,31 @@ def dev_status(
 def push(
     path: Path = typer.Argument(Path("."), help="应用源码目录"),
     message: str = typer.Option(..., "--message", "-m", help="Git 提交说明"),
+    wait: bool = typer.Option(False, "--wait", help="等待本次提交的自动发布结果"),
+    timeout: int = typer.Option(1200, "--timeout", min=1, max=3600, help="等待上限，单位秒"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
-    """提交并推送源码到应用绑定的远端默认分支，不创建 AppHub release。"""
+    """推送源码；--wait 按本次提交等待自动发布。"""
     _run(
         "app push",
-        lambda manager: manager.push(path, message=message),
+        lambda manager: (
+            manager.push(path, message=message, wait=True, timeout=timeout)
+            if wait else manager.push(path, message=message)
+        ),
+        json_output=json_output,
+    )
+
+
+@deployment_app.command("wait")
+def deployment_wait(
+    path: Path = typer.Argument(Path("."), help="已绑定的应用源码目录"),
+    commit: str = typer.Option(..., "--commit", help="本次推送的完整 40 位提交 SHA"),
+    timeout: int = typer.Option(1200, "--timeout", min=1, max=3600, help="等待上限，单位秒"),
+    json_output: bool = typer.Option(False, "--json", help="输出单个最终 JSON"),
+) -> None:
+    """继续等待指定提交的发布结果，不再次推送代码。"""
+    _run(
+        "app deployment wait",
+        lambda manager: manager.wait_deployment(path, commit_sha=commit, timeout=timeout),
         json_output=json_output,
     )

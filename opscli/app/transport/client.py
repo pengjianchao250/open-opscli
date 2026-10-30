@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -15,6 +17,10 @@ from opscli.app.domain.models import validate_app_id
 from opscli.auth import AuthClient
 from opscli.auth.config import get_apphub_url
 from opscli.config import __version__
+
+
+_DIAG_MAX_SECONDS = 30.0
+_DIAG_READ_TIMEOUT_SECONDS = 10.0
 
 
 class AppHubClient:
@@ -58,6 +64,86 @@ class AppHubClient:
     def get_app(self, app_id: str) -> dict[str, Any]:
         """按大小写敏感的公开 ID 获取唯一应用。"""
         return self._request_json("GET", f"/apps/{_segment(validate_app_id(app_id))}")
+
+    def get_deployment_by_commit(self, app_id: str, commit_sha: str) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{40}", commit_sha):
+            raise AppHubHttpError("APP-COMMIT-INVALID", "提交 SHA 必须是 40 位小写十六进制。")
+        return self._request_json(
+            "GET", f"/apps/{_segment(validate_app_id(app_id))}/deployments/by-commit/{commit_sha}"
+        )
+
+    def get_complete_build_log(self, app_id: str, deployment_id: str) -> dict[str, Any]:
+        return self._request_json(
+            "GET",
+            f"/apps/{_segment(validate_app_id(app_id))}/deployments/{_segment(deployment_id)}/logs/complete",
+        )
+
+    def get_release_diagnosis(self, app_id: str, release_id: int) -> list[dict[str, Any]]:
+        """Replay every user-visible event of one release through its existing SSE endpoint."""
+        if isinstance(release_id, bool) or not isinstance(release_id, int) or release_id <= 0:
+            raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断缺少有效的 release ID。")
+        request = self.http.build_request(
+            "GET",
+            self._url(f"/apps/{_segment(validate_app_id(app_id))}/releases/{release_id}/events?since_seq=0"),
+            headers=self._headers(accept="text/event-stream"),
+            timeout=_DIAG_READ_TIMEOUT_SECONDS,
+        )
+        request.headers.pop("Cookie", None)
+        response = None
+        try:
+            response = self.http.send(request, stream=True)
+            if response.status_code >= 400:
+                response.read()
+                self._raise_for_status(response)
+            if "text/event-stream" not in response.headers.get("Content-Type", "").lower():
+                raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断响应不是事件流。")
+            if response.headers.get("X-Apphub-Release-Id") != str(release_id):
+                raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断返回的 release ID 不匹配。")
+
+            events: list[dict[str, Any]] = []
+            data_lines: list[str] = []
+            event_type = ""
+            last_seq = 0
+            started = time.monotonic()
+            for line in response.iter_lines():
+                if time.monotonic() - started > _DIAG_MAX_SECONDS:
+                    raise AppHubHttpError("UPSTREAM_ERROR", "读取发布诊断超时。")
+                if len(line) > 1_048_576:
+                    raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断事件行过大。")
+                if line.startswith(":"):
+                    continue
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                    continue
+                if line.startswith("data:"):
+                    value = line[5:]
+                    data_lines.append(value[1:] if value.startswith(" ") else value)
+                    continue
+                if line:
+                    continue
+                if event_type == "done":
+                    return events
+                if data_lines:
+                    try:
+                        frame = json.loads("\n".join(data_lines))
+                    except ValueError as exc:
+                        raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断事件数据格式无效。") from exc
+                    if not isinstance(frame, dict):
+                        raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断事件必须是对象。")
+                    seq = frame.get("seq")
+                    if isinstance(seq, bool) or not isinstance(seq, int) or seq <= last_seq:
+                        raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断事件序号无效。")
+                    last_seq = seq
+                    if frame.get("level") != "hidden":
+                        events.append(frame)
+                data_lines = []
+                event_type = ""
+            raise AppHubHttpError("APPHUB-PROTOCOL", "发布诊断事件流未正常结束。")
+        except httpx.HTTPError as exc:
+            raise AppHubHttpError("UPSTREAM_ERROR", "读取发布诊断失败。") from exc
+        finally:
+            if response is not None:
+                response.close()
 
     def list_accessible_apps(self) -> dict[str, Any]:
         return self._request_json("GET", "/accessible-apps")

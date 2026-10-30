@@ -1,6 +1,6 @@
 # 源码提交与交付规范
 
-`opscli app` 负责创建应用、初始化 Git 和推送源码；线上构建、发布、健康检查和回滚由 AppHub 处理。本文件只维护交付检查，具体构建方式、依赖版本和存储配置以项目 `docs/apphub-contract.md` 及实际发布文件为准。
+`opscli app` 负责创建应用、初始化 Git、推送源码及按本次提交查询发布结果；线上构建、发布、健康检查和回滚由 AppHub 处理。本文件维护交付检查，具体构建方式、依赖版本和存储配置以项目 `docs/apphub-contract.md` 及实际发布文件为准。
 
 执行仓库初始化、状态核对、提交或推送前，必须先通过 [Git 本地环境规范](git-environment-standard.md) 门禁；Git 未就绪时不得创建或修改 binding、提交记录和远端状态。
 
@@ -46,7 +46,7 @@
 
 首次绑定目标 `origin` 前必须取得 `GET /api/v1/apps/{app_id}/git-bind-preflight` 的 `{"repository_empty": true}` 成功证据；远端非空由平台返回 409。正常后续 push 不重复执行空仓库预检。Git 凭据探测成功时直接复用；明确属于认证失败时由 `app init` 或 `app push` 自动首次签发或轮换，网络、仓库状态和历史冲突等非认证错误不得触发凭据刷新。
 
-`opscli app push "<project-directory>" --message "<summary>"` 会整体暂存、提交并普通推送 `HEAD:master`，不执行强制推送。`--message` 必填，用于存在修改时创建 commit。
+`opscli app push "<project-directory>" --message "<summary>" --wait --json` 会整体暂存、提交并普通推送 `HEAD:master`，然后按本次完整 SHA 等待自动发布；不执行强制推送。`--message` 必填，用于存在修改时创建 commit。
 
 推送前展示：
 
@@ -60,13 +60,16 @@
 
 推送结果提示遵循以下合同：
 
-- 返回 `pushed=true` 时，Codex 最终回复原样使用：“推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。”
-- 上述提示中的部署与发布是运营系统接手后的异步流程，不是当前部署或发布成功的状态证据。
+- 返回 `pushed=true` 后，先提示正在等待本次提交的发布结果。每 15 秒查询一次，同阶段查询不逐条刷屏。
+- `deployment.status=healthy` 且 `is_current_release=true` 时，只返回 `[完整运营入口 URL](完整运营入口 URL)`，链接文字和目标相同，不放入代码块。
+- `deployment.status=failed` 时，返回错误码、简短摘要、SHA，以及指向实际存在的完整 UTF-8 `.log` 文件的 `[查看完整构建日志](<绝对路径>)`。无 deployment 或日志不可用时不伪造附件。
+- `unknown_timeout` 不代表构建失败；提示登录运营系统“应用 → 我的应用管理”查看，或执行 `opscli app deployment wait <project-root> --commit <sha> --json` 重新等待最多 20 分钟。
+- `query_error`、`superseded` 和 `healthy_not_current` 只报告本次提交的事实与 SHA；不把旧版本仍可访问当成本次成功。
 - 返回 `pushed=false` 时，说明远端 `master` 已是最新源码，应说明无需重复推送，不使用成功提示。
 
 ## 职责结束边界
 
-- push 成功只表示源码到达远端 `master`，不创建 release、不查询版本、不消费发布事件。
+- push 成功只表示源码到达远端 `master`；`--wait` 查询本次 SHA 的发布结果，不创建第二条 release。
 - `opscli app` 不提供 release 命令；Skill 不绕过 push 另行创建 AppHub release。
 - 没有线上平台状态或运行证据时，不得报告“已发布”或“部署成功”；本地构建、镜像或 Compose 验证不能代替平台验收。
-- `opscli` CLI 或相关 MCP 工具失败后，立即按 `ops-feedback` 规范提交结构化反馈并返回 `feedback_uuid`；认证未授权、用户取消和五分钟内已反馈的同一错误除外。
+- `opscli` CLI 或相关 MCP 工具的同一报错指纹在本会话出现第 3 次时，按 `ops-feedback` 规范提交结构化反馈并返回 `feedback_uuid`；预期认证状态、用户取消和已反馈的重复错误除外。

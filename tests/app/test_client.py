@@ -28,6 +28,72 @@ class FakeAuth:
         return {"data": {"id": "42"}}
 
 
+def test_commit_status_and_complete_log_use_member_bearer_paths() -> None:
+    paths = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(str(request.url.path))
+        assert request.headers["Authorization"] == "Bearer ops-jwt"
+        assert "cookie" not in request.headers
+        if "by-commit" in request.url.path:
+            return httpx.Response(200, json={"app_id": "Ab123", "commit_sha": "a" * 40, "status": "failed"})
+        return httpx.Response(200, json={"app_id": "Ab123", "deployment_id": "dep-1", "release_id": 1, "text": "all lines", "redacted": False})
+
+    client = AppHubClient(
+        base_url="https://apphub.example", auth_client=FakeAuth(["ops-jwt", "ops-jwt"]),
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    assert client.get_deployment_by_commit("Ab123", "a" * 40)["status"] == "failed"
+    assert client.get_complete_build_log("Ab123", "dep-1")["text"] == "all lines"
+    assert paths == [
+        "/api/v1/apps/Ab123/deployments/by-commit/" + "a" * 40,
+        "/api/v1/apps/Ab123/deployments/dep-1/logs/complete",
+    ]
+
+
+def test_release_diagnosis_replays_visible_events_until_done() -> None:
+    auth = FakeAuth()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/apps/Ab123/releases/7/events"
+        assert request.url.params["since_seq"] == "0"
+        assert request.headers["Authorization"] == "Bearer ops-jwt"
+        assert request.headers["Accept"] == "text/event-stream"
+        assert "cookie" not in request.headers
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream", "X-Apphub-Release-Id": "7"},
+            text=(
+                'data: {"seq":1,"level":"info","message":"started"}\n\n'
+                ': ping\n\n'
+                'data: {"seq":2,"level":"hidden","message":"internal"}\n\n'
+                'data: {"seq":3,"level":"error","status":"failed","message":"build failed"}\n\n'
+                'event: done\ndata: {}\n\n'
+            ),
+        )
+
+    client = AppHubClient(
+        base_url="https://apphub.example", auth_client=auth,
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+    events = client.get_release_diagnosis("Ab123", 7)
+    assert [event["seq"] for event in events] == [1, 3]
+    assert events[-1]["status"] == "failed"
+
+
+def test_release_diagnosis_rejects_incomplete_stream() -> None:
+    client = AppHubClient(
+        base_url="https://apphub.example", auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream", "X-Apphub-Release-Id": "7"},
+            text='data: {"seq":1,"level":"info","message":"started"}\n\n',
+        ))),
+    )
+    with pytest.raises(AppHubHttpError, match="未正常结束"):
+        client.get_release_diagnosis("Ab123", 7)
+
+
 def test_client_uses_current_apphub_api_prefix(monkeypatch) -> None:
     monkeypatch.setattr(
         "opscli.app.transport.client.get_apphub_url",
