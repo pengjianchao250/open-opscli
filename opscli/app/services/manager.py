@@ -24,6 +24,7 @@ from opscli.app.domain.models import (
 from opscli.app.services.binding import BindingStore
 from opscli.app.services.gitcred import GitCredentialStore
 from opscli.app.services.gitops import GitService
+from opscli.app.services.deployment_wait import wait_for_deployment
 from opscli.app.services.manifest import AppManifestStore
 from opscli.app.services.migration_contract import (
     inspect_migration_frontend_build,
@@ -138,7 +139,10 @@ class AppManager:
             "git_environment": git_environment,
         }
 
-    def push(self, path: str | Path = ".", *, message: str) -> dict:
+    def push(
+        self, path: str | Path = ".", *, message: str,
+        wait: bool = False, timeout: float = 1200.0,
+    ) -> dict:
         summary = self._validate_message(message, command="push")
         git_environment = self._ensure_git_environment()
         root = self.binding_store.prepare_root(path)
@@ -162,7 +166,7 @@ class AppManager:
             if git_result.get("pushed")
             else f"远端 {binding.default_branch} 已是最新源码，无需重复推送。"
         )
-        return {
+        result = {
             **self._binding_result(root, binding, ""),
             **credential_result,
             **git_init_result,
@@ -171,6 +175,34 @@ class AppManager:
             "git_environment": git_environment,
             "message": message_text,
         }
+        if wait and git_result.get("pushed"):
+            sha = str(git_result.get("commit_sha") or "")
+            remote_sha = str(git_result.get("remote_commit_sha") or "")
+            result["deployment"] = (
+                {"status": "superseded", "app_id": binding.app_id, "commit_sha": sha}
+                if sha != remote_sha else self.wait_deployment(root, commit_sha=sha, timeout=timeout)
+            )
+        return result
+
+    def wait_deployment(
+        self, path: str | Path = ".", *, commit_sha: str, timeout: float = 1200.0,
+    ) -> dict:
+        root = self.binding_store.prepare_root(path)
+        binding = self._ensure_binding(root)
+        state = wait_for_deployment(
+            self.client, binding.app_id, commit_sha, timeout=timeout,
+        )
+        state["path"] = str(root)
+        if state.get("status") == "unknown_timeout":
+            state["timeout_seconds"] = timeout
+            state["management_hint"] = "登录运营系统 → 应用 → 我的应用管理查看发布状态。"
+            state["retry"] = {
+                "command": "opscli app deployment wait",
+                "path": str(root),
+                "commit_sha": commit_sha,
+                "timeout_seconds": 1200,
+            }
+        return state
 
     def _ensure_git_environment(self) -> dict:
         ensure = getattr(self.git_service, "ensure_environment", None)

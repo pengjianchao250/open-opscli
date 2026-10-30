@@ -6,6 +6,7 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from opscli.cli import app
+from opscli.app.commands.cli import _emit
 
 
 def _json_output(output: str) -> dict:
@@ -29,6 +30,7 @@ def test_app_exposes_expected_commands() -> None:
         "dev-status",
         "push",
         "migrate",
+        "deployment",
     }
     migrate_command = app_command.get_command(None, "migrate")
     assert set(migrate_command.commands) == {
@@ -39,6 +41,44 @@ def test_app_exposes_expected_commands() -> None:
         "verify",
         "convert-legacy",
     }
+    assert set(app_command.get_command(None, "deployment").commands) == {"wait"}
+
+
+def test_push_wait_json_reports_one_final_deployment_result(monkeypatch) -> None:
+    class FakeManager:
+        def push(self, path, *, message, wait, timeout):
+            assert (message, wait, timeout) == ("publish", True, 1200)
+            return {
+                "pushed": True, "commit_sha": "a" * 40,
+                "deployment": {
+                    "status": "healthy", "is_current_release": True,
+                    "entry_url": "https://ops.example/iframeEntry?menuId=apphub:Ab123",
+                },
+            }
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
+    result = CliRunner().invoke(app, ["app", "push", ".", "-m", "publish", "--wait", "--json"])
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["data"]["deployment"]["status"] == "healthy"
+    assert payload["data"]["deployment"]["entry_url"].endswith("apphub:Ab123")
+
+
+def test_failed_deployment_text_lists_two_independent_files(capsys) -> None:
+    _emit({
+        "success": True, "data": {"deployment": {
+            "status": "failed", "error_code": "BUILD-FAILED", "error_summary": "构建失败",
+            "deployment_id": "dep-7",
+            "build_log_attachment": {"path": "C:/logs/build.log"},
+            "diagnosis_attachment": {"path": "C:/logs/diagnosis.log"},
+        }},
+    }, json_output=False)
+    output = capsys.readouterr().out
+    assert "完整构建日志：C:/logs/build.log" in output
+    assert "发布诊断：C:/logs/diagnosis.log" in output
 
 
 def test_migrate_start_forwards_paths_and_id(monkeypatch) -> None:

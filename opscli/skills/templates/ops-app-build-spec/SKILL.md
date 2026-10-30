@@ -53,7 +53,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 5. 验证阶段优先复用已有 `.venv`、`node_modules`、pnpm store 和构建缓存；锁文件与依赖声明未变化时不重装依赖，生产构建同一轮最多一次，相同命令复用结果，默认不跑完整 E2E。任一合同失败时只修改目标副本并定向复验，直到 `release_ready=true`；业务重写、数据删除、敏感权限变化和外部阻塞必须停止并说明。
 6. 前后端启动方式变更或未识别时执行 `opscli app migrate scan-startup --target "<target-project>" --json`；人工补齐后执行 `opscli app migrate resume --target "<target-project>" --json`，不得手工伪造状态。
 7. 发现旧的模板重构迁移状态时，先执行 `opscli app migrate convert-legacy --target "<target-project>" --json`，命令只备份并转换状态，不修改业务源码。
-8. 用户已在本轮授权 `push_on_success` 且最终文件范围未变化时，`release_ready=true` 后直接执行 `opscli app push`；未授权时停在验证通过状态。push 成功只表示源码到达远端 `master`。
+8. 用户已在本轮授权 `push_on_success` 且最终文件范围未变化时，`release_ready=true` 后执行 `opscli app push --wait --json`；未授权时停在验证通过状态。按本次提交 SHA 等待发布结果。
 9. 上述入口识别、启动模式、清单、验证器和 push 前指纹门禁只适用于 `origin_type=migration_copy`；普通新建项目继续使用原有模板克隆、`app create/init/push` 逻辑，不扫描业务入口，不生成也不读取迁移验证清单。
 ### AppHub 真实取数交付门禁
 
@@ -159,16 +159,18 @@ Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功�
 - 按改动运行相关行为测试；Bug 修复应有能复现问题的验证。文案、间距等低风险改动不机械新增测试。已有无关失败要说明，不删测试以换取通过。
 - 源码交付前按部署规范执行前端测试、生产构建及项目合同要求的检查；命令取实际项目，不能编造尚不存在的 `lint/typecheck`。
 - 页面主流程、布局、真实联调、平台环境分别需要对应证据；构建通过不能代替浏览器或线上验收。
-- 提交前重新读取部署规范，确认本次完整文件范围、binding 与目标仓库。用户明确授权后执行 `opscli app push "<project-directory>" --message "<summary>"`；不绕过它直接 Push，不创建第二条 release。
+- 提交前重新读取部署规范，确认本次完整文件范围、binding 与目标仓库。用户明确授权后执行 `opscli app push "<project-directory>" --message "<summary>" --wait --json`；不绕过它直接 Push，不创建第二条 release。
 - push 成功只表示源码到达远端。线上构建、发布、健康状态和回滚由 AppHub 处理，没有平台证据时不得报告已部署。
-- `opscli app push` 返回 `pushed=true` 时，Codex 最终回复统一原样使用：“推送成功；运营系统将自动部署并发布当前站点，您可以前往运营系统查看发布状态、或进行站点权限设置。”该提示描述后续异步流程，不表示当前已经部署或发布成功。
+- `pushed=true` 后先提示正在等待本次提交的发布结果；每 15 秒的同阶段查询不逐条向对话发消息。只有本次 SHA 为当前线上 healthy 版本时，最终回复可点击的完整 `entry_url`。
+- 本次发布失败时给出错误码、简短摘要和 SHA，并分别返回可点击的“查看完整构建日志”和“查看发布诊断”文件链接。只链接结果中实际存在的 `build_log_attachment`、`diagnosis_attachment` 绝对路径；部署前未生成构建日志，或任一附件不可用时明确说明，不伪造链接。超时不判失败，提示用户在运营系统“应用 → 我的应用管理”查看，或运行 `opscli app deployment wait <project-root> --commit <sha> --json` 再等 20 分钟。
+- 查询错误、被后续提交覆盖或本次 healthy 但已非当前版本时，说明实际状态和 SHA；不返回可能指向其他版本的应用链接。
 - `opscli app push` 返回 `pushed=false` 时，说明远端源码已是最新版本；按命令结果说明无需重复推送，不使用上述成功提示。
 
 ## 错误与输出
 
 模板克隆或 Git 清理失败时保留原始错误并停止新建流程；合同无法核实时保留已验证部分，不伪造实现。源码复制迁移无法完成复制、身份、启动或 Git 门禁时保留源目录只读，报告失败状态，不改写业务源码。
 
-`opscli` CLI 或相关 MCP 工具失败时，立即按 `ops-feedback` 规范提交结构化反馈并返回 `feedback_uuid`；认证未授权、用户取消和五分钟内已反馈的同一错误除外。
+`opscli` CLI 或相关 MCP 工具的同一报错指纹在本会话出现第 3 次时，按 `ops-feedback` 规范提交结构化反馈并返回 `feedback_uuid`；预期认证状态、用户取消和已反馈的重复错误除外。
 
 先判断用户意图是新建、已有项目开发还是源码复制迁移。源码复制迁移时读取唯一的迁移规范，在独立目标目录复制源码并最小适配；源目录保持只读，不自动重构业务源码。
 
@@ -285,7 +287,7 @@ database:
 
 未获得启动服务许可时，只执行静态检查、测试和构建，不启动容器。
 
-源码交付获得用户确认后，由 Codex 执行 `opscli app push <root> --message <summary>`。返回 `pushed=true` 时按前述统一提示回复用户；该命令成功只表示源码到达应用远端仓库，随后 `opscli app` 职责结束。
+源码交付获得用户确认后，由 Codex 执行 `opscli app push <root> --message <summary> --wait --json`。Git 推送和构建发布分别判断，按前述发布结果样式回复用户。
 应用发布、构建排队、版本状态、线上 URL、健康检查和回滚由 AppHub 或其他发布平台负责，本 Skill 不调用或指导调用 `opscli app` 发布命令。
 没有线上平台证据时，不得把 push、构建或镜像生成报告成已发布或已部署。
 
