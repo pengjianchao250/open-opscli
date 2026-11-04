@@ -58,7 +58,7 @@ class AppHubClient:
         return hashlib.sha256(scope.encode("utf-8")).hexdigest()
 
     def create_app(self, request_payload: dict[str, Any]) -> dict[str, Any]:
-        """创建应用；重入幂等由 AppHub 按 owner 和 slug 保证。"""
+        """创建应用；调用方负责防止结果不明时自动重发。"""
         return self._request_json("POST", "/apps", json=request_payload)
 
     def get_app(self, app_id: str) -> dict[str, Any]:
@@ -240,7 +240,7 @@ class AppHubClient:
             raw = response.json()
             if isinstance(raw, dict):
                 detail = raw.get("detail")
-                payload = detail if isinstance(detail, dict) else raw
+                payload = detail if isinstance(detail, dict) and detail.get("code") else raw
         except ValueError:
             pass
         status = response.status_code
@@ -250,6 +250,7 @@ class AppHubClient:
             str(payload.get("message") or f"AppHub 请求失败（HTTP {status}）。"),
             fix_hint=fix_hint,
             request_id=payload.get("request_id") or response.headers.get("X-Request-Id"),
+            detail=payload.get("detail") if isinstance(payload.get("detail"), dict) else None,
         )
 
 
@@ -262,6 +263,6 @@ def _status_fix_hint(status: int) -> str | None:
         401: "请先执行 opscli auth login 重新登录。",
         403: "当前账号没有该应用权限，请联系应用 owner。",
         426: "当前 opscli 版本过低，请升级后重试。",
-        502: "AppHub 上游暂不可用，请稍后幂等重试。",
-        503: "AppHub 服务暂不可用，请稍后幂等重试。",
+        502: "AppHub 上游暂不可用；请先核对本次操作结果。",
+        503: "AppHub 服务暂不可用；写操作请先核对结果。",
     }.get(status)

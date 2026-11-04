@@ -186,12 +186,15 @@ def migrate_status(
 def migrate_resume(
     target: Path = typer.Option(Path("."), "--target", help="迁移目标项目目录"),
     migration_id: str | None = typer.Option(None, "--migration-id", help="迁移任务 ID"),
+    retry_create: bool = typer.Option(False, "--retry-create", help="用户明确要求时重试未完成的应用创建"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
     """从本地持久化阶段继续迁移，不重复复制或创建应用。"""
     _run_migration(
         "app migrate resume",
-        lambda service: service.resume(target, migration_id=migration_id),
+        lambda service: service.resume(
+            target, migration_id=migration_id, retry_create=retry_create,
+        ),
         json_output=json_output,
     )
 
@@ -242,12 +245,13 @@ def migrate_convert_legacy(
 def create_app(
     app_name: str = typer.Argument(..., help="应用名称"),
     path: Path | None = typer.Option(None, "--path", help="绑定目录；默认使用应用 slug"),
+    retry_create: bool = typer.Option(False, "--retry-create", help="用户明确要求时重试未完成的应用创建"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
     """在 AppHub 创建应用并保存本地基础信息。"""
     _run(
         "app create",
-        lambda manager: manager.create_app(app_name, path=path),
+        lambda manager: manager.create_app(app_name, path=path, retry_create=retry_create),
         json_output=json_output,
     )
 

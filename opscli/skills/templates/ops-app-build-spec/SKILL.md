@@ -102,7 +102,7 @@ clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连�
 
 应用唯一身份是严格匹配 `^[0-9A-Za-z]{5}$`、区分大小写的 `app_id`。只接受 schema v4 的 `.opscli/app.json`；v1、v2、v3、`site_name/site_id/created_by` 旧字段、非法 ID 或缺失环境标识时立即停止，不迁移、不备份替换。仅在目录完全没有 binding 时，核对平台应用 ID 后执行 `opscli app init "<project-directory>" --app-id "<app_id>" --json`。`--app` 仅核对 slug，不能查询、选择、恢复或创建应用。
 
-创建超时或失败后，在原目录使用相同名称、账号和环境重试 `create`；保留 `.opscli/creation.json` 的本地创建意图和并发保护记录，但不得把其中 UUID 作为 `Idempotency-Key` 发送给 AppHub。服务端按同一 owner 和 slug 幂等重入。真实 `app_id` 同时写入 `app.yaml` 和本地 binding；slug 只保留在 AppHub 与 binding 中。仓库地址只使用平台返回的 `repo_url`，不得从 slug 拼接。
+创建超时或失败后立即停止创建流程，报告错误码、`request_id` 和核对方式。AppHub 可能已登记应用；同一账号和 slug 的再次 POST 可能产生新的 `app_id`，不得依据服务端或客户端“幂等重试”提示自行重跑 `create`、`migrate resume`，也不得换目录重跑 `migrate start`。先在 AppHub 核对是否已有 `app_id`；已有应用优先用明确 ID 恢复。只有用户在新的指令中明确要求重试，且原目标目录存在未完成创建记录时，才在原目录执行一次 `opscli app create <name> --path <project> --retry-create`，或 `opscli app migrate resume --target <project> --retry-create`；不能自行加上此参数，也不能因为一次人工重试失败就继续自动重试。创建意图 UUID 只在本地用于防重复，不作为 `Idempotency-Key` 发送。真实 `app_id` 同时写入 `app.yaml` 和本地 binding；仓库地址只使用平台返回的 `repo_url`。
 
 Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功时直接复用；明确属于认证失败时，平台未绑定凭据则首次签发，平台已绑定凭据则自动请求服务端轮换。非认证类 Git 失败不得触发凭据刷新，用户无需操作或理解轮换参数。
 

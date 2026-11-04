@@ -71,7 +71,7 @@ class BindingStore:
         return any(item.name not in {".git", ".opscli"} for item in root.iterdir())
 
     def prepare_creation(self, root: Path, payload: dict, *, scope: str) -> dict:
-        """发送请求前持久化唯一创建意图；同目录重试必须保持账号、环境和声明一致。"""
+        """发送请求前持久化创建意图；已有记录只用于校验，不代表可自动重发。"""
         target = root / ".opscli" / "creation.json"
         digest = hashlib.sha256(json.dumps(
             payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"),

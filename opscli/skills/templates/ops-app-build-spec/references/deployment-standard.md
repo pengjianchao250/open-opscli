@@ -42,7 +42,7 @@
 
 应用只以 `app_id` 区分；该 ID 固定五位 Base62、大小写敏感。目录完全缺少 binding 时使用 `opscli app init "<project-directory>" --app-id "<app_id>"` 显式恢复，不按 slug 自动选择。v1、v2、v3 或含旧字段的 binding 直接停止，不自动迁移、修复或替换。绑定中的 `apphub_url` 限定控制面环境，环境不匹配时先切回原环境；另一环境使用独立目录。
 
-创建请求发送前将本地操作 UUID、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`；该 UUID 只用于目录级并发和创建意图保护，不作为 AppHub `Idempotency-Key`。失败后保留记录，在相同目录、名称、账号和环境下重试，由服务端同 owner/slug 幂等重入。此记录与 binding 一起被 `.opscli/` 忽略规则保护，不进入源码。
+创建请求发送前将本地操作 UUID、请求摘要和账号/环境摘要保存到 `.opscli/creation.json`，并按环境、账号和 slug 在本机配置目录建立跨目录保护；该 UUID 不作为 AppHub `Idempotency-Key`。502、超时或其他结果不明的失败后保留保护，默认重复运行 `create` 或迁移恢复也不会重发 POST。先核对 `request_id` 和 AppHub 中的应用；只有用户新的明确重试指令才在原目录使用 `--retry-create` 放行一次，人工重试也可能产生另一个 `app_id`。迁移项目使用 `opscli app migrate resume --target <project> --retry-create`，不得换目录重新 `migrate start`。`.opscli/` 中的记录与 binding 一起受忽略规则保护，不进入源码。
 
 首次绑定目标 `origin` 前必须取得 `GET /api/v1/apps/{app_id}/git-bind-preflight` 的 `{"repository_empty": true}` 成功证据；远端非空由平台返回 409。正常后续 push 不重复执行空仓库预检。Git 凭据探测成功时直接复用；明确属于认证失败时由 `app init` 或 `app push` 自动首次签发或轮换，网络、仓库状态和历史冲突等非认证错误不得触发凭据刷新。
 

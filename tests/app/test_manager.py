@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 
 import pytest
@@ -11,9 +12,10 @@ import pytest
 from opscli.app.domain.constants import (
     MCP_REST_API_BASE_URL_ENV_KEY,
 )
-from opscli.app.domain.exceptions import AppGitError, AppProjectError
-from opscli.app.domain.models import SiteBinding
+from opscli.app.domain.exceptions import AppGitError, AppHubHttpError, AppProjectError
+from opscli.app.domain.models import AppCreateRequest, SiteBinding
 from opscli.app.services.binding import BindingStore
+from opscli.app.services.creation_guard import CreationGuard
 from opscli.app.services.manager import AppManager
 from opscli.app.services.migration_contract import migration_release_fingerprint
 
@@ -32,12 +34,12 @@ class FakeClient:
         self.detail_calls: list[str] = []
         self.git_calls: list[str] = []
         self.scope = "qa-owner-1"
+        self.guard_dir = TemporaryDirectory(prefix="opscli-create-test-")
         self.control_plane_url = "https://apphub.qa.aukeyit.com"
         self.api_base_url = "https://apphub.example/api/v1"
         self.env_calls: list[str] = []
         self.env_update_calls: list[tuple[str, dict[str, str]]] = []
         self.env_by_app: dict[str, dict[str, str]] = {}
-        self.created_by_slug: dict[str, dict] = {}
         self.apps = {
             "Ab123": {
                 "app_id": "Ab123",
@@ -58,8 +60,6 @@ class FakeClient:
     def create_app(self, request_payload: dict) -> dict:
         self.create_payloads.append(request_payload)
         slug = request_payload["name"]
-        if slug in self.created_by_slug:
-            return self.created_by_slug[slug]
         detail = {
             "app_id": f"Ab{len(self.apps) + 1:03}",
             "slug": slug,
@@ -81,7 +81,6 @@ class FakeClient:
                 "token_hint": "12345678",
             },
         }
-        self.created_by_slug[slug] = response
         return response
 
     def list_accessible_apps(self) -> dict:
@@ -224,6 +223,7 @@ def _manager(
 ) -> AppManager:
     return AppManager(
         client=client,
+        creation_guard=CreationGuard(Path(client.guard_dir.name)),
         git_service=git,
         credential_store=credentials or FakeCredentialStore(exists=True),
     )
@@ -1307,8 +1307,8 @@ def test_push_rejects_invalid_manifest_before_remote_or_git(
     assert git.init_calls == git.push_calls == []
 
 
-def test_create_timeout_reuses_local_intent_and_server_slug_idempotency(tmp_path: Path) -> None:
-    """本地 UUID 仅保护创建意图，服务端按 owner 和 slug 幂等重入。"""
+def test_create_timeout_blocks_automatic_retry_but_allows_explicit_retry(tmp_path: Path) -> None:
+    """响应丢失后默认不再发送 POST，人工明确重试可复用原目录。"""
     client = FakeClient()
     original = client.create_app
     observed_keys = []
@@ -1322,11 +1322,19 @@ def test_create_timeout_reuses_local_intent_and_server_slug_idempotency(tmp_path
         raise TimeoutError("响应丢失")
 
     client.create_app = timeout_after_create
-    with pytest.raises(TimeoutError):
+    with pytest.raises(AppProjectError) as failed:
         _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    assert failed.value.code == "APP-CREATE-RESULT-UNKNOWN"
     client.create_app = original
-    result = _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
-    assert len(client.apps) == 2
+    with pytest.raises(AppProjectError) as blocked:
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    assert blocked.value.code == "APP-CREATE-RETRY-REQUIRES-USER"
+    assert len(client.create_payloads) == 1
+    result = _manager(client, FakeGit()).create_app(
+        "新应用", path=tmp_path, retry_create=True,
+    )
+    assert len(client.apps) == 3
+    assert result["app_id"] == "Ab003"
     state = json.loads((tmp_path / ".opscli" / "creation.json").read_text(encoding="utf-8"))
     assert observed_keys == [state["key"]]
     assert state["completed"] is True
@@ -1341,7 +1349,7 @@ def test_pending_create_rejects_changed_request_or_scope(tmp_path: Path, changed
     def fail(payload):
         raise TimeoutError("发送失败")
     client.create_app = fail
-    with pytest.raises(TimeoutError):
+    with pytest.raises(AppProjectError):
         _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
     if changed == "scope":
         client.scope = "production-owner-2"
@@ -1350,18 +1358,105 @@ def test_pending_create_rejects_changed_request_or_scope(tmp_path: Path, changed
     assert caught.value.code == "APP-CREATE-CONFLICT"
 
 
-def test_new_directories_same_slug_reenter_same_server_application(tmp_path: Path) -> None:
-    """不同目录有独立本地意图，但同 owner/slug 由服务端返回同一应用。"""
+def test_successful_new_directories_same_slug_create_distinct_apps(tmp_path: Path) -> None:
+    """创建成功后仍允许用户在新目录明确新建同名应用。"""
     client = FakeClient()
     manager = _manager(client, FakeGit())
     a = manager.create_app("同名应用", path=tmp_path / "a")
     b = manager.create_app("同名应用", path=tmp_path / "b")
     assert a["slug"] == b["slug"]
-    assert a["app_id"] == b["app_id"]
-    assert a["repo_url"] == b["repo_url"]
+    assert a["app_id"] != b["app_id"]
+    assert a["repo_url"] != b["repo_url"]
     state_a = json.loads((tmp_path / "a" / ".opscli" / "creation.json").read_text())
     state_b = json.loads((tmp_path / "b" / ".opscli" / "creation.json").read_text())
     assert state_a["key"] != state_b["key"]
+
+
+def test_create_502_blocks_other_directory_and_replaces_retry_hint(tmp_path: Path) -> None:
+    client = FakeClient()
+    original = client.create_app
+
+    def fail_after_registration(payload):
+        original(payload)
+        raise AppHubHttpError(
+            "HTTP-502", "AppHub 请求失败（HTTP 502）。",
+            fix_hint="AppHub 上游暂不可用，请稍后幂等重试。",
+            request_id="req-502",
+        )
+
+    client.create_app = fail_after_registration
+    first = tmp_path / "first"
+    with pytest.raises(AppHubHttpError) as failed:
+        _manager(client, FakeGit()).create_app("同名应用", path=first)
+    assert failed.value.code == "HTTP-502"
+    assert failed.value.request_id == "req-502"
+    assert failed.value.detail["target_root"] == str(first)
+    assert "幂等重试" not in failed.value.fix_hint
+    assert "--retry-create" in failed.value.fix_hint
+
+    client.create_app = original
+    with pytest.raises(AppProjectError) as blocked:
+        _manager(client, FakeGit()).create_app("同名应用", path=tmp_path / "second")
+    assert blocked.value.code == "APP-CREATE-PENDING-ELSEWHERE"
+    with pytest.raises(AppProjectError) as bypass:
+        _manager(client, FakeGit()).create_app(
+            "同名应用", path=tmp_path / "second", retry_create=True,
+        )
+    assert bypass.value.code == "APP-CREATE-NO-PENDING-RETRY"
+    assert len(client.create_payloads) == 1
+
+    retried = _manager(client, FakeGit()).create_app(
+        "同名应用", path=first, retry_create=True,
+    )
+    assert retried["app_id"] == "Ab003"
+    assert len(client.create_payloads) == 2
+    new = _manager(client, FakeGit()).create_app("同名应用", path=tmp_path / "second")
+    assert new["app_id"] == "Ab004"
+
+
+def test_explicit_retry_failure_keeps_guard(tmp_path: Path) -> None:
+    client = FakeClient()
+    attempts = []
+
+    def fail(payload):
+        attempts.append(payload)
+        raise AppHubHttpError("HTTP-502", "资源准备失败")
+
+    client.create_app = fail
+    manager = _manager(client, FakeGit())
+    with pytest.raises(AppHubHttpError):
+        manager.create_app("新应用", path=tmp_path)
+    with pytest.raises(AppHubHttpError):
+        manager.create_app("新应用", path=tmp_path, retry_create=True)
+    with pytest.raises(AppProjectError) as blocked:
+        manager.create_app("新应用", path=tmp_path)
+    assert blocked.value.code == "APP-CREATE-RETRY-REQUIRES-USER"
+    assert len(attempts) == 2
+
+
+def test_retry_flag_requires_pending_creation(tmp_path: Path) -> None:
+    client = FakeClient()
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path, retry_create=True)
+    assert caught.value.code == "APP-CREATE-NO-PENDING-RETRY"
+    assert client.create_payloads == []
+
+
+def test_legacy_unfinished_creation_requires_explicit_retry(tmp_path: Path) -> None:
+    client = FakeClient()
+    BindingStore().prepare_creation(
+        tmp_path, AppCreateRequest.from_app_name("新应用").to_dict(), scope=client.scope,
+    )
+    with pytest.raises(AppProjectError) as blocked:
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path)
+    assert blocked.value.code == "APP-CREATE-RETRY-REQUIRES-USER"
+    assert client.create_payloads == []
+
+    result = _manager(client, FakeGit()).create_app(
+        "新应用", path=tmp_path, retry_create=True,
+    )
+    assert result["app_id"] == "Ab002"
+    assert len(client.create_payloads) == 1
 
 
 @pytest.mark.parametrize("legacy_id", [None, "sales-dashboard", "sales"])

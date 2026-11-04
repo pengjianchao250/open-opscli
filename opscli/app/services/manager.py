@@ -12,7 +12,7 @@ from opscli.app.domain.constants import (
     MCP_REST_API_BASE_URL_ENV_KEY,
     MESSAGE_MAX_LENGTH,
 )
-from opscli.app.domain.exceptions import AppGitError, AppProjectError
+from opscli.app.domain.exceptions import AppError, AppGitError, AppProjectError
 from opscli.app.domain.models import (
     AppCreateRequest,
     SiteBinding,
@@ -22,6 +22,7 @@ from opscli.app.domain.models import (
     validate_repo_url,
 )
 from opscli.app.services.binding import BindingStore
+from opscli.app.services.creation_guard import CreationGuard
 from opscli.app.services.gitcred import GitCredentialStore
 from opscli.app.services.gitops import GitService
 from opscli.app.services.deployment_wait import wait_for_deployment
@@ -42,12 +43,14 @@ class AppManager:
         *,
         client: AppHubClient | None = None,
         binding_store: BindingStore | None = None,
+        creation_guard: CreationGuard | None = None,
         git_service: GitService | None = None,
         manifest_store: AppManifestStore | None = None,
         credential_store: GitCredentialStore | None = None,
     ) -> None:
         self.client = client or AppHubClient()
         self.binding_store = binding_store or BindingStore()
+        self.creation_guard = creation_guard or CreationGuard()
         self.git_service = git_service or GitService()
         self.manifest_store = manifest_store or AppManifestStore()
         self.credential_store = credential_store or GitCredentialStore(
@@ -63,6 +66,7 @@ class AppManager:
         *,
         path: str | Path | None = None,
         include_default_database: bool = True,
+        retry_create: bool = False,
     ) -> dict:
         """创建并绑定应用，不消费或保存创建响应中的 Git 凭据。"""
         request = AppCreateRequest.from_app_name(
@@ -80,10 +84,11 @@ class AppManager:
             self._verify_detail(binding, self.client.get_app(binding.app_id))
             binding = binding.migrated(apphub_url=self.client.api_base_url)
             self.binding_store.save(root, binding)
+            self.creation_guard.release(self.client.creation_scope(), binding.slug, root)
             self.manifest_store.sync_identity(root, binding)
             return self._binding_result(root, binding, "目录已绑定该应用，无需重复创建。")
 
-        binding = self._create_binding(root, request)
+        binding = self._create_binding(root, request, retry_create=retry_create)
         return {
             **self._binding_result(root, binding, "应用和独立仓库已创建并保存本地基础信息。"),
             "credential_saved": False,
@@ -521,20 +526,62 @@ class AppManager:
         self,
         root: Path,
         request: AppCreateRequest,
+        *,
+        retry_create: bool = False,
     ) -> SiteBinding:
         """保存应用基础绑定，忽略创建响应中的内联 Git 凭据。"""
         request_payload = request.to_dict()
-        state = self.binding_store.prepare_creation(
-            root, request_payload, scope=self.client.creation_scope(),
+        scope = self.client.creation_scope()
+        local_record = root / ".opscli" / "creation.json"
+        had_local_record = local_record.exists()
+        if had_local_record:
+            state = self.binding_store.prepare_creation(root, request_payload, scope=scope)
+            if not retry_create:
+                raise AppProjectError(
+                    "APP-CREATE-RETRY-REQUIRES-USER",
+                    "此目录的应用创建结果尚未核对，已阻止再次发送创建请求。",
+                    fix_hint="先核对 AppHub；仅在用户明确要求重试后使用 --retry-create。",
+                )
+        elif retry_create:
+            raise AppProjectError(
+                "APP-CREATE-NO-PENDING-RETRY", "原目录没有待核对的创建请求，不能使用 --retry-create。",
+            )
+
+        claimed_new = self.creation_guard.claim(
+            scope, request.name, root, retry_create=retry_create,
         )
-        payload = self.client.create_app(request_payload)
-        binding = SiteBinding.from_create_response(request.title, payload).migrated(
-            apphub_url=self.client.api_base_url,
-        )
-        if binding.slug != request.name:
-            raise AppProjectError("APPHUB-PROTOCOL", "AppHub 创建响应的 slug 与请求不一致。")
-        self.binding_store.save(root, binding)
-        self.binding_store.complete_creation(root, state, binding.app_id)
+        try:
+            if not had_local_record:
+                state = self.binding_store.prepare_creation(root, request_payload, scope=scope)
+        except Exception:
+            if claimed_new:
+                self.creation_guard.release(scope, request.name, root)
+            raise
+
+        try:
+            payload = self.client.create_app(request_payload)
+            binding = SiteBinding.from_create_response(request.title, payload).migrated(
+                apphub_url=self.client.api_base_url,
+            )
+            if binding.slug != request.name:
+                raise AppProjectError("APPHUB-PROTOCOL", "AppHub 创建响应的 slug 与请求不一致。")
+            self.binding_store.save(root, binding)
+            self.binding_store.complete_creation(root, state, binding.app_id)
+        except Exception as exc:
+            hint = (
+                "创建结果可能已登记。请先核对 AppHub 和 request_id；"
+                "仅在用户明确要求再次创建后，于原目录使用 --retry-create。"
+            )
+            if isinstance(exc, AppError):
+                exc.fix_hint = hint
+                exc.detail["target_root"] = str(root)
+                raise
+            raise AppProjectError(
+                "APP-CREATE-RESULT-UNKNOWN", "创建请求结果不明，已阻止自动重试。",
+                fix_hint=hint,
+                detail={"target_root": str(root), "error_type": type(exc).__name__},
+            ) from exc
+        self.creation_guard.release(scope, request.name, root)
         self.manifest_store.sync_identity(root, binding)
         return binding
 

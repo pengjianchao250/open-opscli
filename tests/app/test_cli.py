@@ -1,6 +1,7 @@
 """opscli app 命令树注册测试。"""
 
 import json
+from pathlib import Path
 
 from typer.main import get_command
 from typer.testing import CliRunner
@@ -154,8 +155,8 @@ def test_migrate_resume_forwards_target_and_id(monkeypatch) -> None:
     captured = {}
 
     class FakeMigrationService:
-        def resume(self, target, *, migration_id=None):
-            captured.update(target=target, migration_id=migration_id)
+        def resume(self, target, *, migration_id=None, retry_create=False):
+            captured.update(target=target, migration_id=migration_id, retry_create=retry_create)
             return {"migration_id": migration_id, "delivery_ready": True}
 
         def close(self):
@@ -172,6 +173,7 @@ def test_migrate_resume_forwards_target_and_id(monkeypatch) -> None:
             "target",
             "--migration-id",
             "migration-demo",
+            "--retry-create",
             "--json",
         ],
     )
@@ -179,7 +181,27 @@ def test_migrate_resume_forwards_target_and_id(monkeypatch) -> None:
     assert result.exit_code == 0
     assert str(captured["target"]) == "target"
     assert captured["migration_id"] == "migration-demo"
+    assert captured["retry_create"] is True
     assert _json_output(result.output)["command"] == "app migrate resume"
+
+
+def test_create_forwards_explicit_retry_flag(monkeypatch) -> None:
+    captured = {}
+
+    class FakeManager:
+        def create_app(self, app_name, *, path=None, retry_create=False):
+            captured.update(name=app_name, path=path, retry_create=retry_create)
+            return {"app_id": "Ab123"}
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
+    result = CliRunner().invoke(
+        app, ["app", "create", "新应用", "--path", "target", "--retry-create", "--json"],
+    )
+    assert result.exit_code == 0
+    assert captured == {"name": "新应用", "path": Path("target"), "retry_create": True}
 
 
 def test_ensure_git_check_is_read_only(monkeypatch) -> None:
