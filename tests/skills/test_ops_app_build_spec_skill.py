@@ -34,7 +34,7 @@ def test_ops_app_build_spec_has_consistent_metadata() -> None:
 
     assert "name: ops-app-build-spec" in skill.split("---", 2)[1]
     assert 'display_name: "Ops App Build"' in openai
-    assert version == {"name": "ops-app-build-spec", "version": "v0.0.31"}
+    assert version == {"name": "ops-app-build-spec", "version": "v0.0.32"}
     assert not (SKILL_DIR / "references" / "backend-standard.md").exists()
 
 
@@ -503,6 +503,18 @@ def test_ops_app_build_spec_keeps_current_deployment_contract() -> None:
         assert obsolete not in deployment
 
 
+def test_failed_app_creation_requires_new_user_instruction_for_retry() -> None:
+    skill = _read("SKILL.md")
+    deployment = _read("references/deployment-standard.md")
+    migration = _read("references/migration-standard.md")
+    assert "不能自行加上此参数" in skill
+    assert "只有用户在新的指令中明确要求重试" in skill
+    assert "app create <name> --path <project> --retry-create" in skill
+    assert "migrate resume --target <project> --retry-create" in skill
+    assert "默认重复运行 `create` 或迁移恢复也不会重发 POST" in deployment
+    assert "不得自动加参数或换目录重新创建" in migration
+
+
 def test_ops_app_build_spec_backend_template_is_project_entry() -> None:
     """迁移用后端模板只保留项目合同和特化入口。"""
     agents = _read("assets/backend/AGENTS.md")
@@ -548,7 +560,7 @@ def test_ops_app_build_spec_is_declared_and_installable(tmp_path: Path) -> None:
 
     manager = SkillsManager(registry_path=tmp_path / "registry.json")
     templates = {item["name"]: item for item in manager.list_templates()}
-    assert templates["ops-app-build-spec"]["version"] == "v0.0.31"
+    assert templates["ops-app-build-spec"]["version"] == "v0.0.32"
 
     result = manager.install("ops-app-build-spec", skills_dir=str(tmp_path / "skills"))
     installed = Path(result.to_dict()["installed_paths"][0]["path"])

@@ -282,6 +282,40 @@ def test_http_error_envelope_is_mapped() -> None:
     assert caught.value.request_id == "req-1"
 
 
+def test_create_502_fallback_does_not_claim_idempotent_retry() -> None:
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(502, text="Bad Gateway"),
+        )),
+    )
+    with pytest.raises(AppHubHttpError) as caught:
+        client.create_app(AppCreateRequest.from_app_name("demo").to_dict())
+    assert caught.value.code == "HTTP-502"
+    assert "幂等重试" not in str(caught.value.fix_hint)
+
+
+def test_flat_create_error_keeps_request_id_and_registered_app_id() -> None:
+    client = AppHubClient(
+        base_url="https://apphub.example",
+        auth_client=FakeAuth(),
+        http_client=httpx.Client(transport=httpx.MockTransport(
+            lambda request: httpx.Response(502, json={
+                "code": "HTTP-502",
+                "message": "资源准备失败",
+                "request_id": "req-502",
+                "detail": {"app_id": "Ab123"},
+            }),
+        )),
+    )
+    with pytest.raises(AppHubHttpError) as caught:
+        client.create_app(AppCreateRequest.from_app_name("demo").to_dict())
+    assert caught.value.code == "HTTP-502"
+    assert caught.value.request_id == "req-502"
+    assert caught.value.detail == {"app_id": "Ab123"}
+
+
 def test_get_app_uses_case_sensitive_app_id_path() -> None:
     """应用详情路径必须精确携带公开 ID。"""
     paths = []

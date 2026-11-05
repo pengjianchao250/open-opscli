@@ -225,6 +225,7 @@ class MigrationService:
         target: str | Path = ".",
         *,
         migration_id: str | None = None,
+        retry_create: bool = False,
     ) -> dict[str, Any]:
         """从已持久化阶段继续，不重复复制源文件或重复登记应用。"""
         root, state, _ = self._load_context(target, migration_id)
@@ -233,7 +234,7 @@ class MigrationService:
         state.update(status="running", delivery_ready=False, updated_at=_now())
         self._write_state(root, state["migration_id"], state)
         try:
-            return self._continue_migration(root, state)
+            return self._continue_migration(root, state, retry_create=retry_create)
         except Exception as exc:
             state.update(
                 status="failed",
@@ -244,7 +245,9 @@ class MigrationService:
             self._write_state(root, state["migration_id"], state)
             raise
 
-    def _continue_migration(self, root: Path, state: dict[str, Any]) -> dict[str, Any]:
+    def _continue_migration(
+        self, root: Path, state: dict[str, Any], *, retry_create: bool = False,
+    ) -> dict[str, Any]:
         migration_key = state["migration_id"]
         startup = self._scan_and_write_startup(root, migration_key)
         if startup.get("wrapper_generated"):
@@ -284,6 +287,7 @@ class MigrationService:
                 str(state.get("app_name") or root.name),
                 path=root,
                 include_default_database=False,
+                retry_create=retry_create,
             )
             app_id = create_result.get("app_id")
             if not isinstance(app_id, str) or not app_id:

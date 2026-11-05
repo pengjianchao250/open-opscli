@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from opscli.app.domain.exceptions import AppProjectError
+from opscli.app.domain.exceptions import AppHubHttpError, AppProjectError
+from opscli.app.domain.models import slugify_site_name
+from opscli.app.services.creation_guard import CreationGuard
+from opscli.app.services.manager import AppManager
 from opscli.app.services.migration import MigrationService
 
 
@@ -23,12 +26,14 @@ class FakeAppManager:
         *,
         path: Path,
         include_default_database: bool = True,
+        retry_create: bool = False,
     ) -> dict:
         self.create_calls.append(
             {
                 "app_name": app_name,
                 "path": path,
                 "include_default_database": include_default_database,
+                "retry_create": retry_create,
             }
         )
         binding = path / ".opscli" / "app.json"
@@ -46,6 +51,60 @@ class FakeAppManager:
 
     def close(self) -> None:
         return None
+
+
+def test_failed_registration_never_reposts_without_explicit_resume(tmp_path: Path) -> None:
+    class FakeClient:
+        api_base_url = "https://apphub.example/api/v1"
+
+        def __init__(self) -> None:
+            self.posts = 0
+
+        def creation_scope(self) -> str:
+            return "owner-and-environment"
+
+        def create_app(self, payload: dict) -> dict:
+            self.posts += 1
+            if self.posts == 1:
+                raise AppHubHttpError("HTTP-502", "资源准备失败", request_id="req-502")
+            return {
+                "app_id": "Ab123",
+                "slug": slugify_site_name("迁移应用"),
+                "title": "迁移应用",
+                "repo_url": "https://gitea.example/apps/Ab123.git",
+            }
+
+        def close(self) -> None:
+            return None
+
+    source = _source(tmp_path)
+    client = FakeClient()
+    manager = AppManager(
+        client=client,
+        creation_guard=CreationGuard(tmp_path / "guard"),
+    )
+
+    def init_without_remote(path: Path) -> dict:
+        (path / ".git").mkdir(exist_ok=True)
+        return {"git_created": True}
+
+    manager.init_git = init_without_remote
+    service = MigrationService(app_manager=manager)
+    service.verify = lambda root, *, migration_id: {"app_id": "Ab123", "phase": "push_ready"}
+    target = tmp_path / "target"
+    with pytest.raises(AppHubHttpError):
+        service.start(source, target, app_name="迁移应用", migration_id="migration-first")
+    with pytest.raises(AppProjectError) as blocked:
+        service.resume(target)
+    assert blocked.value.code == "APP-CREATE-RETRY-REQUIRES-USER"
+    with pytest.raises(AppProjectError) as other_target:
+        service.start(source, tmp_path / "other", app_name="迁移应用", migration_id="migration-second")
+    assert other_target.value.code == "APP-CREATE-PENDING-ELSEWHERE"
+    assert client.posts == 1
+
+    result = service.resume(target, retry_create=True)
+    assert result["app_id"] == "Ab123"
+    assert client.posts == 2
 
 
 def _source(root: Path, *, runnable: bool = True) -> Path:

@@ -84,6 +84,7 @@ Vinext/Next 类项目还必须检查生产构建清单。`dist/server/**/__vite_
 - 校验：`opscli app migrate verify --target <target> --json`
 - 重扫启动：`opscli app migrate scan-startup --target <target> --json`
 - 恢复：`opscli app migrate resume --target <target> --json`
+- 创建结果不明后的人工重试：用户新的明确指令下，核对原登记结果，再使用 `opscli app migrate resume --target <target> --retry-create --json`；不得自动加参数或换目录重新创建。
 - 一次性转换旧的模板重构状态：`opscli app migrate convert-legacy --target <target> --json`
 
 每个成功阶段都写入 `migration.json`。失败保留最后成功阶段和结构化错误；`resume` 不重新复制源目录，已有 `app_id` 时不重复创建应用，已有 Git 仓库时不重复初始化。
