@@ -287,6 +287,7 @@ class MigrationService:
                 str(state.get("app_name") or root.name),
                 path=root,
                 include_default_database=False,
+                persistent_data_isolation="N",
                 retry_create=retry_create,
             )
             app_id = create_result.get("app_id")

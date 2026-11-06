@@ -61,7 +61,7 @@
 推送结果提示遵循以下合同：
 
 - 返回 `pushed=true` 后，先提示正在等待本次提交的发布结果。每 15 秒查询一次，同阶段查询不逐条刷屏。
-- `deployment.status=healthy` 且 `is_current_release=true` 时，只返回 `[完整运营入口 URL](完整运营入口 URL)`，链接文字和目标相同，不放入代码块。
+- `deployment.status=healthy` 且 `is_current_release=true` 时，返回 `预览地址：[完整 entry_url](完整 entry_url)`，链接文字和目标相同，不放入代码块。
 - `deployment.status=failed` 时，返回错误码、简短摘要、SHA，以及指向实际存在的完整 UTF-8 `.log` 文件的 `[查看完整构建日志](<绝对路径>)`。无 deployment 或日志不可用时不伪造附件。
 - `unknown_timeout` 不代表构建失败；提示登录运营系统“应用 → 我的应用管理”查看，或执行 `opscli app deployment wait <project-root> --commit <sha> --json` 重新等待最多 20 分钟。
 - `query_error`、`superseded` 和 `healthy_not_current` 只报告本次提交的事实与 SHA；不把旧版本仍可访问当成本次成功。

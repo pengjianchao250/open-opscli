@@ -66,12 +66,14 @@ class AppManager:
         *,
         path: str | Path | None = None,
         include_default_database: bool = True,
+        persistent_data_isolation: Literal["Y", "N"] = "N",
         retry_create: bool = False,
     ) -> dict:
         """创建并绑定应用，不消费或保存创建响应中的 Git 凭据。"""
         request = AppCreateRequest.from_app_name(
             app_name,
             include_default_database=include_default_database,
+            persistent_data_isolation=persistent_data_isolation,
         )
         root = self.binding_store.prepare_root(path if path is not None else request.name)
         if self.binding_store.is_bound(root):
@@ -81,7 +83,10 @@ class AppManager:
                     "APP-ALREADY-BOUND",
                     f"目录已绑定应用：{binding.app_name} ({binding.app_id})",
                 )
-            self._verify_detail(binding, self.client.get_app(binding.app_id))
+            detail = self.client.get_app(binding.app_id)
+            self._verify_detail(binding, detail)
+            if (detail.get("persistent_data_isolation") or "N") != request.persistent_data_isolation:
+                raise AppProjectError("APP-CREATE-CONFLICT", "目录已绑定应用的数据隔离策略与本次选择不一致。")
             binding = binding.migrated(apphub_url=self.client.api_base_url)
             self.binding_store.save(root, binding)
             self.creation_guard.release(self.client.creation_scope(), binding.slug, root)
@@ -560,6 +565,11 @@ class AppManager:
 
         try:
             payload = self.client.create_app(request_payload)
+            if payload.get("persistent_data_isolation") != request.persistent_data_isolation:
+                raise AppProjectError(
+                    "APPHUB-PROTOCOL",
+                    "AppHub 创建响应的数据隔离策略与本次选择不一致，需核对平台登记结果。",
+                )
             binding = SiteBinding.from_create_response(request.title, payload).migrated(
                 apphub_url=self.client.api_base_url,
             )

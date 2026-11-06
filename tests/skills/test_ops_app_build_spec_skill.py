@@ -143,7 +143,7 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
         "分支：`master`",
         'opscli app clone-template "<project-directory>" --json',
         "成功后立即删除项目根目录 `.git` 并验证其不存在",
-        'opscli app create "<app-name>" --path "<project-directory>" --json',
+        'opscli app create "<app-name>" --path "<project-directory>" --persistent-data-isolation "<Y|N>" --json',
         'opscli app init "<project-directory>" --json',
         "clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连续执行的必需步骤",
         "origin` 不指向统一模板仓库",
@@ -164,14 +164,15 @@ def test_ops_app_build_spec_clones_detaches_and_recognizes_template() -> None:
     assert "slug、仓库、Owner 和 Git 信息只保留在本地 binding" in deployment
 
     assert skill.index('opscli app clone-template "<project-directory>" --json') < skill.index(
-        'opscli app create "<app-name>" --path "<project-directory>" --json'
+        'opscli app create "<app-name>" --path "<project-directory>" --persistent-data-isolation "<Y|N>" --json'
     )
     assert skill.index(
-        'opscli app create "<app-name>" --path "<project-directory>" --json'
+        'opscli app create "<app-name>" --path "<project-directory>" --persistent-data-isolation "<Y|N>" --json'
     ) < skill.index('opscli app init "<project-directory>" --json')
     assert skill.index('opscli app init "<project-directory>" --json') < skill.index(
         "开发前读取目标项目的"
     )
+    assert "必须取得明确的 Y/N 答案，不能代选" in skill
 
 
 def test_ops_app_build_spec_requires_git_environment_gate() -> None:
@@ -509,7 +510,7 @@ def test_failed_app_creation_requires_new_user_instruction_for_retry() -> None:
     migration = _read("references/migration-standard.md")
     assert "不能自行加上此参数" in skill
     assert "只有用户在新的指令中明确要求重试" in skill
-    assert "app create <name> --path <project> --retry-create" in skill
+    assert "app create <name> --path <project> --persistent-data-isolation <Y|N> --retry-create" in skill
     assert "migrate resume --target <project> --retry-create" in skill
     assert "默认重复运行 `create` 或迁移恢复也不会重发 POST" in deployment
     assert "不得自动加参数或换目录重新创建" in migration

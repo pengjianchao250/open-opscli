@@ -68,6 +68,17 @@ def test_push_wait_json_reports_one_final_deployment_result(monkeypatch) -> None
     assert payload["data"]["deployment"]["entry_url"].endswith("apphub:Ab123")
 
 
+def test_healthy_deployment_text_shows_preview_address(capsys) -> None:
+    url = "https://ops.example/iframeEntry?menuId=apphub:Ab123"
+    _emit({
+        "success": True, "data": {"deployment": {
+            "status": "healthy", "is_current_release": True,
+            "entry_url": url,
+        }},
+    }, json_output=False)
+    assert capsys.readouterr().out.strip() == f"预览地址：{url}"
+
+
 def test_failed_deployment_text_lists_two_independent_files(capsys) -> None:
     _emit({
         "success": True, "data": {"deployment": {
@@ -189,8 +200,8 @@ def test_create_forwards_explicit_retry_flag(monkeypatch) -> None:
     captured = {}
 
     class FakeManager:
-        def create_app(self, app_name, *, path=None, retry_create=False):
-            captured.update(name=app_name, path=path, retry_create=retry_create)
+        def create_app(self, app_name, *, path=None, persistent_data_isolation="N", retry_create=False):
+            captured.update(name=app_name, path=path, persistent_data_isolation=persistent_data_isolation, retry_create=retry_create)
             return {"app_id": "Ab123"}
 
         def close(self):
@@ -198,10 +209,16 @@ def test_create_forwards_explicit_retry_flag(monkeypatch) -> None:
 
     monkeypatch.setattr("opscli.app.commands.cli.AppManager", FakeManager)
     result = CliRunner().invoke(
-        app, ["app", "create", "新应用", "--path", "target", "--retry-create", "--json"],
+        app, ["app", "create", "新应用", "--path", "target", "--persistent-data-isolation", "Y", "--retry-create", "--json"],
     )
     assert result.exit_code == 0
-    assert captured == {"name": "新应用", "path": Path("target"), "retry_create": True}
+    assert captured == {"name": "新应用", "path": Path("target"), "persistent_data_isolation": "Y", "retry_create": True}
+
+
+def test_create_requires_isolation_choice() -> None:
+    result = CliRunner().invoke(app, ["app", "create", "新应用", "--path", "target", "--json"])
+    assert result.exit_code != 0
+    assert "--persistent-data-isolation" in result.output
 
 
 def test_ensure_git_check_is_read_only(monkeypatch) -> None:

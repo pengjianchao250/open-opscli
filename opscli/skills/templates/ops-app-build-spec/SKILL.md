@@ -72,7 +72,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 
 ## 新项目
 
-1. 确认 Git 基础门禁已通过，再确认应用展示名称和目标目录不存在或为空。
+1. 确认 Git 基础门禁已通过，再确认应用展示名称和目标目录不存在或为空。创建前询问创建人：“当前站点是否启用持久化业务数据按用户隔离？是（Y）：业务记录、快照和加工结果按访问者分别保存和读取；否（N）：拥有站点访问权限的成员共享这些数据，可能看到创建人基于自身 OPS 权限保存的结果。页面结构和 OPS 实时查询不受影响。”必须取得明确的 Y/N 答案，不能代选。
 2. 使用 `opscli` 正式命令克隆模板；Git 检测、模板 clone 和模板根 `.git` 清理均由 `opscli` 自身运行时完成：
 
    ```bash
@@ -84,7 +84,7 @@ description: AppHub 模板看板项目的开发规范。创建、开发、排错
 3. 模板准备成功后立即创建 AppHub 应用并写入本地 binding：
 
    ```bash
-   opscli app create "<app-name>" --path "<project-directory>" --json
+   opscli app create "<app-name>" --path "<project-directory>" --persistent-data-isolation "<Y|N>" --json
    ```
 
 4. `create` 成功后立即初始化全新 Git 仓库并绑定业务仓库：
@@ -102,7 +102,7 @@ clone 并脱离模板 Git 元数据、`create` 和 `init` 是开始开发前连�
 
 应用唯一身份是严格匹配 `^[0-9A-Za-z]{5}$`、区分大小写的 `app_id`。只接受 schema v4 的 `.opscli/app.json`；v1、v2、v3、`site_name/site_id/created_by` 旧字段、非法 ID 或缺失环境标识时立即停止，不迁移、不备份替换。仅在目录完全没有 binding 时，核对平台应用 ID 后执行 `opscli app init "<project-directory>" --app-id "<app_id>" --json`。`--app` 仅核对 slug，不能查询、选择、恢复或创建应用。
 
-创建超时或失败后立即停止创建流程，报告错误码、`request_id` 和核对方式。AppHub 可能已登记应用；同一账号和 slug 的再次 POST 可能产生新的 `app_id`，不得依据服务端或客户端“幂等重试”提示自行重跑 `create`、`migrate resume`，也不得换目录重跑 `migrate start`。先在 AppHub 核对是否已有 `app_id`；已有应用优先用明确 ID 恢复。只有用户在新的指令中明确要求重试，且原目标目录存在未完成创建记录时，才在原目录执行一次 `opscli app create <name> --path <project> --retry-create`，或 `opscli app migrate resume --target <project> --retry-create`；不能自行加上此参数，也不能因为一次人工重试失败就继续自动重试。创建意图 UUID 只在本地用于防重复，不作为 `Idempotency-Key` 发送。真实 `app_id` 同时写入 `app.yaml` 和本地 binding；仓库地址只使用平台返回的 `repo_url`。
+创建超时或失败后立即停止创建流程，报告错误码、`request_id` 和核对方式。AppHub 可能已登记应用；同一账号和 slug 的再次 POST 可能产生新的 `app_id`，不得依据服务端或客户端“幂等重试”提示自行重跑 `create`、`migrate resume`，也不得换目录重跑 `migrate start`。先在 AppHub 核对是否已有 `app_id`；已有应用优先用明确 ID 恢复。只有用户在新的指令中明确要求重试，且原目标目录存在未完成创建记录时，才在原目录以原 Y/N 选择执行一次 `opscli app create <name> --path <project> --persistent-data-isolation <Y|N> --retry-create`，或 `opscli app migrate resume --target <project> --retry-create`；不能自行加上此参数，也不能因为一次人工重试失败就继续自动重试。创建意图 UUID 只在本地用于防重复，不作为 `Idempotency-Key` 发送。真实 `app_id` 同时写入 `app.yaml` 和本地 binding；仓库地址只使用平台返回的 `repo_url`。
 
 Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功时直接复用；明确属于认证失败时，平台未绑定凭据则首次签发，平台已绑定凭据则自动请求服务端轮换。非认证类 Git 失败不得触发凭据刷新，用户无需操作或理解轮换参数。
 
@@ -161,7 +161,7 @@ Git 凭据由 `app init` 和 `app push` 自动恢复：现有凭据探测成功�
 - 页面主流程、布局、真实联调、平台环境分别需要对应证据；构建通过不能代替浏览器或线上验收。
 - 提交前重新读取部署规范，确认本次完整文件范围、binding 与目标仓库。用户明确授权后执行 `opscli app push "<project-directory>" --message "<summary>" --wait --json`；不绕过它直接 Push，不创建第二条 release。
 - push 成功只表示源码到达远端。线上构建、发布、健康状态和回滚由 AppHub 处理，没有平台证据时不得报告已部署。
-- `pushed=true` 后先提示正在等待本次提交的发布结果；每 15 秒的同阶段查询不逐条向对话发消息。只有本次 SHA 为当前线上 healthy 版本时，最终回复可点击的完整 `entry_url`。
+- `pushed=true` 后先提示正在等待本次提交的发布结果；每 15 秒的同阶段查询不逐条向对话发消息。只有本次 SHA 为当前线上 healthy 版本时，最终回复使用 `预览地址：[完整 entry_url](完整 entry_url)`，链接文字和目标均为完整 URL。
 - 本次发布失败时给出错误码、简短摘要和 SHA，并分别返回可点击的“查看完整构建日志”和“查看发布诊断”文件链接。只链接结果中实际存在的 `build_log_attachment`、`diagnosis_attachment` 绝对路径；部署前未生成构建日志，或任一附件不可用时明确说明，不伪造链接。超时不判失败，提示用户在运营系统“应用 → 我的应用管理”查看，或运行 `opscli app deployment wait <project-root> --commit <sha> --json` 再等 20 分钟。
 - 查询错误、被后续提交覆盖或本次 healthy 但已非当前版本时，说明实际状态和 SHA；不返回可能指向其他版本的应用链接。
 - `opscli app push` 返回 `pushed=false` 时，说明远端源码已是最新版本；按命令结果说明无需重复推送，不使用上述成功提示。

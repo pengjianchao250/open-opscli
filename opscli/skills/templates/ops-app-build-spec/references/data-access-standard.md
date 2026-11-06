@@ -64,7 +64,7 @@ OPS 正式查询必须使用 `$ops-app-data-builder` 在线验证并固化的精
 - 前端不得直连 OPS、opscli REST、Keepa 或 SellerSprite。
 - 前端不得持有 API Key、JWT、Cookie 或完整鉴权头。
 - 跨来源组合和二次加工在 service 完成。
-- SQLite 分开保存第三方原始数据、SellerSprite 异步任务和用户加工结果，三类记录都按可信 `owner_user_id` 隔离。
+- SQLite 分开保存第三方原始数据、SellerSprite 异步任务和加工结果。新建标准站点 `Y` 按可信 `owner_user_id` 隔离；明确选择 `N` 时，仅合同指定的持久化业务数据可共享，个人行为仍私有。旧站点不因平台 `N` 标记自动改变。
 - 网络调用不得放在 SQLite 写事务内。
 
 ### 第三方身份转发
@@ -104,7 +104,7 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 - 运行期使用正式普通 jobs 或 Listing Analysis 专用异步接口，后端配置与 OPS Query、Keepa 共用 `OPSCLI_MCP_REST_API_BASE_URL`。
 - 按当前 `owner_user_id` 保存 `job_id` 和 `queued/running/succeeded/failed/cancelled` 状态；pending 任务只复用该用户原 `job_id`，不得跨用户复用或重复提交。
 - 只有成功 JSON 结果进入当前用户私有快照；XLS/XLSX、二进制和临时下载 URL 不写入 SQLite。
-- 用户查询历史、输入、收藏、备注和二次加工结果写入带 `owner_user_id` 的用户私有表。
+- 用户查询历史、输入、收藏、备注写入带 `owner_user_id` 的用户私有表；二次加工结果在 Y 下私有，N 下按明确的业务数据合同处理。
 - 不调用 quota 接口参与站点业务流程，不处理额度检查、扣减、归属或账号调度。
 
 ## 6. 项目文档
@@ -126,10 +126,10 @@ Keepa 和 SellerSprite 共用请求级 `ThirdPartyApiClient`，并复用模板 `
 - `VITE_*`、源码、镜像、Compose、日志和数据库中没有密钥或完整 token。
 - OPS 身份不来自请求体，viewer 数据未写入未隔离共享库。
 - Mock、测试替身和本地回退不得被描述成线上真实接入。
-- OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
+- Y 下 OPS 原始和加工结果持久化时按 `owner_user_id` 隔离；N 下仅明确的共享业务结果可按站点存储。
 - Keepa 只使用正式同步 REST 和当前请求身份，HTTP 200 业务失败不会覆盖当前用户有效快照。
 - SellerSprite 使用正式异步 REST，pending `job_id` 按 `owner_user_id` 复用，终态和 HTTP 202 映射正确。
-- 第三方 JSON 原始数据、异步任务和用户加工结果分表且都按 `owner_user_id` 隔离；XLS/XLSX 和临时下载 URL 不进入 SQLite。
+- 第三方 JSON 原始数据、异步任务和加工结果分表；Y 下均按 `owner_user_id` 隔离，N 下仅明确的业务结果可共享，个人任务仍私有。XLS/XLSX 和临时下载 URL 不进入 SQLite。
 - 只使用 `OPSCLI_MCP_REST_API_BASE_URL`，生产/预发布显式注入；不兼容旧变量别名、共享 API Key 或模式回退。
 - SQLite 只有一个写入实例、使用持久卷和迁移。
 - 项目中没有真实查询结果、导出文件、Cookie 或本机绝对路径。
