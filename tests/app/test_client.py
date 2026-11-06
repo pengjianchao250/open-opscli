@@ -149,6 +149,7 @@ def test_create_app_sends_current_contract_without_cookie() -> None:
     assert body["apiVersion"] == "apps.aukeys/v1"
     assert body["database"] == {"kind": "sqlite", "path": "/data/app.db"}
     assert body["opscli"] == {"auth_mode": "viewer", "datasets": []}
+    assert body["persistent_data_isolation"] == "N"
     assert "contact" not in body
     assert "runtime" not in body
     assert "python" not in body
@@ -165,6 +166,10 @@ def test_create_request_includes_explicit_contact() -> None:
     )
 
     assert request.to_dict()["contact"] == "owner@example.com"
+
+
+def test_create_request_preserves_isolation_choice() -> None:
+    assert AppCreateRequest.from_app_name("私有看板", persistent_data_isolation="Y").to_dict()["persistent_data_isolation"] == "Y"
 
 
 def test_migration_create_request_uses_ordinary_server_contract() -> None:

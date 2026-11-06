@@ -26,6 +26,7 @@ class FakeAppManager:
         *,
         path: Path,
         include_default_database: bool = True,
+        persistent_data_isolation: str = "N",
         retry_create: bool = False,
     ) -> dict:
         self.create_calls.append(
@@ -33,6 +34,7 @@ class FakeAppManager:
                 "app_name": app_name,
                 "path": path,
                 "include_default_database": include_default_database,
+                "persistent_data_isolation": persistent_data_isolation,
                 "retry_create": retry_create,
             }
         )
@@ -72,6 +74,7 @@ def test_failed_registration_never_reposts_without_explicit_resume(tmp_path: Pat
                 "slug": slugify_site_name("迁移应用"),
                 "title": "迁移应用",
                 "repo_url": "https://gitea.example/apps/Ab123.git",
+                    "persistent_data_isolation": payload["persistent_data_isolation"],
             }
 
         def close(self) -> None:
@@ -228,6 +231,7 @@ def test_start_copies_source_and_runs_create_and_init(tmp_path: Path) -> None:
     assert not (target / ".venv").exists()
     assert not (target / ".opscli" / "app.json").read_text(encoding="utf-8") == "old"
     assert manager.create_calls[0]["include_default_database"] is False
+    assert manager.create_calls[0]["persistent_data_isolation"] == "N"
     assert manager.init_calls == [target]
     assert result["phase"] == "push_ready"
     assert result["startup_status"] == "ready"

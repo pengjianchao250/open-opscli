@@ -11,6 +11,9 @@ metadata:
 
 本 Skill 构建项目代码，不替代线上数据服务，不重建模板已有的鉴权和 QueryGateway 基础设施，也不让线上站点依赖 Skill 运行。
 
+新建标准站点先从 AppHub 应用详情核对创建时的 `persistent_data_isolation`，不得从页面文案或 `app.yaml` 猜测。`Y` 沿用下文按可信 `owner_user_id` 隔离的默认规则；`N` 仅允许项目明确指定的持久化业务记录、快照和加工结果供站点成员共享。个人输入、查询历史、收藏、备注及个人配置仍私有。迁移站点和旧站点沿用原有规则，不按 `N` 标记自动重构。页面结构与固定枚举共享；业务记录派生的筛选值按对应记录范围生成。Codex 提供的 Excel/JSON 中含有真实业务条目时，`Y` 不得把条目放入前端 bundle、`public` 或其他无鉴权静态路径；需要作为初始记录时导入创建人私有存储。
+Y 站点访问者没有本人业务记录时，仍应展示完整页面结构和空状态，不回退到创建人记录或共享快照。
+
 ## 触发边界
 
 使用本 Skill：
@@ -115,7 +118,7 @@ AppHub SellerSprite 数据产品还必须在 `technical_contract.apphub_request`
 - 业务路由是否通过 FastAPI `Depends(get_query_gateway)` 获取 `QueryGateway`，而不是自行解析凭证。
 - `app.yaml` 的 `opscli.datasets` 是否覆盖本次验证的数据集。
 - SQLite 是否为单写实例、是否有迁移、持久卷和清理策略。
-- 用户私有数据是否统一使用可信 `owner_user_id`，第三方原始数据、异步任务、用户查询历史、输入和加工结果是否都限定当前用户。
+- 核对 Y/N 选择；用户私有数据是否统一使用可信 `owner_user_id`，N 的共享业务数据是否有明确的写入和刷新责任。
 - SellerSprite 是否按当前 `owner_user_id` 保存并复用 pending `job_id`，是否存在跨用户复用任务或结果。
 - 生产配置是否关闭本机登录态回退，测试是否使用 FakeGateway 和 dependency override。
 - 需要本地运行验收时是否交回 `$ops-app-build-spec` 使用 `opscli app dev`，并以 `opscli app dev-status <project-root> --json` 的 `running=true`、`identity_verified=true` 和精确 `project_root` 证明服务属于当前项目；不得用旧浏览器标签页或单独 HTTP 200 代替项目身份校验。
@@ -153,16 +156,16 @@ AppHub SellerSprite 数据产品还必须在 `technical_contract.apphub_request`
 
 ### 4. 选择执行与存储模式
 
-- `viewer-live`：当前访问用户权限相关的 OPS 数据，请求时查询；持久化时必须按 `owner_user_id` 隔离。
+- `viewer-live`：当前访问用户权限相关的 OPS 数据，请求时查询；Y 持久化时按 `owner_user_id` 隔离，N 仅能按明确的共享业务数据合同保存。
 - `viewer-private-persisted`：保存当前用户查询历史、收藏、筛选或加工结果；所有读写、索引和唯一约束均按可信 `owner_user_id` 隔离。
 - `approved-system-sync`：仅项目实际存在经过批准的 OPS 系统运行时适配器，且身份、授权、分页、批次、幂等和失败恢复合同完整时允许；否则标记 `blocked`，不生成无人值守同步、系统账号或伪适配器。
 - `sync-request`：Keepa 等同步 REST 来源；当前用户私有快照失效时调用上游，成功后短事务 `UPSERT`。
 - `async-job`：SellerSprite 等异步 REST 来源；按当前用户保存 `job_id` 和正式任务状态，pending 时只复用该用户任务，成功后读取 JSON 结果。
-- `hybrid`：OPS viewer 数据与当前用户的第三方快照由 service 在请求时组合，原始和加工结果都按用户隔离。
+- `hybrid`：OPS viewer 数据与第三方快照由 service 在请求时组合；Y 的原始和加工结果按用户隔离，N 按已确认的数据产品范围处理。
 
 网络请求在数据库事务外完成。SellerSprite 的 pending 任务不得重新提交。
 
-执行方式与存储范围分开决定。合同分别声明 `source_execution`、`task_storage`、`source_storage` 和 `result_storage`；不得仅因查询耗时就把 viewer 数据写入共享库，第三方原始数据、异步任务和加工结果都必须按当前用户隔离。
+执行方式与存储范围分开决定。合同分别声明 `source_execution`、`task_storage`、`source_storage` 和 `result_storage`；`Y` 下第三方快照、异步任务和加工结果按当前用户隔离。明确为 `N` 的新建标准站点可把指定业务数据设为站点共享，但必须记录写入/刷新权限，避免访问者用自身受限 OPS 结果意外覆盖共享结果；个人行为和个人任务仍私有。
 
 ### 5. 生成数据规范
 
@@ -227,7 +230,7 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - OPS 内层失败复用模板 `extract_inner_error()`；前端优先展示 `data.inner_error.message` 等安全详细原因，不把 `LIMIT_TOO_LARGE`、字段缺失等错误降级成“请求验证失败”。
 - 测试通过 FakeGateway 和 dependency override 隔离真实 SDK、凭证与网络。
 - OPS viewer 数据未写入未隔离的共享 SQLite。
-- OPS 原始和加工结果持久化时按 `owner_user_id` 隔离。
+- Y 下 OPS 原始和加工结果持久化时按 `owner_user_id` 隔离；N 下仅明确的共享业务结果可按站点存储。
 - OPS、Keepa 和 SellerSprite 共用 `OPSCLI_MCP_REST_API_BASE_URL`；生产值为 `https://ops.mcp.xenkee.com`，预发布值为 `https://mcp.ops.aukeyit.com`，未出现默认环境或 provider 专属 Base URL。
 - `OPSCLI_MCP_REST_API_BASE_URL` 只包含纯根域名，统一通过 `base_url.rstrip("/") + path` 拼接固定 `/api/v1/*` REST 路径；不存在重复 `/api/api`、双斜杠或 `/mcp`、`/sse`。
 - `ThirdPartyApiClient` 只从已校验的 `QueryCredentials` 重建三模式允许的 Header，不读取共享 API Key，不透传 Cookie，不在模式间回退。
@@ -259,7 +262,7 @@ OPS 业务路由必须通过 `Depends(get_query_gateway)` 获取 `QueryGateway`�
 - OPS 与第三方数据 REST API 只读取 `OPSCLI_MCP_REST_API_BASE_URL`，不读取共享 API Key，不兼容旧变量别名或第二套配置合同。
 - 第三方数据 API 的 viewer、session、local 身份不允许跨模式回退，也不得从请求体接受凭证或用户身份。
 - 不从请求体接受用户自报身份；OPS 身份只能来自批准的宿主请求通道。
-- 不把未按用户隔离的 OPS viewer 结果写入共享 SQLite。
+- `Y` 不把未按用户隔离的 OPS viewer 结果写入共享 SQLite；`N` 仅按已明确的共享业务数据合同保存。
 - 不用 SQLite 保存 XLS/XLSX、大文件、大型 BLOB、临时下载 URL 或高频任务队列。
 - 不调用 SellerSprite quota 接口参与站点业务流程，不处理额度检查、扣减、归属或账号调度。
 - 不为 SellerSprite 自建分布式锁、租约或独立调度平台；只持久化正式 `job_id` 和上游任务状态。

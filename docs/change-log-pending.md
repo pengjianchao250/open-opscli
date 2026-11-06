@@ -1,3 +1,17 @@
+## 2026-11-06 AppHub - 显示完整预览地址
+
+**变更原因**：发布成功后的通用提示未明确标注预览地址，对话中的短链接文字也不便于核对和复制。
+
+**改动点**：非 JSON CLI 成功输出改用“预览地址：完整 URL”；内置 Skill 规定对话回复使用完整 URL 作为 Markdown 链接文字和目标。JSON `data.deployment.entry_url` 保持不变，并增加文本输出回归用例。
+
+**验证结果**：`.venv/Scripts/python.exe -m pytest tests/app/test_cli.py -q`，20 项通过；新增断言覆盖健康版本的文本输出，原 JSON `entry_url` 断言通过。Skill 契约测试 16 项通过、3 项既有失败：部署规范测试要求的旧提示在未修改的安装副本中也不存在，另两项为后端模板入口及捆绑文档同步差异。
+
+**影响范围**：仅影响当前 healthy 发布结果的人工可读提示和后续安装的 Skill 回复格式；失败、超时及 JSON 合同不变。
+
+**回滚方式**：恢复 CLI 成功提示与 Skill 文案，移除对应测试和本条记录。
+
+---
+
 ## 2026-10-20 AppHub - 迁移项目 Node 单服务本地开发启动
 
 **变更原因**：已交付的源码复制迁移项目可保留根目录 Vinext 入口，但 app dev 仍强制要求 FastAPI backend/frontend 结构。

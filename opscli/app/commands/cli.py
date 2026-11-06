@@ -33,7 +33,7 @@ def _emit(payload: dict, *, json_output: bool) -> None:
         if deployment:
             status = deployment.get("status")
             if status == "healthy" and deployment.get("is_current_release") and deployment.get("entry_url"):
-                typer.echo(f"构建发布成功：{deployment['entry_url']}")
+                typer.echo(f"预览地址：{deployment['entry_url']}")
             elif status == "failed":
                 typer.echo(f"构建发布失败 [{deployment.get('error_code') or 'UNKNOWN'}]：{deployment.get('error_summary') or '请查看失败附件。'}")
                 build_log = deployment.get("build_log_attachment") or {}
@@ -245,13 +245,17 @@ def migrate_convert_legacy(
 def create_app(
     app_name: str = typer.Argument(..., help="应用名称"),
     path: Path | None = typer.Option(None, "--path", help="绑定目录；默认使用应用 slug"),
+    persistent_data_isolation: str = typer.Option(..., "--persistent-data-isolation", help="持久化业务数据按用户隔离：Y=是，N=站点共享"),
     retry_create: bool = typer.Option(False, "--retry-create", help="用户明确要求时重试未完成的应用创建"),
     json_output: bool = typer.Option(False, "--json", help="输出 JSON"),
 ) -> None:
     """在 AppHub 创建应用并保存本地基础信息。"""
     _run(
         "app create",
-        lambda manager: manager.create_app(app_name, path=path, retry_create=retry_create),
+        lambda manager: manager.create_app(
+            app_name, path=path, persistent_data_isolation=persistent_data_isolation,
+            retry_create=retry_create,
+        ),
         json_output=json_output,
     )
 

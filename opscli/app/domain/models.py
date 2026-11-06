@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass, replace
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from opscli.app.domain.constants import BINDING_SCHEMA_VERSION, GIT_DEFAULT_BRANCH
@@ -57,6 +57,7 @@ class AppCreateRequest:
     description: str = ""
     contact: str | None = None
     include_default_database: bool = True
+    persistent_data_isolation: Literal["Y", "N"] = "N"
 
     @classmethod
     def from_app_name(
@@ -65,15 +66,19 @@ class AppCreateRequest:
         *,
         slug: str | None = None,
         include_default_database: bool = True,
+        persistent_data_isolation: Literal["Y", "N"] = "N",
     ) -> "AppCreateRequest":
         title = app_name.strip()
         if not title:
             raise AppProjectError("APP-ARGUMENT", "应用名称不能为空。")
+        if persistent_data_isolation not in {"Y", "N"}:
+            raise AppProjectError("APP-ARGUMENT", "持久化业务数据策略只能是 Y 或 N。")
         normalized_slug = slugify_site_name(slug) if slug else slugify_site_name(title)
         return cls(
             name=normalized_slug,
             title=title,
             include_default_database=include_default_database,
+            persistent_data_isolation=persistent_data_isolation,
         )
 
     @classmethod
@@ -90,6 +95,7 @@ class AppCreateRequest:
             "opscli": {"auth_mode": "viewer", "datasets": []},
             "llm": {"enabled": False},
             "access": {"visibility": "members"},
+            "persistent_data_isolation": self.persistent_data_isolation,
         }
         # contact 未填写时省略字段，兼容尚未接收该可选字段的 AppHub 服务版本。
         if self.contact is not None:

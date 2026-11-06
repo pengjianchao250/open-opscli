@@ -65,6 +65,7 @@ class FakeClient:
             "slug": slug,
             "title": request_payload["title"],
             "status": "registered",
+            "persistent_data_isolation": request_payload["persistent_data_isolation"],
             "repo_url": _repo_url(f"repo-{len(self.apps) + 1}"),
             "current_version": None,
             "url": None,
@@ -336,6 +337,20 @@ def test_create_only_creates_and_binds_application(tmp_path: Path) -> None:
     assert "\nname:" not in manifest
     assert 'title: "新看板"' in manifest
     assert "runtime: fastapi" in manifest
+
+
+def test_create_does_not_bind_when_server_isolation_differs(tmp_path: Path) -> None:
+    client = FakeClient()
+    original = client.create_app
+
+    def mismatched(payload: dict) -> dict:
+        return {**original(payload), "persistent_data_isolation": "N"}
+
+    client.create_app = mismatched
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, FakeGit()).create_app("私有站点", path=tmp_path, persistent_data_isolation="Y")
+    assert caught.value.code == "APPHUB-PROTOCOL"
+    assert not (tmp_path / ".opscli" / "app.json").exists()
 
 
 def test_migration_create_omits_database_without_changing_normal_default(tmp_path: Path) -> None:
@@ -1355,6 +1370,16 @@ def test_pending_create_rejects_changed_request_or_scope(tmp_path: Path, changed
         client.scope = "production-owner-2"
     with pytest.raises(AppProjectError) as caught:
         _manager(client, FakeGit()).create_app("不同名称" if changed == "request" else "新应用", path=tmp_path)
+    assert caught.value.code == "APP-CREATE-CONFLICT"
+
+
+def test_pending_create_rejects_changed_isolation_choice(tmp_path: Path) -> None:
+    client = FakeClient()
+    client.create_app = lambda payload: (_ for _ in ()).throw(TimeoutError("发送失败"))
+    with pytest.raises(AppProjectError):
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path, persistent_data_isolation="Y")
+    with pytest.raises(AppProjectError) as caught:
+        _manager(client, FakeGit()).create_app("新应用", path=tmp_path, persistent_data_isolation="N")
     assert caught.value.code == "APP-CREATE-CONFLICT"
 
 
